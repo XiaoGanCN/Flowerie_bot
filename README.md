@@ -269,8 +269,8 @@ A: 请严格按照上方 "安卓 (Termux) 专用" 步骤执行，使用 `--only-
 
 ## 📝 TODO
 
-☐ 支持多轮对话的记忆上下文增强
-☐ Web 管理面板
+- [ ] 支持多轮对话的记忆上下文增强
+- [ ] Web 管理面板
 
 ---
 
@@ -282,10 +282,9 @@ MIT © 2026 铃樱（lingcat521）
 
 ## 🙏 致谢
 
-· NapCat — 强大的 QQ 机器人框架
-· DeepSeek — 聪明又便宜的 AI 模型
-· OneBot 11 — 统一的机器人协议标准
-
+- [NapCat](https://napcat.qq.com) — 强大的 QQ 机器人框架
+- [DeepSeek](https://deepseek.com) — 聪明又便宜的 AI 模型
+- [OneBot 11](https://onebot.dev) — 统一的机器人协议标准
 ---
 
 <p align="center">
