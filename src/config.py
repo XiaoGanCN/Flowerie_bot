@@ -1,0 +1,83 @@
+from typing import List, Optional
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+import os
+
+class Settings(BaseSettings):
+    # DeepSeek
+    DEEPSEEK_API_KEY: str = Field(..., env="DEEPSEEK_API_KEY")
+    DEEPSEEK_API_URL: str = "https://api.deepseek.com/chat/completions"
+    DEEPSEEK_MODEL: str = "deepseek-v4-flash"
+    
+    # Bot
+    BOT_QQ: int = Field(..., env="BOT_QQ")
+    BOT_NICKNAME: str = "花璃"
+    
+    # Connection
+    WS_HOST: str = "127.0.0.1"
+    WS_PORT: int = 3001
+    HTTP_API_BASE: str = "http://127.0.0.1:3000"
+    
+    # Behavior
+    ONLY_REPLY_WHEN_AT: bool = False
+    REPLY_PROBABILITY: float = 0.3
+    ACTIVE_CHAT_INTERVAL: int = 600
+    USER_COOLDOWN: int = 5
+    BOT_COOLDOWN: int = 2
+    MAX_REPLY_LENGTH: int = 40
+    MAX_CONSECUTIVE_REPLIES: int = 3
+    CONTEXT_SIZE: int = 300
+    COLD_TIME: int = 600
+    LOG_LEVEL: str = "INFO"
+    
+    # Random active chat
+    RANDOM_ACTIVE_CHAT_MIN_INTERVAL: int = 14400
+    RANDOM_ACTIVE_CHAT_MAX_INTERVAL: int = 21600
+    NIGHT_SILENCE_START: int = 0
+    NIGHT_SILENCE_END: int = 8
+    ACTIVE_CHAT_COOLDOWN: int = 180
+    BOT_CONSECUTIVE_REPLY_COOLDOWN: int = 60
+    BOT_RECENT_REPLY_WINDOW: int = 60
+    
+    # Repeat
+    REPEAT_WINDOW: int = 120
+    REPEAT_THRESHOLD: int = 3
+    
+    # Toxic warning
+    TOXIC_WARNING_COOLDOWN: int = 900
+    
+    # Poke
+    POKE_REPLY_ENABLED: bool = True
+    POKE_REPLIES: List[str] = [
+        "戳人家干嘛...", "别戳了...！", "唔...别戳啦", "（缩脑袋）",
+        "好痒...别闹", "好啦好啦 让你戳", "唔 真拿你没办法", "（哈气）",
+        "干什么...！", "呀...！", "再戳我就不理你了哦", "（躲开）",
+        "你手不累嘛", "戳一下就够了哦", "（揉揉被戳的地方）",
+        "哼 再戳就生气了", "（缩头）", "你完蛋了 我记仇了",
+        "戳回去！", "反弹！", "（反手戳你）", "你的手指不要啦？",
+        "再戳就收费了喔", "（假装躲闪）", "（叹气）", "杂鱼 不准戳我",
+        "（摊手）", "你是不是无聊了", "找我玩嘛", "（歪头）",
+        "嘤？", "（茫然）", "？", "哈！！！",
+    ]
+    
+    # File paths
+    MEMORY_PATH: str = "./data/memory.json"
+    ARCHIVE_BASE_DIR: str = "./data/archive"
+    
+    # White list
+    ALLOWED_GROUP_IDS: Optional[List[int]] = Field(None, env="ALLOWED_GROUP_IDS")
+    TOXIC_GROUP_IDS: Optional[List[int]] = Field(None, env="TOXIC_GROUP_IDS")
+    
+    @field_validator("ALLOWED_GROUP_IDS", "TOXIC_GROUP_IDS", mode="before")
+    @classmethod
+    def parse_list(cls, v):
+        if isinstance(v, str):
+            if v.strip() == "":
+                return []
+            return [int(x.strip()) for x in v.split(",") if x.strip().isdigit()]
+        return v
+    
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+def load_config() -> Settings:
+    return Settings()

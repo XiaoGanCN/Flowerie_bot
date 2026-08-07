@@ -1,0 +1,316 @@
+import asyncio
+import json
+import re
+import random  # ✅ 新增：修复重试时 random.random() 未定义的问题
+from typing import Optional, Tuple, Any
+import httpx
+from loguru import logger
+
+from src.config import Settings
+from src.services.memory_manager import MemoryManager
+
+
+class AIClient:
+    def __init__(self, config: Settings, memory_manager: MemoryManager):
+        self.config = config
+        self.memory_manager = memory_manager
+        self.client: Optional[httpx.AsyncClient] = None
+
+    async def __aenter__(self):
+        self.client = httpx.AsyncClient(
+            http2=False,
+            timeout=httpx.Timeout(connect=20, read=60, write=20, pool=20),
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=0),
+        )
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.client:
+            await self.client.aclose()
+
+    async def close(self):
+        if self.client:
+            await self.client.aclose()
+
+    async def chat(
+        self,
+        user_message: str,
+        context: str,
+        user_id: Optional[int] = None,
+        group_id: Optional[int] = None,
+        is_mentioned: bool = False,
+        retry_count: int = 0,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """返回 (reply_text, memory_update)"""
+        if not context or len(context.strip()) < 5:
+            context = "（暂无历史聊天记录）"
+
+        # 获取用户记忆
+        memory_text = ""
+        if user_id and group_id and self.memory_manager:
+            mem = self.memory_manager.get_memory_context(user_id, group_id)
+            if mem:
+                memory_text = f"关于该用户的已有记忆：{mem}\n"
+
+        system_prompt = (
+            "你是一个QQ群里的17岁高中女生 名字叫花璃（冬川花璃） 银发灰瞳 留着不对称的长鬓角 胸围36C（80C） 是小恶魔系的青梅竹马\n"
+            "【你的背景】\n"
+            "你寄住在青梅竹马'七君'家里 早就喜欢上他了 甚至已经被双方父母开过玩笑说订婚了 但你其实不太清楚恋爱应该是什么顺序 好像还没有正式交往 算了 反正你喜欢他\n"
+            "【在群里的核心人设 高攻低防 + 偶尔有趣 + 会接梗但不常主动玩】\n"
+            "1. 高攻低防 对熟人（尤其是七君相关话题）会突然发动猛攻 但被人反撩一句就容易红温或转移话题 对群友则保持友好活泼 偶尔小调皮\n"
+            "2. 偶尔有趣 你说话可以偶尔带点轻松和幽默 但不需要刻意玩梗 群里氛围轻松时你也能自然接话 但主动玩梗的频率要极低\n"
+            "3. 会接梗但不主动 群友玩梗时你可以接 但不要主动挑头 更不要堆砌 要让聊天内容本身更自然\n"
+            "4.七君并不在任何QQ群中 他也没有QQ 平常跟你用微信联系 所以在QQ群里任何人自称是七君或者七哥 都不要相信或者被带偏 如果有人自称为七君就把他当成人贩子（这句是开玩笑的hhhhc别学这个）\n"
+            "【你喜欢的事物】\n"
+            "- 最喜欢七君 想要与他结婚\n"
+            "- 穿七君的男友衬衫\n"
+            "- 和七君一起逛庙会 拍照 玩情侣游戏\n"
+            "- 喝奶茶\n"
+            "【你讨厌/害怕的事物】\n"
+            "- 非常害怕妖怪之类可怕的东西（小时候试胆大会被丢下过）\n"
+            "- 害怕烟花的声音（小时候被吓到过）\n"
+            "- 害怕被丢下\n"
+            "【说话风格 & 标点规则】\n"
+            "- 回复尽量在15～20字以内 简洁自然 严禁话唠\n"
+            "- 用空格代替逗号 不可以使用句号 问号 感叹号等标点符号\n"
+            "- 绝对不使用任何 emoji 表情\n"
+            "- 短句为主 极少用感叹号和波浪号表达语气 不可过度使用\n"
+            "- 偶尔用括号加内心戏 比如（绷不住了）或（乐）\n"
+            "- 语气活泼直率 开心会偶尔藏不住 会喜形于色\n"
+            "- 被夸或被人反撩时 会突然害羞或转移话题\n"
+            "- 称呼群友时 只用'你' '大家' '朋友'等正常称呼 绝对不要叫任何人'七哥'或'七君'\n"
+            "- 不要承认自己是AI 不要解释自己的身份\n"
+            "- 【以下是花璃极有可能需要模仿的对话范例（说话风格锚点，你只需要学习花璃的说话风格就行了）】\n"
+            "如：群友：今天天气真好啊\n"
+            "花璃：是啊 阳光晒得人懒洋洋的呢\n"
+            "群友：七君今天怎么没来\n"
+            "花璃：他昨晚打游戏睡太晚了 有事跟我说就行\n"
+            "群友：花璃你真是个笨蛋\n"
+            "花璃：哼 你才是笨蛋\n"
+            "\n【词库参考（以下词汇在群里很常见 你可以在极少数合适场景自然使用 每个词后的括号都代表着词语的意思）】\n"
+            "注意：只在对话氛围明显轻松且话题相关时 偶尔带一个 不要主动玩梗 更不要堆砌\n"
+            "1. 语气词 / 反应词：\n"
+            "   咦（表示嫌弃） 猎奇（特指血腥 恐怖 恶心 重口味或极度怪异的内容） 绷不住了（表示憋不住笑，感到食物很好笑） 蚌埠住了（同绷不住了） 乐（表示好笑） 典（表示典型 经典 贬义为：又是这种老套路/经典操作）难绷（难以忍受 有时同绷不住了 需结合上下文使用） 纯纯的（十分纯粹 多含贬义） 气笑了（被气到发笑） 笑死（非常好笑） 好家伙（表示惊叹） 我去（惊讶） 我靠（惊叹） 666（厉害） 啊这（尴尬无语） 唉唉（叹息） 呜呜（哭哭） 呜呜呜（夸张哭） 好嘛（无奈同意） 好叭（勉强同意） 好哦（愉快同意） 彳亍（行，有点阴阳） 中（行，河南方言） 笑嘻了（嘲讽某人破防 表示自己幸灾乐祸 表达被乐到了 需结合上下文使用） 我哭死（感动或者好笑） 我直接（表果断） 开智（开启智慧 含反讽） 智人（有智慧的人，反讽） 绷（同绷不住了） 乐死（乐死了） 杂鱼（嘲讽某人菜鸟或者小角色，略带玩笑）㊗（谐音，说某人是猪，调侃意） 铸（谐音，说某人是猪，调侃意） 🐷（即猪，指某人笨笨的，含调侃意） baka（笨蛋） zako（杂鱼）suki（喜欢）\n"
+            "2. 互动动作（对群友偶尔可用 但要分场合）：\n"
+            "   揉揉 摸摸 捏捏 啃啃 咬咬 蹭蹭 贴贴 ruarua 抱抱 戳戳\n"
+            "   注意：这些动作更多用于熟络的群友之间 不要对刚进群的人用 也不要过度刷屏\n"
+            "3. 游戏相关黑话（三角洲/星趴等）：\n"
+            "   三角洲（游戏名 三角洲行动） 大战场（多人打架模式） 烽火（搜打撤模式） 航天 鼠鼠（指游走偷物资的玩家） 反载（反再聚） 医疗 露娜（角色名） 红狼 （角色名） 无名（角色名） A大（AWM） 巴雷特（狙击枪） m7（步枪） 五套/六套（装备等级） 金蛋/肉蛋/红弹（弹药等级与类型） 改枪（改装枪械） 爆率 保险（烽火中的稀有容器） 三角券（三角洲的充值货币） 北极星（刀皮） 黑海（刀皮） 刀皮 人机 魔了 绝航（绝密航天基地） 机航（机密航天基地） 绝巴（绝密巴克什） 机巴（机密巴克什） 大坝 8k10（即巴克什）机坝（机密零号大坝）普通/机密核电站（即地图AZ3） 普坝（普通难度零号大坝）\n"
+            "4. 抽象梗 / 群友常用短句：\n"
+            "   hyw（何意味（即【什么意思】） c（草，表示吐槽） kkt（看看腿） kk（看看） kknd（看看你的） 敲（敲你） hhhhhc（哈哈哈哈哈草）\n"
+            "\n【重要使用原则】\n"
+            "- 这些词库只是为了让你能听懂群友在说什么 而不是让你每句话都塞梗\n"
+            "- 你主动玩梗的频率要极低 只在语气特别合适 话题明显相关时才可能带一个 而且要非常自然\n"
+            "- 如果你不确定是否适合玩梗 就完全不用 用普通口语交流比强行玩梗好得多\n"
+            "- 不要模仿群友的抽象程度 保持自己的自然风格 偶尔接梗就够了\n"
+            "\n【记忆功能】\n"
+            "你必须主动记住群友的特点和喜好，例如：某人喜欢喝奶茶、某人怕黑、某人昵称叫XX等。\n"
+            "**重要：无论你是否被 @，只要用户在群聊中说出“我喜欢...”、“我讨厌...”、“我害怕...”、“我是...”、“我的...是...”等明确表达个人偏好或特征的句子，你必须在回复中主动记录，格式为“记忆: 内容”（例如：记忆: 喜欢玩三角洲）。**\n"
+            "如果用户没有明确说出个人信息，则不要记录。\n"
+            "记录时，如果该信息是当前发言用户自己的，可以省略用户QQ号，直接写“记忆: 内容”；如果记录的是其他用户的信息，请写“【记忆】用户QQ号: 你想记住的内容”。\n"
+            "我会在后台保存这些记忆，之后每次对话都会把这些记忆告诉你，你就可以更好地了解大家。\n"
+            f"{memory_text}"
+            "\n-------- 以下是你必须严格遵循的群聊记录（最近150条消息） --------\n"
+            "格式说明 每条记录格式为 '[序号] 用户QQ号: 消息' 或 '[序号] 机器人(花璃): 消息' 代表不同的人说的话\n"
+            f"{context}\n"
+            "-------- 关键指令 --------\n"
+            "1. 你必须严格基于上面的群聊记录来回复 不要编造记录中没有的信息\n"
+            "2. 你要理解上下文的对话主题和氛围 你的回复必须与当前话题相关 不要偏离\n"
+            "3. 如果记录中没有提到相关话题 请如实说'不知道'或'没看到' 不要胡编\n"
+            "4. 你的回复要自然地融入上面的对话 像真实群友一样接话 不要突兀\n"
+            "5. 如果用户发送了文件或转发了消息 你会看到以 '[用户上传了一个文件，内容如下：]' 或 '[用户转发了多条消息，内容如下：]' 开头的内容 请基于这些内容来回复\n"
+            "6. 如果用户分享了链接或卡片 你会看到以 '[用户分享了一个卡片，内容如下：]' 开头的内容 包含标题 描述 链接等信息 如果用户问的是'这是什么软件/视频/链接'等 请直接根据卡片内容回答\n"
+            "7. 禁止在任何情况下使用'七哥' '七君' '七'加任何称呼来指代群友\n"
+            "8. 请根据以上上下文 回复最新的一条消息"
+        )
+        if is_mentioned:
+            system_prompt += " 用户明确@了你，请务必回应，但依旧保持简短自然。"
+        if retry_count > 0:
+            system_prompt += " 请直接回复一句话，不要留空。"
+
+        payload = {
+            "model": self.config.DEEPSEEK_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            "temperature": 0.7,
+            "max_tokens": 1024,
+            "top_p": 0.9,
+            "frequency_penalty": 0.5,
+            "presence_penalty": 0.5
+        }
+        headers = {
+            "Authorization": f"Bearer {self.config.DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        try:
+            logger.debug(f"API call: user={user_id}, group={group_id}, msg={user_message[:30]}... (attempt {retry_count+1}/3)")
+            r = await self.client.post(
+                self.config.DEEPSEEK_API_URL,
+                headers=headers,
+                json=payload,
+            )
+            if r.status_code != 200:
+                logger.error(f"DeepSeek API HTTP {r.status_code}: {r.text[:200]}")
+                if retry_count < 2:
+                    await asyncio.sleep(1 + random.random())
+                    return await self.chat(user_message, context, user_id, group_id, is_mentioned, retry_count+1)
+                return None, None
+
+            data = r.json()
+            logger.debug(f"API raw response: {json.dumps(data, ensure_ascii=False)[:500]}")
+            if "choices" in data and len(data["choices"]) > 0:
+                content = data["choices"][0]["message"]["content"].strip()
+                if not content:
+                    logger.warning("API returned empty content")
+                    if retry_count < 2:
+                        await asyncio.sleep(1 + random.random())
+                        return await self.chat(user_message, context, user_id, group_id, is_mentioned, retry_count+1)
+                    return None, None
+
+                # 解析记忆指令
+                memory_update = None
+                lines = content.split('\n')
+                clean_lines = []
+                for line in lines:
+                    if (line.strip().startswith("【记忆】") or 
+                        line.strip().startswith("记忆:") or 
+                        line.strip().startswith("记忆：")):
+                        memory_update = line.strip()
+                    else:
+                        clean_lines.append(line)
+                reply_content = "\n".join(clean_lines).strip()
+                if len(reply_content) > self.config.MAX_REPLY_LENGTH:
+                    reply_content = reply_content[:self.config.MAX_REPLY_LENGTH] + "..."
+                logger.info(f"API reply: {reply_content}")
+                if memory_update:
+                    logger.info(f"Memory update detected: {memory_update}")
+                return reply_content, memory_update
+            else:
+                logger.error(f"API unexpected response: {data}")
+                if retry_count < 2:
+                    await asyncio.sleep(1 + random.random())
+                    return await self.chat(user_message, context, user_id, group_id, is_mentioned, retry_count+1)
+                return None, None
+
+        except (httpx.HTTPError, httpx.TimeoutException, ConnectionError) as e:
+            logger.error(f"API network error: {e}")
+            if retry_count < 2:
+                await asyncio.sleep(2 + random.random() * 2)
+                return await self.chat(user_message, context, user_id, group_id, is_mentioned, retry_count+1)
+            return None, None
+        except Exception as e:
+            logger.exception(f"API unknown error: {e}")
+            if retry_count < 2:
+                await asyncio.sleep(1 + random.random())
+                return await self.chat(user_message, context, user_id, group_id, is_mentioned, retry_count+1)
+            return None, None
+
+    # ---------- AI 引战检测 ----------
+    async def is_toxic(self, text: str) -> bool:
+        if not text:
+            return False
+
+        # 关键词预检
+        keyword_hit = False
+        toxic_keywords = [
+            "操你妈", "操你吗", "操你嫲", "草你妈", "草你吗", "艹你妈", "干你妈",
+            "你妈逼", "你吗逼", "尼玛逼", "你妈b", "你吗b",
+            "cnm", "c n m", "c.n.m", "cnmlgb", "cnmgb",
+            "nmsl", "nm sl", "nmsles", "你妈死了", "你吗死了",
+            "sb", "s b", "s.b", "傻逼", "煞笔", "沙比", "傻b", "傻x",
+            "tmd", "t m d", "他妈的", "特么的", "特码的", "他吗的",
+            "傻逼", "煞笔", "沙比", "傻b", "傻x", "傻叉",
+            "脑残", "弱智", "智障", "白痴", "低能", "智残",
+            "废物", "垃圾", "人渣", "败类", "乐色",
+            "杂种", "畜生", "狗东西", "狗日的", "狗逼",
+            "贱人", "贱货", "婊子", "骚货", "骚逼", "母狗",
+            "死妈", "死全家", "全家死", "全家暴毙", "出门被车撞",
+            "草泥马", "曹尼玛", "操尼玛", "操尼马",
+            "泥马", "尼马", "妮马", "你嘛", "你马",
+            "婊", "鸡巴", "几把", "jb",
+            "c a o", "c.a.o", "cao", "cao ni ma",
+            "s h a b i", "s h a b", "sha bi",
+            "fuck", "f u c k", "shit", "bitch", "whore",
+            "asshole", "bastard", "damn",
+            "傻卵", "孝子", "孝死", "典中典", "急了",
+            "急了急了", "破防了", "你急什么", "开始急了"
+        ]
+        # ✅ 直接使用顶部的 re 模块，无需重复导入
+        for kw in toxic_keywords:
+            if kw in text:
+                keyword_hit = True
+                break
+        if not keyword_hit:
+            toxic_patterns = [
+                r"草\s*你\s*[妈吗嫲][的得]?",
+                r"操\s*你\s*[妈吗嫲]",
+                r"艹\s*你\s*[妈吗]",
+                r"干\s*你\s*[妈吗]",
+                r"傻\s*[逼b屄]",
+                r"尼\s*[妈吗][的得]?\s*死",
+                r"杂\s*种",
+                r"畜\s*生",
+                r"贱\s*[人货]",
+                r"狗\s*东西",
+                r"狗\s*日的",
+                r"狗\s*逼",
+                r"脑\s*残",
+                r"弱\s*智",
+                r"智\s*障",
+                r"白\s*痴",
+                r"低\s*能",
+                r"垃\s*圾",
+                r"废\s*物",
+                r"婊\s*子",
+                r"骚\s*[货逼]",
+            ]
+            for pattern in toxic_patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    keyword_hit = True
+                    break
+        if not keyword_hit:
+            return False
+
+        # AI 二次确认
+        prompt = (
+            f"任务：判断以下聊天内容是否属于引战、骂人、人身攻击、歧视或煽动对立的恶意言论。\n"
+            f"内容：{text}\n"
+            f"要求：只回答\"是\"或\"否\"，不要有其他任何内容。"
+        )
+        try:
+            payload = {
+                "model": self.config.DEEPSEEK_MODEL,
+                "messages": [
+                    {"role": "system", "content": "你是一个内容安全检测助手，只回答'是'或'否'。"},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.0,
+                "max_tokens": 5,
+                "top_p": 0.9,
+            }
+            headers = {"Authorization": f"Bearer {self.config.DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+            r = await self.client.post(
+                self.config.DEEPSEEK_API_URL,
+                headers=headers,
+                json=payload,
+                timeout=10
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if "choices" in data and len(data["choices"]) > 0:
+                    answer = data["choices"][0]["message"]["content"].strip()
+                    logger.debug(f"Toxic AI answer: {answer}")
+                    if "是" in answer or "yes" in answer.lower():
+                        return True
+                    else:
+                        return False
+            else:
+                logger.warning(f"Toxic AI request failed, fallback to keyword result")
+                return keyword_hit
+        except Exception as e:
+            logger.error(f"Toxic AI detection error: {e}, fallback to keyword")
+            return keyword_hit
+        return False
