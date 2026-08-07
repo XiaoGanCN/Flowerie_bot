@@ -118,8 +118,8 @@ python3 --version
 ### 2. 克隆项目
 
 ```bash
-git clone https://github.com/your-username/lingbot.git
-cd lingbot
+git clone https://github.com/lingcat521/Flowerie_bot.git 
+cd Flowerie_bot.git
 ```
 
 ### 3. 配置环境变量
