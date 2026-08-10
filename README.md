@@ -283,7 +283,7 @@ A: 请严格按照上方 "安卓 (Termux) 专用" 步骤执行，使用 `--only-
 
 - [NapCat](https://napcat.qq.com) — 强大的 QQ 机器人框架
 - [DeepSeek](https://deepseek.com) — 聪明又便宜的 AI 模型
-- [OneBot 12](https://onebot.dev) — 统一的机器人协议标准
+- [OneBot 11](https://onebot.dev) — 统一的机器人协议标准
 ---
 
 <p align="center">
