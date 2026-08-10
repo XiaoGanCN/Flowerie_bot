@@ -283,7 +283,7 @@ MIT © 2026 铃樱（lingcat521）
 
 - [NapCat](https://napcat.qq.com) — 强大的 QQ 机器人框架
 - [DeepSeek](https://deepseek.com) — 聪明又便宜的 AI 模型
-- [OneBot 11](https://onebot.dev) — 统一的机器人协议标准
+- [OneBot 12](https://onebot.dev) — 统一的机器人协议标准
 ---
 
 <p align="center">
