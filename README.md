@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg" alt="Python">
-  <img src="https://img.shields.io/badge/OneBot-11-green.svg" alt="OneBot">
+  <img src="https://img.shields.io/badge/OneBot-12-green.svg" alt="OneBot">
   <img src="https://img.shields.io/badge/DeepSeek-v4-ff69b4.svg" alt="DeepSeek">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
 </p>
