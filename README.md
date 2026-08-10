@@ -93,7 +93,7 @@ pip install -r requirements.txt
 
 #### 步骤四：运行项目
 ```bash
-cd ~/bot #请替换为你的实际项目路径
+cd ~/Flowerie_bot #请替换为你的实际项目路径
 python main.py
 ```
 
@@ -119,7 +119,7 @@ python3 --version
 
 ```bash
 git clone https://github.com/lingcat521/Flowerie_bot.git 
-cd Flowerie_bot.git
+cd Flowerie_bot
 ```
 
 ### 3. 配置环境变量
