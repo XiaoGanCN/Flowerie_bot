@@ -275,7 +275,7 @@ A: 请严格按照上方 "安卓 (Termux) 专用" 步骤执行，使用 `--only-
 
 ## 📄 License
 
-MIT © 2026 铃樱（lingcat521）
+[MIT](LICENSE) © 2026 [铃樱（lingcat521）](https://github.com/lingcat521)
 
 ---
 
