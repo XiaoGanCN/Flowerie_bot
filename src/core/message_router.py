@@ -106,7 +106,7 @@ class MessageRouter:
         if has_card and card_text:
             full_text += f"\n[用户分享了一个卡片，内容如下：]\n{card_text}\n[卡片内容结束]"
 
-        # ✅ 修复：处理待解析文件（来自 group_upload notice）
+        # 处理待解析文件
         pending_key = f"{user_id}_{group_id}"
         if pending_key in self.global_state.pending_files:
             file_info = self.global_state.pending_files.pop(pending_key)
@@ -114,7 +114,6 @@ class MessageRouter:
             file_name = file_info.get("file_name", "未命名文件")
             file_size = file_info.get("file_size", 0)
 
-            # 原版限制：只解析 1MB 以内的文件
             if file_id and file_size <= 1 * 1024 * 1024:
                 file_content, success = await self.file_parser.fetch_and_parse_file(file_id, file_name)
                 if success and file_content:
@@ -184,18 +183,18 @@ class MessageRouter:
         force_memory = self.policy_engine.should_force_memory(clean_text, full_text, has_at_others)
         silent_memory_only = force_memory and not is_mentioned and not is_reply_to_bot
 
-        # ✅ 修复：先检查机器人冷却，再检查用户冷却，最后更新时间
+        # 机器人冷却检查
         if not self.policy_engine.can_bot_reply(group_id):
             logger.debug("Bot cooldown, skip reply")
             return
 
+        # 用户冷却检查
         if not (is_mentioned or is_reply_to_bot):
             if not self.policy_engine.can_user_reply(user_id, group_id):
                 logger.debug(f"User {user_id} in cooldown, skip reply")
                 return
             self.policy_engine.update_user_time(user_id, group_id)
         else:
-            # @ 消息无视用户冷却，但为了记录活跃度，仍然更新用户时间
             self.policy_engine.update_user_time(user_id, group_id)
 
         # ---------- 调用 AI ----------
@@ -322,16 +321,28 @@ class MessageRouter:
             await self.sender.send_private_message(user_id, reply)
         logger.info(f"Poke reply to {user_id} in {group_id}: {reply}")
 
-    # ---------- 主动聊天循环 ----------
+    # ---------- 主动聊天循环（✅ 修复：区分留空和未配置） ----------
     async def _active_chat_loop(self):
         logger.info("Active chat loop started")
         while True:
             await asyncio.sleep(random.randint(5, 10))
             if not self.global_state.ws_connected:
                 continue
-            if not self.config.ALLOWED_GROUP_IDS:
-                continue
-            target_group = random.choice(self.config.ALLOWED_GROUP_IDS)
+
+            allowed_groups = self.config.ALLOWED_GROUP_IDS
+
+            # ✅ 修复：如果白名单为空（None 或 []），表示允许所有群
+            if not allowed_groups:
+                # 从所有有上下文的群中随机选一个
+                active_groups = list(self.policy_engine.groups.keys())
+                if not active_groups:
+                    logger.debug("No active groups with context, skip active chat")
+                    continue
+                target_group = random.choice(active_groups)
+            else:
+                # 有白名单则从白名单中随机选
+                target_group = random.choice(allowed_groups)
+
             if not self.policy_engine.should_active_chat(target_group):
                 continue
             await self._do_active_chat(target_group)
@@ -342,7 +353,7 @@ class MessageRouter:
             logger.debug(f"No context for group {group_id}, skip active")
             return
         for attempt in range(3):
-            prompt = "你现在就是QQ群里的花璃，一个17岁高中生，正在跟群友自然的聊天。\n没有人在叫你。\n如果最近大家讨论一个话题，自然接一句，像平时一样简短而自然地说句话。\n如果群冷了，可以偶尔冒一句，简短就好。\n不要解释。\n不要说自己是AI。\n不要刻意活跃气氛。\n一句话即可，尽量短，自然。"
+            prompt = "你现在就是QQ群里的花璃，一个17岁高中生，正在自然地跟群友聊天。\n没有人在叫你。\n如果最近大家讨论一个话题，自然接一句，像平时一样简短而自然地说句话。\n如果群冷了，可以偶尔冒一句，简短就好。\n不要解释。\n不要说自己是AI。\n不要刻意活跃气氛。\n一句话即可，尽量短，自然。"
             reply, _ = await self.ai_client.chat(
                 user_message=prompt,
                 context=context_text,
