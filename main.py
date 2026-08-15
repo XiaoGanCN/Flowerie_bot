@@ -39,6 +39,9 @@ async def main():
         )
         ws_server = WebSocketServer(config, message_router)
 
+        # 启动主动聊天循环（若配置允许）
+        await message_router.start()
+
         # 启动 WebSocket 服务（会自动阻塞直到中断）
         await ws_server.run()
 
