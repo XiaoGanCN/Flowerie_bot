@@ -263,6 +263,7 @@ Q: DeepSeek API 返回 401
 · 确认 API Key 未过期且有余额
 
 Q: 安卓上安装依赖时 pydantic-core 编译失败 / 耗时太久
+
 A: 请严格按照上方 "安卓 (Termux) 专用" 步骤执行，使用 `--only-binary` 强制使用预编译轮子。如果仍失败（如网络问题导致无法下载轮子），可安装编译工具后自行编译（耗时较长）：`pkg install clang binutils rust -y && pip install --upgrade pip && pip install -r requirements.txt`
 
 ---
