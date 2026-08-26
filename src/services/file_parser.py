@@ -201,42 +201,62 @@ class FileParser:
                     results.extend(extract_all_text(item, sender, prefix + f"[{idx}]", urls))
             return results
 
+        async def fetch_forward_messages(forward_id) -> Optional[List[Dict]]:
+            """通过 NapCat HTTP API 拉取一次转发内容。"""
+            try:
+                client = self._get_client(timeout=10)
+                resp = await client.get(
+                    f"{self.config.HTTP_API_BASE}/get_forward_msg",
+                    params={"message_id": forward_id}
+                )
+                if resp.status_code == 200:
+                    result = resp.json()
+                    if result.get("retcode") == 0:
+                        return result.get("data", {}).get("messages")
+            except Exception as e:
+                logger.error(f"Get forward msg error: {e}")
+            return None
+
+        async def resolve_nested_forwards(node):
+            """递归展开嵌套转发：把 forward 节点（无内联 messages 但有 id）拉取后展开。
+
+            这样聊天记录里嵌套的聊天记录、以及转发里的转发都能解析出来。
+            """
+            if isinstance(node, list):
+                return [await resolve_nested_forwards(item) for item in node]
+            if not isinstance(node, dict):
+                return node
+            if node.get("type") == "forward":
+                data = node.get("data") or {}
+                messages = data.get("messages")
+                if not messages:
+                    fid = data.get("id")
+                    if fid:
+                        fetched = await fetch_forward_messages(fid)
+                        if fetched:
+                            data["messages"] = fetched
+                            messages = fetched
+                if messages:
+                    return await resolve_nested_forwards(messages)
+                return node
+            # 普通节点：递归展开所有字段（含 message 数组里的嵌套 forward）
+            return {key: await resolve_nested_forwards(value) for key, value in node.items()}
+
         for msg in message_array:
             if msg.get("type") == "forward":
                 forward_data = msg.get("data", {})
                 messages = forward_data.get("messages")
                 if not messages:
-                    forward_id = forward_data.get("id")
-                    if forward_id:
-                        try:
-                            client = self._get_client(timeout=10)
-                            resp = await client.get(
-                                f"{self.config.HTTP_API_BASE}/get_forward_msg",
-                                params={"message_id": forward_id}
-                            )
-                            if resp.status_code == 200:
-                                result = resp.json()
-                                if result.get("retcode") == 0:
-                                    messages = result.get("data", {}).get("messages")
-                        except Exception as e:
-                            logger.error(f"Get forward msg error: {e}")
-                            continue
-                    else:
+                    messages = await fetch_forward_messages(forward_data.get("id"))
+                    if not messages:
                         continue
-                if messages:
-                    image_urls: List[str] = []
-                    text_lines = extract_all_text(messages, urls=image_urls)
-                    if text_lines or image_urls:
-                        return "\n".join(text_lines), image_urls, True
-                    # 尝试直接解析 messages 中的 message 字段
-                    for m in messages:
-                        if "message" in m:
-                            inner = m["message"]
-                            inner_urls: List[str] = []
-                            inner_text = extract_all_text(inner, urls=inner_urls)
-                            if inner_text or inner_urls:
-                                return "\n".join(inner_text), inner_urls, True
-                    return "", image_urls, False
+                # 先展开嵌套转发，再一次性提取文本与图片 url
+                resolved = await resolve_nested_forwards(messages)
+                image_urls: List[str] = []
+                text_lines = extract_all_text(resolved, urls=image_urls)
+                if text_lines or image_urls:
+                    return "\n".join(text_lines), image_urls, True
+                return "", image_urls, False
         return "", [], False
 
     # ========== 提取 JSON 卡片内容 ==========

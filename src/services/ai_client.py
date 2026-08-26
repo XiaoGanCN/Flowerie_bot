@@ -161,7 +161,11 @@ class AIClient:
             if r.status_code != 200:
                 logger.error(f"DeepSeek API HTTP {r.status_code}: {r.text[:200]}")
                 if retry_count < 2:
-                    await asyncio.sleep(1 + random.random())
+                    # 429 限流用更长的递增退避（5s / 15s / 30s），普通错误短退避
+                    if r.status_code == 429:
+                        await asyncio.sleep(5 + retry_count * 10)
+                    else:
+                        await asyncio.sleep(1 + random.random())
                     return await self.chat(user_message, context, user_id, group_id, is_mentioned, retry_count+1)
                 return None, None
 

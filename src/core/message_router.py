@@ -11,6 +11,7 @@ from src.services.memory_manager import MemoryManager
 from src.services.file_parser import FileParser
 from src.services.sender import Sender
 from src.core.policy_engine import PolicyEngine
+from src.core.message_assembler import MessageAssembler
 
 
 class MessageRouter:
@@ -30,6 +31,8 @@ class MessageRouter:
         self.sender = sender
         self.policy_engine = policy_engine
         self.global_state = self.policy_engine.global_state
+        # 消息组装（文本/识图/转发/卡片/文件/存档）拆分到 MessageAssembler
+        self.assembler = MessageAssembler(config, ai_client, file_parser, self.global_state)
         self._active_chat_task: Optional[asyncio.Task] = None
         self._context_backup_task: Optional[asyncio.Task] = None
         # 并发上限：同时处理的消息数（WS 层用它限制 AI/识图并发，防止突发消息打爆 API）
@@ -102,87 +105,12 @@ class MessageRouter:
         if not user_id:
             return
 
-        # 提取文本和@
+        # 消息组装（文本/识图/转发/卡片/文件/存档）交给 MessageAssembler
+        full_text, image_descriptions, is_reply_to_bot, has_reply_to_other, has_at_others = await self.assembler.assemble(
+            message_array, user_id, group_id, raw_time,
+        )
+        # 提取纯文本与是否@机器人（决策需要）
         clean_text, is_mentioned = self.file_parser.extract_mention_and_text(message_array, self.config.BOT_QQ)
-        full_text = clean_text
-
-        # 识别图片/表情包（OneBot11 image 段，NapCat 消息里带 url）
-        image_descriptions = []
-        for seg in message_array:
-            if seg.get("type") == "image":
-                seg_data = seg.get("data") or {}
-                url = seg_data.get("url", "")
-                if url:
-                    desc = await self.ai_client.describe_image(url)
-                    if desc:
-                        image_descriptions.append(desc)
-                    else:
-                        logger.warning(f"Vision describe failed for image url: {url[:80]}")
-        if image_descriptions:
-            full_text += f"\n[用户发送了一张图片，内容如下：]\n{'; '.join(image_descriptions)}\n[图片内容结束]"
-            logger.debug(f"Image descriptions: {image_descriptions}")
-
-        # 检查是否被回复或提及
-        is_reply_to_bot = False
-        has_reply_to_other = False
-        has_at_others = False
-        for seg in message_array:
-            if seg.get("type") == "reply":
-                reply_data = seg.get("data", {})
-                replied_qq = str(reply_data.get("qq", ""))
-                if replied_qq == str(self.config.BOT_QQ):
-                    is_reply_to_bot = True
-                else:
-                    has_reply_to_other = True
-            elif seg.get("type") == "at":
-                qq = str(seg.get("data", {}).get("qq", ""))
-                if qq != str(self.config.BOT_QQ):
-                    has_at_others = True
-
-        # 解析文件、转发、卡片
-        forward_text, forward_image_urls, has_forward = await self.file_parser.extract_forward_messages(message_array)
-        if has_forward:
-            if forward_text:
-                full_text += f"\n[用户转发了多条消息，内容如下：]\n{forward_text}\n[转发内容结束]"
-            # 转发里的图片：由 VISION_FORWARD_IMAGES 开关控制（默认关，省视觉 token）
-            if forward_image_urls and self.config.VISION_FORWARD_IMAGES:
-                forward_image_descriptions = []
-                for fwd_url in forward_image_urls:
-                    fwd_desc = await self.ai_client.describe_image(fwd_url)
-                    if fwd_desc:
-                        forward_image_descriptions.append(fwd_desc)
-                    else:
-                        logger.warning(f"Vision describe failed for forward image url: {fwd_url[:80]}")
-                if forward_image_descriptions:
-                    full_text += f"\n[用户转发的消息中包含图片，内容如下：]\n{'; '.join(forward_image_descriptions)}\n[图片内容结束]"
-                    logger.debug(f"Forward image descriptions: {forward_image_descriptions}")
-
-        card_text, has_card = self.file_parser.extract_json_card_content(message_array)
-        if has_card and card_text:
-            full_text += f"\n[用户分享了一个卡片，内容如下：]\n{card_text}\n[卡片内容结束]"
-
-        # 处理待解析文件
-        pending_key = f"{user_id}_{group_id}"
-        if pending_key in self.global_state.pending_files:
-            file_info = self.global_state.pending_files.pop(pending_key)
-            file_id = file_info.get("file_id")
-            file_name = file_info.get("file_name", "未命名文件")
-            file_size = file_info.get("file_size", 0)
-
-            if file_id and file_size <= 1 * 1024 * 1024:
-                file_content, success = await self.file_parser.fetch_and_parse_file(file_id, file_name)
-                if success and file_content:
-                    full_text += f"\n[用户上传了一个文件，内容如下：]\n{file_content}\n[文件内容结束]"
-                    logger.debug(f"File parsed: {file_name} ({len(file_content)} chars)")
-                else:
-                    logger.warning(f"Failed to parse file: {file_name}")
-            elif file_size > 1 * 1024 * 1024:
-                logger.warning(f"File too large, skipped: {file_name} ({file_size} bytes)")
-            else:
-                logger.debug(f"No file_id for pending file: {file_name}")
-
-        # 存档消息
-        self._archive_message(group_id, user_id, full_text, raw_time)
 
         # 去重
         state = self.policy_engine.get_group_state(group_id)
@@ -320,26 +248,6 @@ class MessageRouter:
             return False
 
     # ---------- 存档 ----------
-    def _archive_message(self, group_id: int, user_id: int, text: str, raw_time: int):
-        if not text:
-            return
-        try:
-            import os
-            from datetime import datetime
-            base = self.config.ARCHIVE_BASE_DIR
-            if not os.path.exists(base):
-                os.makedirs(base, exist_ok=True)
-            group_dir = os.path.join(base, str(group_id))
-            if not os.path.exists(group_dir):
-                os.makedirs(group_dir, exist_ok=True)
-            filename = os.path.join(group_dir, f"{datetime.now().strftime('%Y-%m-%d')}.txt")
-            time_str = datetime.fromtimestamp(raw_time).strftime("%H:%M:%S")
-            line = f"[{time_str}] 用户{user_id}：{text}\n"
-            with open(filename, "a", encoding="utf-8") as f:
-                f.write(line)
-        except Exception as e:
-            logger.error(f"Archive error: {e}")
-
     # ---------- 文件上传 ----------
     def _handle_group_upload(self, data: Dict[str, Any]):
         file_data = data.get("file", {})

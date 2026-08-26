@@ -68,7 +68,8 @@ class MemoryManager:
             self.memory[key]['notes'] = []
         notes = self.memory[key]['notes']
 
-        # 高相似度去重：完全相同、互为子串、或字符相似度 >= 0.85 的旧记忆不再重复记录
+        # 高相似度去重：完全相同、互为子串、相似度 >= 0.85、
+        # 或较短一条的字符集 ≥80% 被较长一条包含（可容忍错别字）的旧记忆不再重复记录
         from difflib import SequenceMatcher
 
         def _norm(s: str) -> str:
@@ -85,6 +86,13 @@ class MemoryManager:
             if existing_norm in text_norm or text_norm in existing_norm:
                 return
             if SequenceMatcher(None, existing_norm, text_norm).ratio() >= 0.85:
+                return
+            # 字符包含率（容忍错别字）：短句字符集 ≥80% 出现在长句里 → 视为重复
+            if len(text_norm) <= len(existing_norm):
+                short_chars, long_chars = set(text_norm), set(existing_norm)
+            else:
+                short_chars, long_chars = set(existing_norm), set(text_norm)
+            if short_chars and sum(1 for ch in short_chars if ch in long_chars) / len(short_chars) >= 0.8:
                 return
 
         notes.append(text)

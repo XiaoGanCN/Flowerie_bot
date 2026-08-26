@@ -1,0 +1,75 @@
+import asyncio
+import os
+import tempfile
+import unittest
+
+from src.services.memory_manager import MemoryManager
+
+
+def run(coro):
+    """在独立的 asyncio 事件循环里跑协程（兼容普通 Python 与无完整 asyncio 的环境）。"""
+    return asyncio.run(coro)
+
+
+class TestMemoryManagerDedup(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.tmp.name, "memory.json")
+        self.mm = MemoryManager(self.path)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def notes(self, uid=1, gid=10):
+        return self.mm.get_user_memory(uid, gid).get("notes", [])
+
+    def test_exact_duplicate_skipped(self):
+        run(self.mm.append_memory_text(1, 10, "喜欢打三角洲 已退游"))
+        run(self.mm.append_memory_text(1, 10, "喜欢打三角洲 已退游"))
+        self.assertEqual(len(self.notes()), 1)
+
+    def test_substring_duplicate_skipped(self):
+        run(self.mm.append_memory_text(1, 10, "喜欢打三角洲 已退游"))
+        run(self.mm.append_memory_text(1, 10, "喜欢打三角洲 已退游 好家伙 退游了还提这个 是怀念了吗"))
+        self.assertEqual(len(self.notes()), 1)
+
+    def test_typo_variant_skipped(self):
+        # 错别字版本（三角州 vs 三角洲）也应被识别为重复
+        run(self.mm.append_memory_text(1, 10, "喜欢打三角州 已退游"))
+        run(self.mm.append_memory_text(1, 10, "喜欢打三角洲 已退游 好家伙 退游了还提这个 是怀念了吗"))
+        self.assertEqual(len(self.notes()), 1)
+
+    def test_similar_prefix_skipped(self):
+        run(self.mm.append_memory_text(1, 10, "喜欢穿白丝"))
+        run(self.mm.append_memory_text(1, 10, "喜欢穿白丝袜"))
+        self.assertEqual(len(self.notes()), 1)
+
+    def test_different_notes_kept(self):
+        run(self.mm.append_memory_text(1, 10, "喜欢打三角洲"))
+        run(self.mm.append_memory_text(1, 10, "讨厌蚯蚓"))
+        run(self.mm.append_memory_text(1, 10, "怕黑"))
+        self.assertEqual(len(self.notes()), 3)
+
+    def test_different_colors_kept(self):
+        # 喜欢红色 vs 喜欢蓝色：不应被误判为重复
+        run(self.mm.append_memory_text(1, 10, "喜欢红色"))
+        run(self.mm.append_memory_text(1, 10, "喜欢蓝色"))
+        self.assertEqual(len(self.notes()), 2)
+
+    def test_per_user_group_isolation(self):
+        run(self.mm.append_memory_text(1, 10, "喜欢打三角洲"))
+        run(self.mm.append_memory_text(2, 10, "喜欢打三角洲"))
+        run(self.mm.append_memory_text(1, 20, "喜欢打三角洲"))
+        self.assertEqual(len(self.notes(1, 10)), 1)
+        self.assertEqual(len(self.notes(2, 10)), 1)
+        self.assertEqual(len(self.notes(1, 20)), 1)
+
+    def test_persist_and_reload(self):
+        run(self.mm.append_memory_text(1, 10, "喜欢打三角洲"))
+        reloaded = MemoryManager(self.path)
+        notes = reloaded.get_user_memory(1, 10).get("notes", [])
+        self.assertEqual(notes, ["喜欢打三角洲"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -90,7 +90,7 @@ class ContextManager:
 
     # ---------- 上下文崩溃持久化 ----------
     def load_context_backup(self) -> None:
-        """启动时读取上次保存的上下文备份（每群最多恢复最近 50 条）。"""
+        """启动时读取上次保存的上下文备份（每群最多恢复最近 50 条 + 最近 200 条已处理消息 id）。"""
         path = self.config.CONTEXT_BACKUP_PATH
         if not path or not os.path.exists(path):
             return
@@ -98,8 +98,16 @@ class ContextManager:
             with open(path, "r", encoding="utf-8") as f:
                 backup = json.load(f)
             restored = 0
-            for group_id_str, messages in backup.items():
-                if not isinstance(messages, list) or not messages:
+            restored_ids = 0
+            for group_id_str, value in backup.items():
+                # 兼容旧格式（纯消息数组）与新格式（{"messages": [...], "processed_ids": [...]}）
+                if isinstance(value, dict):
+                    messages = value.get("messages", [])
+                    processed_ids = value.get("processed_ids", [])
+                elif isinstance(value, list):
+                    messages = value
+                    processed_ids = []
+                else:
                     continue
                 try:
                     group_id = int(group_id_str)
@@ -110,13 +118,19 @@ class ContextManager:
                     if isinstance(msg, dict) and "message" in msg:
                         state.context.append(msg)
                         restored += 1
-            if restored:
-                logger.info(f"上下文备份已恢复: {len(backup)} 个群共 {restored} 条消息")
+                for mid in processed_ids[-200:]:
+                    state.processed_msg_ids.append(mid)
+                    restored_ids += 1
+            if restored or restored_ids:
+                logger.info(f"上下文备份已恢复: {len(backup)} 个群共 {restored} 条消息, {restored_ids} 条已处理消息 id")
         except Exception as e:
             logger.error(f"加载上下文备份失败: {e}")
 
     async def save_context_backup(self) -> None:
-        """把每群最近 50 条上下文写入备份文件（原子写入），供意外去世后恢复。"""
+        """把每群最近 50 条上下文 + 最近 200 条已处理消息 id 写入备份（原子写入）。
+
+        已处理消息 id 一起持久化：崩溃重启后 NapCat 重投旧消息时不会重复回复。
+        """
         path = self.config.CONTEXT_BACKUP_PATH
         if not path:
             return
@@ -124,8 +138,12 @@ class ContextManager:
             backup = {}
             for group_id, state in self.groups.items():
                 msgs = list(state.context)[-50:]
-                if msgs:
-                    backup[str(group_id)] = msgs
+                processed_ids = list(state.processed_msg_ids)[-200:]
+                if msgs or processed_ids:
+                    backup[str(group_id)] = {
+                        "messages": msgs,
+                        "processed_ids": processed_ids,
+                    }
             if not backup:
                 return
             dirname = os.path.dirname(path)

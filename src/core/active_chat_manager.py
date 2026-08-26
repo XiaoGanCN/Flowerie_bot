@@ -1,19 +1,27 @@
 import time
 import random
-from typing import Dict
+from typing import Dict, Optional
 from loguru import logger
 
 from src.config import Settings
 from src.models import GroupState, GlobalState
+from src.core.cooldown_manager import CooldownManager
 
 
 class ActiveChatManager:
     """主动聊天决策：间隔触发、夜间静默、连续主动冷却。"""
 
-    def __init__(self, config: Settings, groups: Dict[int, GroupState], global_state: GlobalState):
+    def __init__(
+        self,
+        config: Settings,
+        groups: Dict[int, GroupState],
+        global_state: GlobalState,
+        cooldown: Optional[CooldownManager] = None,
+    ):
         self.config = config
         self.groups = groups
         self.global_state = global_state
+        self.cooldown = cooldown  # 由门面注入，避免重复实例化
 
     def get_group_state(self, group_id: int) -> GroupState:
         if group_id not in self.groups:
@@ -21,9 +29,10 @@ class ActiveChatManager:
         return self.groups[group_id]
 
     def can_bot_reply(self, group_id: int) -> bool:
-        """复用机器人冷却判断（与 CooldownManager 同一逻辑，避免循环依赖）。"""
-        from src.core.cooldown_manager import CooldownManager
-        return CooldownManager(self.config, self.groups, self.global_state).can_bot_reply(group_id)
+        """复用机器人冷却判断（优先用注入的 CooldownManager）。"""
+        if self.cooldown is None:
+            self.cooldown = CooldownManager(self.config, self.groups, self.global_state)
+        return self.cooldown.can_bot_reply(group_id)
 
     def should_active_chat(self, group_id: int) -> bool:
         now = time.time()

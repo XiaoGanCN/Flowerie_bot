@@ -231,20 +231,26 @@ Flowerie_bot/
     ├── utils/
     │   └── logger.py     # loguru 日志配置
     ├── services/
-    │   ├── ai_client.py      # DeepSeek API + 视觉识图封装
-    │   ├── memory_manager.py # 记忆库 CRUD（原子写入 + 相似度去重）
-    │   ├── file_parser.py    # 文件/转发/卡片解析（转发内图片 url 提取）
+    │   ├── ai_client.py      # DeepSeek API + 视觉识图封装（429 限流退避）
+    │   ├── memory_manager.py # 记忆库 CRUD（原子写入 + 相似度去重 + 错别字容忍）
+    │   ├── file_parser.py    # 文件/转发/卡片解析（转发内图片 url + 嵌套转发展开）
     │   └── sender.py         # HTTP 消息发送（带重试）
     └── core/
         ├── policy_engine.py    # 策略门面（聚合各职责管理器，对外 API 不变）
-        ├── context_manager.py  # 上下文读写 / 接话概率 / 重复回复 / 崩溃备份
+        ├── context_manager.py  # 上下文读写 / 接话概率 / 重复回复 / 崩溃备份（含消息去重 id）
         ├── cooldown_manager.py # 用户与机器人冷却 / 连续回复惩罚
         ├── repeat_detector.py  # 复读检测
         ├── memory_parser.py    # 记忆指令解析 / 强制记忆触发
         ├── poke_manager.py     # 戳戳回复去重
-        ├── active_chat_manager.py # 主动聊天决策
-        ├── message_router.py   # 事件分发与消息处理
-        └── websocket_server.py # WebSocket 连接管理（自动重连 + 超时 + 并发限制）
+        ├── active_chat_manager.py # 主动聊天决策（cooldown 由门面注入）
+        ├── message_assembler.py # 消息组装：文本/识图/转发/卡片/文件/存档
+        ├── message_router.py   # 事件分发与消息处理（流程决策）
+        └── websocket_server.py # WebSocket 连接管理（单连接守卫 + 优雅停机 + 超时 + 并发）
+tests/
+    ├── test_memory_parser.py    # 记忆指令/强制记忆单元测试
+    ├── test_memory_manager.py   # 记忆去重（含错别字容忍）单元测试
+    ├── test_cooldown_manager.py # 冷却逻辑单元测试
+    └── test_context_manager.py  # 上下文备份/恢复单元测试
 ```
 
 ---
@@ -311,7 +317,7 @@ A: 请严格按照上方 "安卓 (Termux) 专用" 步骤执行，使用 `--only-
 
 ## 🙏 致谢
 
-- [NapCat](https://github.com/NapNeko/NapCatQQ) — 强大的 QQ 机器人框架
+- [NapCat](https://napcat.qq.com) — 强大的 QQ 机器人框架
 - [DeepSeek](https://deepseek.com) — 聪明又便宜的 AI 模型
 - [OneBot 11](https://onebot.dev) — 统一的机器人协议标准
 ---

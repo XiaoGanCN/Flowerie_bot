@@ -35,7 +35,7 @@ class PolicyEngine:
         self.repeat = RepeatDetector(config, self.groups)
         self.memory = MemoryParser()
         self.poke = PokeManager(config, self.global_state)
-        self.active_chat = ActiveChatManager(config, self.groups, self.global_state)
+        self.active_chat = ActiveChatManager(config, self.groups, self.global_state, cooldown=self.cooldown)
 
         self.context.load_context_backup()  # 意外去世后重启：恢复上次保存的上下文
 

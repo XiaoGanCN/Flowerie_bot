@@ -43,24 +43,18 @@ class Settings(BaseSettings):
     
     # Behavior
     ONLY_REPLY_WHEN_AT: bool = False
-    REPLY_PROBABILITY: float = 0.3
-    ACTIVE_CHAT_INTERVAL: int = 600
     USER_COOLDOWN: int = 5
     BOT_COOLDOWN: int = 2
     MAX_REPLY_LENGTH: int = 40
     MAX_CONSECUTIVE_REPLIES: int = 3
     CONTEXT_SIZE: int = 300
-    COLD_TIME: int = 600
     LOG_LEVEL: str = "INFO"
-    
+
     # Random active chat
-    RANDOM_ACTIVE_CHAT_MIN_INTERVAL: int = 14400
-    RANDOM_ACTIVE_CHAT_MAX_INTERVAL: int = 21600
     NIGHT_SILENCE_START: int = 0
     NIGHT_SILENCE_END: int = 8
     ACTIVE_CHAT_COOLDOWN: int = 180
     BOT_CONSECUTIVE_REPLY_COOLDOWN: int = 60
-    BOT_RECENT_REPLY_WINDOW: int = 60
     
     # Repeat
     REPEAT_WINDOW: int = 120
