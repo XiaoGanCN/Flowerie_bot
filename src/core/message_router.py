@@ -103,6 +103,10 @@ class MessageRouter:
                 await self._handle_poke(data)
 
     # ---------- 消息处理 ----------
+    def _in_whitelist(self, group_id: int) -> bool:
+        """群白名单：空=放行所有群；设置后只有白名单群能触发任何行为（消息/戳戳/文件）。"""
+        return not self.config.ALLOWED_GROUP_IDS or group_id in self.config.ALLOWED_GROUP_IDS
+
     async def _handle_message(self, data: Dict[str, Any]) -> None:
         if data.get("message_type") != "group":
             return
@@ -110,7 +114,7 @@ class MessageRouter:
         if not group_id:
             return
 
-        if self.config.ALLOWED_GROUP_IDS and group_id not in self.config.ALLOWED_GROUP_IDS:
+        if not self._in_whitelist(group_id):
             logger.debug(f"Group {group_id} not in whitelist, ignoring")
             return
 
@@ -314,8 +318,11 @@ class MessageRouter:
         file_data = data.get("file", {})
         if not file_data:
             return
-        user_id = data.get("user_id")
         group_id = data.get("group_id")
+        if not self._in_whitelist(group_id):
+            logger.debug(f"Upload from non-whitelisted group {group_id}, ignoring")
+            return
+        user_id = data.get("user_id")
         if user_id and group_id:
             pending_key = f"{user_id}_{group_id}"
             self.global_state.pending_files[pending_key] = {
@@ -336,8 +343,11 @@ class MessageRouter:
             return
         if not self.config.POKE_REPLY_ENABLED:
             return
-        user_id = data.get("user_id")
         group_id = data.get("group_id")
+        if not self._in_whitelist(group_id):
+            logger.debug(f"Poke from non-whitelisted group {group_id}, ignoring")
+            return
+        user_id = data.get("user_id")
         reply = self.policy_engine.get_poke_reply()
         if len(reply) > self.config.MAX_REPLY_LENGTH:
             reply = reply[:self.config.MAX_REPLY_LENGTH] + "..."

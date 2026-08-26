@@ -167,8 +167,10 @@ class MessageAssembler:
             logger.debug(f"No file_id for pending file: {file_name}")
         return ""
 
-    # ---------- 存档 ----------
+    # ---------- 存档（ARCHIVE_ENABLED 开关，默认关——隐私优先） ----------
     def _archive(self, group_id: int, user_id: int, text: str, raw_time: int) -> None:
+        if not getattr(self.config, "ARCHIVE_ENABLED", False):
+            return
         if not text:
             return
         try:

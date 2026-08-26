@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     # File paths
     MEMORY_PATH: str = "./data/memory.json"
     ARCHIVE_BASE_DIR: str = "./data/archive"
+    ARCHIVE_ENABLED: bool = False          # 是否启用消息存档（默认关，隐私优先；开=true 才写入 archive/）
     AUDIT_LOG_PATH: str = "./data/audit.log"
 
     # White list

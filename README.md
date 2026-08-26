@@ -202,6 +202,7 @@ bash run.sh
 | `CONTEXT_BACKUP_PATH` | 上下文崩溃备份路径（意外去世后重启自动恢复最近 50 条） | `./data/context_backup.json` |
 | `CONTEXT_BACKUP_INTERVAL` | 上下文备份间隔（秒） | `60` |
 | `MEMORY_PATH` | 记忆库路径 | `./data/memory.json` |
+| `ARCHIVE_ENABLED` | 是否启用消息存档（默认关，隐私优先） | `false` |
 | `ARCHIVE_BASE_DIR` | 消息存档路径 | `./data/archive` |
 | `MEMORY_TTL_DAYS` | 用户原话记忆保留天数（0=永久） | `0` |
 | `MODEL_MEMORY_TTL_DAYS` | AI 推断记忆保留天数（低信任，默认 30 天过期） | `30` |
