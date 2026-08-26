@@ -95,7 +95,10 @@ pip install -r requirements.txt
 #### 步骤四：运行项目
 ```bash
 cd ~/Flowerie_bot #请替换为你的实际项目路径
-python main.py
+# 推荐用守护脚本启动：崩溃/被杀后 5 秒自动重启，配合上下文备份无缝恢复
+bash run.sh
+# 想直接前台跑（崩了不会自动重启）也可以用：
+# python main.py
 ```
 
 ### 💻 Linux / macOS
@@ -156,7 +159,10 @@ mkdir -p data logs
 ### 7. 启动花璃
 
 ```bash
-python main.py
+# 推荐用守护脚本启动（崩溃/被杀自动重启，配合上下文备份无缝恢复）
+bash run.sh
+# 或者直接前台跑：
+# python main.py
 ```
 
 看到以下日志即为启动成功：
