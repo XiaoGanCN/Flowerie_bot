@@ -1,7 +1,7 @@
 import asyncio
 import time
 import random
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from loguru import logger
 
 from src.config import Settings
@@ -151,9 +151,9 @@ class MessageRouter:
                 self.policy_engine.add_context(group_id, 0, full_text, is_bot=True)
                 return
 
-        # 引战检测
+        # 引战检测（统一准入：走预算闸门）
         if self.config.TOXIC_GROUP_IDS and group_id in self.config.TOXIC_GROUP_IDS:
-            if await self.ai_client.is_toxic(full_text):
+            if await self.guarded_is_toxic(group_id, user_id, full_text):
                 now = time.time()
                 last_warn = self.global_state.last_toxic_warning.get(group_id, 0)
                 if now - last_warn >= self.config.TOXIC_WARNING_COOLDOWN:
@@ -204,12 +204,8 @@ class MessageRouter:
         else:
             self.policy_engine.update_user_time(user_id, group_id)
 
-        # 每日 AI 调用预算（P1-5：全局+每群+每用户限速，超出即拦截（可选在群里提示））
-        allowed, budget_reason = self.budget.check(group_id, user_id)
-        if not allowed:
-            if budget_reason in ("global", "group") and self.config.BUDGET_EXHAUSTED_NOTICE:
-                await self.budget.notify_exhausted(group_id)
-            logger.warning(f"AI 预算/限速拦截: group={group_id} user={user_id} reason={budget_reason}")
+        # 每日 AI 调用预算（统一准入：普通回复/重试/引战/主动聊天共用一道闸门）
+        if not await self._ai_allowed(group_id, user_id):
             return
 
         # ---------- 调用 AI ----------
@@ -223,7 +219,9 @@ class MessageRouter:
             user_prompt = user_prompt[:max_input] + "\n...(输入过长已截断)"
         if len(context_text) > max_input:
             context_text = context_text[-max_input:] + "\n...(上下文过长已截断)"
-        reply, memory_update = await self.ai_client.chat(
+        reply, memory_update, _denied = await self.guarded_chat(
+            group_id,
+            user_id,
             user_message=user_prompt,
             context=context_text,
             user_id=user_id,
@@ -265,16 +263,20 @@ class MessageRouter:
             logger.info(f"Force memory for user {user_id} in group {group_id}: {claim}")
             return
 
-        # 重试兜底
+        # 重试兜底（每次重试都是真实 AI 调用，同样过预算闸门）
         if is_mentioned and (not reply or not reply.strip()):
             for _ in range(3):
-                reply, _ = await self.ai_client.chat(
+                reply, _retry_mem, denied = await self.guarded_chat(
+                    group_id,
+                    user_id,
                     user_message=user_prompt,
                     context=context_text,
                     user_id=user_id,
                     group_id=group_id,
                     is_mentioned=True,
                 )
+                if denied:  # 预算拦截：不再重试
+                    break
                 if reply and reply.strip():
                     break
             if not reply or not reply.strip():
@@ -293,6 +295,34 @@ class MessageRouter:
                 logger.info(f"Reply sent: {reply[:30]}...")
             else:
                 logger.error("Reply send failed")
+
+    # ---------- 统一 AI 准入层（所有消耗 AI 的路径都必须走这里，防预算绕过） ----------
+    async def _ai_allowed(self, group_id: int, user_id: int) -> bool:
+        """预算闸门：返回是否允许调用 AI（不允许时按需提示并记录）。"""
+        allowed, reason = self.budget.check(group_id, user_id)
+        if not allowed:
+            if reason in ("global", "group") and self.config.BUDGET_EXHAUSTED_NOTICE:
+                await self.budget.notify_exhausted(group_id)
+            logger.warning(f"AI 预算/限速拦截: group={group_id} user={user_id} reason={reason}")
+        return allowed
+
+    async def guarded_chat(self, group_id: int, user_id: int, **kwargs) -> Tuple[Optional[str], Optional[str], bool]:
+        """统一 AI 对话入口：预算放行才调用 chat()。
+
+        返回 (reply, memory_update, denied)。denied=True 表示预算/限速拦截
+        （区别于 chat() 自身的 API 失败返回 None,None）。
+        普通回复 / 回复重试 / 主动聊天 全部走这里，杜绝绕过预算。
+        """
+        if not await self._ai_allowed(group_id, user_id):
+            return None, None, True
+        reply, memory_update = await self.ai_client.chat(**kwargs)
+        return reply, memory_update, False
+
+    async def guarded_is_toxic(self, group_id: int, user_id: int, text: str) -> bool:
+        """统一引战检测入口：预算放行才调用 is_toxic()；拦截返回 False（放行消息，宁可漏检不烧钱）。"""
+        if not await self._ai_allowed(group_id, user_id):
+            return False
+        return await self.ai_client.is_toxic(text)
 
     # ---------- 决策逻辑 ----------
     def _should_reply(self, msg: GroupMessage) -> bool:
@@ -390,13 +420,19 @@ class MessageRouter:
             return
         for attempt in range(3):
             prompt = "你现在就是QQ群里的花璃，一个17岁高中生，正在自然地跟群友聊天。\n没有人在叫你。\n如果最近大家讨论一个话题，自然接一句，像平时一样简短而自然地说句话。\n如果群冷了，可以偶尔冒一句，简短就好。\n不要解释。\n不要说自己是AI。\n不要刻意活跃气氛。\n一句话即可，尽量短，自然。"
-            reply, _ = await self.ai_client.chat(
+            # 主动聊天同样过预算闸门（user_id=0 表示机器人主动发起；受群级/全局预算约束）
+            reply, _active_mem, denied = await self.guarded_chat(
+                group_id,
+                0,
                 user_message=prompt,
                 context=context_text,
-                user_id=None,
+                user_id=0,
                 group_id=group_id,
                 is_mentioned=False,
             )
+            if denied:  # 预算拦截：停止主动聊天
+                logger.debug(f"Active chat blocked by budget for group {group_id}")
+                break
             if not reply:
                 break
             if self.policy_engine.is_duplicate_reply(group_id, reply):
