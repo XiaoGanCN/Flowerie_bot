@@ -114,9 +114,22 @@ class MessageRouter:
                     has_at_others = True
 
         # 解析文件、转发、卡片
-        forward_text, has_forward = await self.file_parser.extract_forward_messages(message_array)
-        if has_forward and forward_text:
-            full_text += f"\n[用户转发了多条消息，内容如下：]\n{forward_text}\n[转发内容结束]"
+        forward_text, forward_image_urls, has_forward = await self.file_parser.extract_forward_messages(message_array)
+        if has_forward:
+            if forward_text:
+                full_text += f"\n[用户转发了多条消息，内容如下：]\n{forward_text}\n[转发内容结束]"
+            # 转发里的图片：每一张都识图，让花璃看到转发里的每张图（成本不在考虑范围）
+            if forward_image_urls:
+                forward_image_descriptions = []
+                for fwd_url in forward_image_urls:
+                    fwd_desc = await self.ai_client.describe_image(fwd_url)
+                    if fwd_desc:
+                        forward_image_descriptions.append(fwd_desc)
+                    else:
+                        logger.warning(f"Vision describe failed for forward image url: {fwd_url[:80]}")
+                if forward_image_descriptions:
+                    full_text += f"\n[用户转发的消息中包含图片，内容如下：]\n{'; '.join(forward_image_descriptions)}\n[图片内容结束]"
+                    logger.debug(f"Forward image descriptions: {forward_image_descriptions}")
 
         card_text, has_card = self.file_parser.extract_json_card_content(message_array)
         if has_card and card_text:

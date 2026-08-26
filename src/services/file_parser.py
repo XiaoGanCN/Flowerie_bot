@@ -161,11 +161,15 @@ class FileParser:
             return "", False
 
     # ========== 提取合并转发消息 ==========
-    async def extract_forward_messages(self, message_array: List[Dict]) -> Tuple[str, bool]:
-        """提取合并转发消息中的文本"""
+    async def extract_forward_messages(self, message_array: List[Dict]) -> Tuple[str, List[str], bool]:
+        """提取合并转发消息中的文本与图片 URL。
+
+        返回: (转发文本, 转发内的图片url列表, 是否有转发)
+        图片 url 由调用方逐个交给视觉模型识图（让花璃看到转发里的每一张图）。
+        """
         import httpx
 
-        def extract_all_text(obj, sender="未知", prefix=""):
+        def extract_all_text(obj, sender="未知", prefix="", urls=None):
             results = []
             if isinstance(obj, dict):
                 sender_val = obj.get("sender", {})
@@ -173,16 +177,21 @@ class FileParser:
                     sender = sender_val.get("user_id", sender)
                 elif isinstance(sender_val, (int, str)):
                     sender = str(sender_val)
+                # 收集 image 段的 url（NapCat 合并转发里的图片同样带 url）
+                if obj.get("type") == "image":
+                    img_url = (obj.get("data") or {}).get("url", "")
+                    if img_url and urls is not None and img_url not in urls:
+                        urls.append(img_url)
                 if "text" in obj and isinstance(obj["text"], str):
                     if obj["text"].strip():
                         results.append(f"[用户{sender}]：{obj['text']}")
                 for key, value in obj.items():
                     if key == "text":
                         continue
-                    results.extend(extract_all_text(value, sender, prefix + key + "."))
+                    results.extend(extract_all_text(value, sender, prefix + key + ".", urls))
             elif isinstance(obj, list):
                 for idx, item in enumerate(obj):
-                    results.extend(extract_all_text(item, sender, prefix + f"[{idx}]"))
+                    results.extend(extract_all_text(item, sender, prefix + f"[{idx}]", urls))
             return results
 
         for msg in message_array:
@@ -208,19 +217,20 @@ class FileParser:
                     else:
                         continue
                 if messages:
-                    text_lines = extract_all_text(messages)
-                    if text_lines:
-                        full_text = "\n".join(text_lines)
-                        return full_text, True
+                    image_urls: List[str] = []
+                    text_lines = extract_all_text(messages, urls=image_urls)
+                    if text_lines or image_urls:
+                        return "\n".join(text_lines), image_urls, True
                     # 尝试直接解析 messages 中的 message 字段
-                    for msg in messages:
-                        if "message" in msg:
-                            inner = msg["message"]
-                            inner_text = extract_all_text(inner)
-                            if inner_text:
-                                return "\n".join(inner_text), True
-                    return "", False
-        return "", False
+                    for m in messages:
+                        if "message" in m:
+                            inner = m["message"]
+                            inner_urls: List[str] = []
+                            inner_text = extract_all_text(inner, urls=inner_urls)
+                            if inner_text or inner_urls:
+                                return "\n".join(inner_text), inner_urls, True
+                    return "", image_urls, False
+        return "", [], False
 
     # ========== 提取 JSON 卡片内容 ==========
     def extract_json_card_content(self, message_array: List[Dict]) -> Tuple[str, bool]:
