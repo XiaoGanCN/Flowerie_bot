@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     VISION_API_URL: Optional[str] = None
     VISION_MODEL: Optional[str] = None
     VISION_TIMEOUT: int = 30
+
+    # 是否识别合并转发（聊天记录）里的图片（默认关闭，可省视觉 token；想开在 .env 里设 true）
+    VISION_FORWARD_IMAGES: bool = False
     
     # Bot
     BOT_QQ: int = Field(..., env="BOT_QQ")

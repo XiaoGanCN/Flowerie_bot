@@ -118,8 +118,8 @@ class MessageRouter:
         if has_forward:
             if forward_text:
                 full_text += f"\n[用户转发了多条消息，内容如下：]\n{forward_text}\n[转发内容结束]"
-            # 转发里的图片：每一张都识图，让花璃看到转发里的每张图（成本不在考虑范围）
-            if forward_image_urls:
+            # 转发里的图片：由 VISION_FORWARD_IMAGES 开关控制（默认关，省视觉 token）
+            if forward_image_urls and self.config.VISION_FORWARD_IMAGES:
                 forward_image_descriptions = []
                 for fwd_url in forward_image_urls:
                     fwd_desc = await self.ai_client.describe_image(fwd_url)
