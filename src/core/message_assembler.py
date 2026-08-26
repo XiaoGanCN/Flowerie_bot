@@ -8,6 +8,7 @@ from src.config import Settings
 from src.models import GlobalState
 from src.services.ai_client import AIClient
 from src.services.file_parser import FileParser
+from src.core.sanitizer import sanitize_untrusted_text
 
 
 class MessageAssembler:
@@ -39,7 +40,9 @@ class MessageAssembler:
         # 顶层图片/表情包识图（OneBot11 image 段带 url）
         image_descriptions = await self._describe_images(message_array)
         if image_descriptions:
-            full_text += f"\n[用户发送了一张图片，内容如下：]\n{'; '.join(image_descriptions)}\n[图片内容结束]"
+            # 图片描述也按不可信数据处理（图片里可能被塞文字指令）
+            cleaned_descs, _ = sanitize_untrusted_text("；".join(image_descriptions))
+            full_text += f"\n[用户发送了一张图片，内容如下：]\n{cleaned_descs}\n[图片内容结束]"
             logger.debug(f"Image descriptions: {image_descriptions}")
 
         # 扫描回复与@
@@ -103,6 +106,10 @@ class MessageAssembler:
             return ""
         block = ""
         if forward_text:
+            # 代码层防注入：转发文本清洗后再进上下文
+            forward_text, inject_hit = sanitize_untrusted_text(forward_text)
+            if inject_hit:
+                logger.warning("疑似提示词注入已过滤（转发内容）")
             block += f"\n[用户转发了多条消息，内容如下：]\n{forward_text}\n[转发内容结束]"
         # 转发里的图片：由 VISION_FORWARD_IMAGES 开关控制（默认关，省视觉 token）
         if forward_image_urls and self.config.VISION_FORWARD_IMAGES:
@@ -117,7 +124,9 @@ class MessageAssembler:
             if len(forward_image_urls) > max_images:
                 logger.warning(f"转发图片超过上限({max_images}张)，仅识别前 {max_images} 张")
             if forward_image_descriptions:
-                block += f"\n[用户转发的消息中包含图片，内容如下：]\n{'; '.join(forward_image_descriptions)}\n[图片内容结束]"
+                # 图片描述同样按不可信数据处理
+                cleaned_descs, _ = sanitize_untrusted_text("；".join(forward_image_descriptions))
+                block += f"\n[用户转发的消息中包含图片，内容如下：]\n{cleaned_descs}\n[图片内容结束]"
                 logger.debug(f"Forward image descriptions: {forward_image_descriptions}")
         return block
 
@@ -125,6 +134,10 @@ class MessageAssembler:
     def _assemble_card(self, message_array: List[Dict]) -> str:
         card_text, has_card = self.file_parser.extract_json_card_content(message_array)
         if has_card and card_text:
+            # 代码层防注入：卡片文本清洗后再进上下文
+            card_text, inject_hit = sanitize_untrusted_text(card_text)
+            if inject_hit:
+                logger.warning("疑似提示词注入已过滤（卡片内容）")
             return f"\n[用户分享了一个卡片，内容如下：]\n{card_text}\n[卡片内容结束]"
         return ""
 
@@ -141,6 +154,10 @@ class MessageAssembler:
         if file_id and file_size <= 1 * 1024 * 1024:
             file_content, success = await self.file_parser.fetch_and_parse_file(file_id, file_name)
             if success and file_content:
+                # 代码层防注入：文件内容清洗后再进上下文（文件是最高危注入载体）
+                file_content, inject_hit = sanitize_untrusted_text(file_content)
+                if inject_hit:
+                    logger.warning(f"疑似提示词注入已过滤（文件内容: {file_name}）")
                 logger.debug(f"File parsed: {file_name} ({len(file_content)} chars)")
                 return f"\n[用户上传了一个文件，内容如下：]\n{file_content}\n[文件内容结束]"
             logger.warning(f"Failed to parse file: {file_name}")

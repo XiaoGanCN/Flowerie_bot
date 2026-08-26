@@ -5,6 +5,7 @@ import random
 from typing import Dict, List
 from loguru import logger
 
+from src.core.sanitizer import sanitize_untrusted_text
 from src.config import Settings
 from src.models import GroupState, GlobalState
 
@@ -38,7 +39,9 @@ class ContextManager:
         lines = []
         for idx, m in enumerate(msgs, 1):
             who = "机器人(花璃)" if m["is_bot"] else f"用户{m['user_id']}"
-            lines.append(f"[{idx}] {who}: {m['message']}")
+            # 代码层防注入：历史消息按不可信数据处理，清洗后再进上下文
+            msg_text, _ = sanitize_untrusted_text(str(m["message"]))
+            lines.append(f"[{idx}] {who}: {msg_text}")
         return "\n".join(lines)
 
     # ---------- 回复概率 ----------

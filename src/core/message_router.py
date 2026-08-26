@@ -12,6 +12,7 @@ from src.services.file_parser import FileParser
 from src.services.sender import Sender
 from src.core.policy_engine import PolicyEngine
 from src.core.message_assembler import MessageAssembler
+from src.core.sanitizer import validate_memory_content
 
 
 class MessageRouter:
@@ -215,25 +216,34 @@ class MessageRouter:
         if memory_update and user_id and not self._memory_disabled(group_id):
             target_uid, mem_content = self.policy_engine.parse_memory_update(memory_update, user_id)
             if mem_content:
-                await self.memory_manager.append_memory_text(
-                    target_uid, group_id, mem_content,
-                    source_user=user_id,
-                    source_group=group_id,
-                    source_message_id=msg_id,
-                    confidence="model",
-                )
-                logger.info(f"Memory updated for user {target_uid} in group {group_id}: {mem_content}")
+                # 代码层闸门：校验记忆内容（长度/QQ号/指令句式），拒绝即丢弃并记日志
+                mem_content = validate_memory_content(mem_content)
+                if mem_content is None:
+                    logger.warning(f"记忆写入被代码层校验拒绝（疑似注入）: {memory_update[:60]}")
+                else:
+                    await self.memory_manager.append_memory_text(
+                        target_uid, group_id, mem_content,
+                        source_user=user_id,
+                        source_group=group_id,
+                        source_message_id=msg_id,
+                        confidence="model",
+                    )
+                    logger.info(f"Memory updated for user {target_uid} in group {group_id}: {mem_content}")
 
         # 静默记忆模式（用户明确表达偏好但未被@）：只记记忆，不回复
         if silent_memory_only and not self._memory_disabled(group_id):
+            claim = validate_memory_content(clean_text[:100])
+            if claim is None:
+                logger.warning(f"强制记忆被代码层校验拒绝（疑似注入）: {clean_text[:60]}")
+                return
             await self.memory_manager.append_memory_text(
-                user_id, group_id, clean_text[:80],
+                user_id, group_id, claim,
                 source_user=user_id,
                 source_group=group_id,
                 source_message_id=msg_id,
                 confidence="self_claim",
             )
-            logger.info(f"Force memory for user {user_id} in group {group_id}: {clean_text[:80]}")
+            logger.info(f"Force memory for user {user_id} in group {group_id}: {claim}")
             return
 
         # 重试兜底
