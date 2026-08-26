@@ -13,9 +13,20 @@ from src.services.sender import Sender
 from src.core.policy_engine import PolicyEngine
 from src.core.message_assembler import MessageAssembler
 from src.core.sanitizer import validate_memory_content
+from src.core.command_handler import CommandHandler
+from src.core.budget_manager import BudgetManager
 
 
 class MessageRouter:
+    """事件分发与消息处理（流程编排）。
+
+    上帝类拆分后只负责：
+    - 事件分发（消息/上传/戳戳）与消息处理主流程
+    - 回复决策、AI 调用编排、记忆记录
+    - 后台循环（主动聊天 / 上下文备份）
+    指令处理 → CommandHandler；AI 预算 → BudgetManager；消息组装 → MessageAssembler。
+    """
+
     def __init__(
         self,
         config: Settings,
@@ -32,8 +43,12 @@ class MessageRouter:
         self.sender = sender
         self.policy_engine = policy_engine
         self.global_state = self.policy_engine.global_state
-        # 消息组装（文本/识图/转发/卡片/文件/存档）拆分到 MessageAssembler
+        # 消息组装（文本/识图/转发/卡片/文件/存档）→ MessageAssembler
         self.assembler = MessageAssembler(config, ai_client, file_parser, self.global_state)
+        # 指令处理 → CommandHandler
+        self.commands = CommandHandler(config, sender, memory_manager)
+        # AI 预算/限速 → BudgetManager
+        self.budget = BudgetManager(config, self.global_state, sender)
         self._active_chat_task: Optional[asyncio.Task] = None
         self._context_backup_task: Optional[asyncio.Task] = None
         # 并发上限：同时处理的消息数（WS 层用它限制 AI/识图并发，防止突发消息打爆 API）
@@ -113,8 +128,8 @@ class MessageRouter:
         # 提取纯文本与是否@机器人（决策需要）
         clean_text, is_mentioned = self.file_parser.extract_mention_and_text(message_array, self.config.BOT_QQ)
 
-        # 用户命令（P2-9 记忆管理：/memory /forget /forget_me；管理员 /memory_clear /memory_dump）
-        if clean_text.strip().startswith("/") and await self._handle_user_command(clean_text.strip(), user_id, group_id):
+        # 用户命令（P2-9 记忆管理：/help /memory /forget /forget_me；管理员 /memory_clear /memory_dump）
+        if clean_text.strip().startswith("/") and await self.commands.handle(clean_text.strip(), user_id, group_id):
             return
 
         # 去重
@@ -185,11 +200,11 @@ class MessageRouter:
         else:
             self.policy_engine.update_user_time(user_id, group_id)
 
-        # 每日 AI 调用预算（P1-5）：全局+每群+每用户限速，超出即拦截（可选在群里提示）
-        allowed, budget_reason = self._ai_budget_available(group_id, user_id)
+        # 每日 AI 调用预算（P1-5：全局+每群+每用户限速，超出即拦截（可选在群里提示））
+        allowed, budget_reason = self.budget.check(group_id, user_id)
         if not allowed:
             if budget_reason in ("global", "group") and self.config.BUDGET_EXHAUSTED_NOTICE:
-                await self._notify_budget_exhausted(group_id)
+                await self.budget.notify_exhausted(group_id)
             logger.warning(f"AI 预算/限速拦截: group={group_id} user={user_id} reason={budget_reason}")
             return
 
@@ -287,133 +302,6 @@ class MessageRouter:
             if self.policy_engine.should_reply_by_context(msg.group_id):
                 return True
             return False
-
-    # ---------- 用户命令：记忆管理（P2-9 用户数据控制权） ----------
-    async def _handle_user_command(self, text: str, user_id: int, group_id: int) -> bool:
-        """处理记忆相关命令，返回 True 表示已处理（不再走正常流程）。"""
-        parts = text.split(maxsplit=1)
-        cmd = parts[0].lower()
-        arg = parts[1].strip() if len(parts) > 1 else ""
-        is_admin = self.config.ADMIN_QQ_IDS and user_id in self.config.ADMIN_QQ_IDS
-
-        if cmd == "/help":
-            lines = [
-                "花璃指令菜单：",
-                "/help 显示本菜单",
-                "/memory 看看我记住了你什么",
-                "/forget 关键词 删掉包含该词的记忆",
-                "/forget_me 清空我对你的全部记忆",
-            ]
-            if is_admin:
-                lines.append("/memory_clear 清空本群所有记忆（管理员）")
-                lines.append("/memory_dump 导出本群记忆（管理员）")
-            lines.append("另外 @花璃 或在群里聊天就有机会被她接话～")
-            await self.sender.send_group_message(group_id, "\n".join(lines))
-            return True
-
-        if cmd == "/memory":
-            notes = self.memory_manager.get_user_notes(user_id, group_id)
-            if not notes:
-                await self.sender.send_group_message(group_id, "关于你的记忆：目前一条都没有哦")
-            else:
-                snippet = "；".join(notes[-10:])[:200]
-                await self.sender.send_group_message(group_id, f"关于你的记忆：{snippet}")
-            return True
-
-        if cmd == "/forget":
-            if not arg:
-                await self.sender.send_group_message(group_id, "用法：/forget 关键词（删除包含该词的记忆）")
-                return True
-            removed = await self.memory_manager.remove_notes_containing(user_id, group_id, arg)
-            if removed:
-                await self.sender.send_group_message(group_id, f"已删除 {removed} 条包含「{arg[:20]}」的记忆")
-            else:
-                await self.sender.send_group_message(group_id, f"没找到包含「{arg[:20]}」的记忆")
-            return True
-
-        if cmd == "/forget_me":
-            removed = await self.memory_manager.clear_user_memory(user_id, group_id)
-            if removed:
-                await self.sender.send_group_message(group_id, f"已清空关于你的 {removed} 条记忆")
-            else:
-                await self.sender.send_group_message(group_id, "你还没有被我记住什么")
-            return True
-
-        # 管理员命令（P3-15）
-        if is_admin and cmd == "/memory_clear":
-            group_cleared = 0
-            for key in list(self.memory_manager.memory.keys()):
-                if key.endswith(f"_{group_id}"):
-                    gid_part = key.rsplit("_", 1)[-1]
-                    if str(gid_part) == str(group_id):
-                        uid_part = key.split("_", 1)[0]
-                        try:
-                            group_cleared += await self.memory_manager.clear_user_memory(int(uid_part), group_id)
-                        except (ValueError, TypeError):
-                            continue
-            await self.sender.send_group_message(group_id, f"已清空本群 {group_cleared} 条记忆")
-            return True
-
-        if is_admin and cmd == "/memory_dump":
-            lines = []
-            for key, mem in self.memory_manager.memory.items():
-                uid_part, gid_part = key.split("_", 1)
-                if str(gid_part) == str(group_id):
-                    notes = self.memory_manager.get_user_notes(int(uid_part), group_id)
-                    if notes:
-                        lines.append(f"用户{uid_part}: " + "；".join(notes[-5:])[:100])
-            dump = "\n".join(lines) if lines else "本群暂无记忆"
-            await self.sender.send_group_message(group_id, dump[:400])
-            return True
-
-        return False
-
-    # ---------- 每日 AI 预算（P1-5：全局 + 每群 + 每用户限速） ----------
-    def _ai_budget_available(self, group_id: int, user_id: int) -> Tuple[bool, str]:
-        """返回 (是否允许, 拒绝原因)。原因: ''(允许) / 'user'(用户限速) / 'global'(全局预算) / 'group'(群预算)。"""
-        from datetime import datetime
-        today = datetime.now().strftime("%Y-%m-%d")
-        if self.global_state.ai_budget_date != today:
-            self.global_state.ai_budget_date = today
-            self.global_state.ai_budget_count = 0
-            self.global_state.group_ai_budget_count.clear()
-            self.global_state.budget_notified_groups.clear()
-
-        # 用户级限速（per-user rate limit，不是预算，不触发提示）
-        if self.config.USER_AI_CALL_MIN_INTERVAL > 0:
-            last = self.global_state.user_ai_last_call.get(user_id, 0.0)
-            if time.time() - last < self.config.USER_AI_CALL_MIN_INTERVAL:
-                return False, "user"
-
-        # 全局预算
-        self.global_state.ai_budget_count += 1
-        if self.config.DAILY_AI_CALL_BUDGET > 0 and self.global_state.ai_budget_count > self.config.DAILY_AI_CALL_BUDGET:
-            return False, "global"
-
-        # 群级预算：防止一个群把全局额度刷光
-        gcount = self.global_state.group_ai_budget_count.get(group_id, 0) + 1
-        self.global_state.group_ai_budget_count[group_id] = gcount
-        if self.config.GROUP_DAILY_AI_CALL_BUDGET > 0 and gcount > self.config.GROUP_DAILY_AI_CALL_BUDGET:
-            return False, "group"
-
-        self.global_state.user_ai_last_call[user_id] = time.time()
-        return True, ""
-
-    async def _notify_budget_exhausted(self, group_id: int) -> None:
-        """额度用尽提示：每天每群最多发一次，避免刷屏。"""
-        from datetime import datetime
-        today = datetime.now().strftime("%Y-%m-%d")
-        if self.global_state.budget_notified_groups.get(group_id) == today:
-            return
-        self.global_state.budget_notified_groups[group_id] = today
-        cap = self.config.GROUP_DAILY_AI_CALL_BUDGET or self.config.DAILY_AI_CALL_BUDGET or 0
-        used = self.global_state.ai_budget_count
-        try:
-            await self.sender.send_group_message(
-                group_id, f"今日AI额度已用尽（已用{used}次/上限{cap}次），明天再来找花璃玩吧～"
-            )
-        except Exception as e:
-            logger.error(f"额度提示发送失败: {e}")
 
     # ---------- 群级记忆隐私开关（P3-13） ----------
     def _memory_disabled(self, group_id: int) -> bool:

@@ -20,9 +20,10 @@ class TestMemoryParser(unittest.TestCase):
         self.assertEqual(uid, 456)
         self.assertEqual(text, "怕黑")
 
-    def test_parse_target_user(self):
+    def test_parse_target_user_security(self):
+        # P1 安全边界：即使模型输出指定 QQ 的记忆指令，target 也恒为当前用户
         uid, text = self.parser.parse_memory_update("【记忆】888: 怕黑", 456)
-        self.assertEqual(uid, 888)
+        self.assertEqual(uid, 456)
         self.assertEqual(text, "怕黑")
 
     def test_parse_plain(self):

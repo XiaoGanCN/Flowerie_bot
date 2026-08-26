@@ -270,13 +270,17 @@ Flowerie_bot/
         ├── poke_manager.py     # 戳戳回复去重
         ├── active_chat_manager.py # 主动聊天决策（cooldown 由门面注入）
         ├── message_assembler.py # 消息组装：文本/识图/转发/卡片/文件/存档
-        ├── message_router.py   # 事件分发与消息处理（流程决策）
+        ├── command_handler.py   # 指令处理：/help /memory /forget /forget_me + 管理员指令
+        ├── budget_manager.py    # AI 预算：全局+每群+每用户限速 + 额度用尽提示
+        ├── sanitizer.py         # 代码层防注入：不可信内容清洗 + 记忆写入校验
+        ├── message_router.py   # 事件分发与消息处理（流程编排，不再是大杂烩）
         └── websocket_server.py # WebSocket 连接管理（单连接守卫 + 优雅停机 + 超时 + 并发）
 tests/
     ├── test_memory_parser.py    # 记忆指令/强制记忆单元测试
     ├── test_memory_manager.py   # 记忆去重（含错别字容忍）单元测试
     ├── test_cooldown_manager.py # 冷却逻辑单元测试
-    └── test_context_manager.py  # 上下文备份/恢复单元测试
+    ├── test_context_manager.py  # 上下文备份/恢复单元测试
+    └── test_sanitizer.py        # 防注入清洗/记忆校验单元测试
 ```
 
 ---
