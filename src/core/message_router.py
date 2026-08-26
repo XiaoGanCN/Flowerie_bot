@@ -204,11 +204,9 @@ class MessageRouter:
         else:
             self.policy_engine.update_user_time(user_id, group_id)
 
-        # 每日 AI 调用预算（统一准入：普通回复/重试/引战/主动聊天共用一道闸门）
-        if not await self._ai_allowed(group_id, user_id):
-            return
-
         # ---------- 调用 AI ----------
+        # 注意：这里不再单独预检查预算——guarded_chat 是唯一准入点，
+        # 避免同一条消息被扣两次预算 / 被自己的用户限速二次拦截
         context_text = self.policy_engine.get_context_text(group_id, max_messages=150)
         user_prompt = full_text if full_text.strip() else (
             f"用户刚刚发了一张图片，图片内容：{'; '.join(image_descriptions)}" if image_descriptions else "用户刚刚@了你，但没有说话。"
@@ -219,7 +217,7 @@ class MessageRouter:
             user_prompt = user_prompt[:max_input] + "\n...(输入过长已截断)"
         if len(context_text) > max_input:
             context_text = context_text[-max_input:] + "\n...(上下文过长已截断)"
-        reply, memory_update, _denied = await self.guarded_chat(
+        reply, memory_update, denied = await self.guarded_chat(
             group_id,
             user_id,
             user_message=user_prompt,
@@ -228,6 +226,10 @@ class MessageRouter:
             group_id=group_id,
             is_mentioned=is_mentioned or is_reply_to_bot,
         )
+        if denied:
+            # 预算/限速拦截：静默跳过（不发送"喵？"兜底）
+            logger.debug(f"AI 调用被预算拦截，跳过消息: group={group_id} user={user_id}")
+            return
 
         # 处理记忆更新（P1 权限边界：target 恒为当前用户；P3 隐私：禁用群不写记忆）
         if memory_update and user_id and not self._memory_disabled(group_id):
@@ -263,24 +265,9 @@ class MessageRouter:
             logger.info(f"Force memory for user {user_id} in group {group_id}: {claim}")
             return
 
-        # 重试兜底（每次重试都是真实 AI 调用，同样过预算闸门）
+        # 兜底：guarded_chat 已内部重试过（每次重试过预算），仍空则给个兜底回复
         if is_mentioned and (not reply or not reply.strip()):
-            for _ in range(3):
-                reply, _retry_mem, denied = await self.guarded_chat(
-                    group_id,
-                    user_id,
-                    user_message=user_prompt,
-                    context=context_text,
-                    user_id=user_id,
-                    group_id=group_id,
-                    is_mentioned=True,
-                )
-                if denied:  # 预算拦截：不再重试
-                    break
-                if reply and reply.strip():
-                    break
-            if not reply or not reply.strip():
-                reply = "喵？"
+            reply = "喵？"
 
         if reply:
             if self.policy_engine.is_duplicate_reply(group_id, reply):
@@ -297,9 +284,12 @@ class MessageRouter:
                 logger.error("Reply send failed")
 
     # ---------- 统一 AI 准入层（所有消耗 AI 的路径都必须走这里，防预算绕过） ----------
-    async def _ai_allowed(self, group_id: int, user_id: int) -> bool:
-        """预算闸门：返回是否允许调用 AI（不允许时按需提示并记录）。"""
-        allowed, reason = self.budget.check(group_id, user_id)
+    async def _ai_allowed(self, group_id: int, user_id: int, user_interval: bool = True) -> bool:
+        """预算闸门：返回是否允许调用 AI（不允许时按需提示并记录）。
+
+        user_interval=False 时跳过用户聊天限速（供引战检测等旁路调用）。
+        """
+        allowed, reason = self.budget.check(group_id, user_id, user_interval=user_interval)
         if not allowed:
             if reason in ("global", "group") and self.config.BUDGET_EXHAUSTED_NOTICE:
                 await self.budget.notify_exhausted(group_id)
@@ -307,20 +297,32 @@ class MessageRouter:
         return allowed
 
     async def guarded_chat(self, group_id: int, user_id: int, **kwargs) -> Tuple[Optional[str], Optional[str], bool]:
-        """统一 AI 对话入口：预算放行才调用 chat()。
+        """统一 AI 对话入口：每一次真实 API 尝试前都过预算。
 
-        返回 (reply, memory_update, denied)。denied=True 表示预算/限速拦截
-        （区别于 chat() 自身的 API 失败返回 None,None）。
-        普通回复 / 回复重试 / 主动聊天 全部走这里，杜绝绕过预算。
+        返回 (reply, memory_update, denied)。denied=True 表示预算/限速拦截。
+        chat_once() 内部不重试；空回复/失败在这里重试（最多3次），
+        每次重试单独过预算——保证 一次预算 = 一次真实 API 尝试。
         """
-        if not await self._ai_allowed(group_id, user_id):
-            return None, None, True
-        reply, memory_update = await self.ai_client.chat(**kwargs)
+        reply, memory_update = None, None
+        for attempt in range(3):
+            # 用户聊天限速只在首次尝试检查（重试是同一逻辑调用的延续，
+            # 若每次都查，会被自己刚更新的 user_ai_last_call 拦掉）
+            if not await self._ai_allowed(group_id, user_id, user_interval=(attempt == 0)):
+                return None, None, True
+            reply, memory_update = await self.ai_client.chat_once(**kwargs)
+            if reply and reply.strip():
+                return reply, memory_update, False
+            # 等待后重试：429 等场景 chat_once 会设置更长退避
+            backoff = getattr(self.ai_client, "_api_backoff", 0) or (1 + random.random())
+            await asyncio.sleep(backoff)
         return reply, memory_update, False
 
     async def guarded_is_toxic(self, group_id: int, user_id: int, text: str) -> bool:
-        """统一引战检测入口：预算放行才调用 is_toxic()；拦截返回 False（放行消息，宁可漏检不烧钱）。"""
-        if not await self._ai_allowed(group_id, user_id):
+        """统一引战检测入口：预算放行才调用 is_toxic()；拦截返回 False（放行消息，宁可漏检不烧钱）。
+
+        user_interval=False：引战检测不占用/触发用户聊天限速（is_toxic 本身是单次调用）。
+        """
+        if not await self._ai_allowed(group_id, user_id, user_interval=False):
             return False
         return await self.ai_client.is_toxic(text)
 

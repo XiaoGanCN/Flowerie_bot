@@ -56,16 +56,20 @@ class AIClient:
         if self.client:
             await self.client.aclose()
 
-    async def chat(
+    async def chat_once(
         self,
         user_message: str,
         context: str,
         user_id: Optional[int] = None,
         group_id: Optional[int] = None,
         is_mentioned: bool = False,
-        retry_count: int = 0,
     ) -> Tuple[Optional[str], Optional[str]]:
-        """返回 (reply_text, memory_update)"""
+        """单次真实 API 尝试，返回 (reply_text, memory_update)。内部不重试。
+
+        重试由上层 AI 准入层（MessageRouter.guarded_chat）负责，且每次重试都重新
+        过预算闸门——保证 一次预算 = 一次真实 API 尝试。
+        """
+        self._api_backoff = 0.0  # 429 时置为更长退避，供准入层重试等待
         if not context or len(context.strip()) < 5:
             context = "（暂无历史聊天记录）"
 
@@ -164,8 +168,6 @@ class AIClient:
         )
         if is_mentioned:
             system_prompt += " 用户明确@了你，请务必回应，但依旧保持简短自然。"
-        if retry_count > 0:
-            system_prompt += " 请直接回复一句话，不要留空。"
 
         payload = {
             "model": self.config.DEEPSEEK_MODEL,
@@ -194,13 +196,9 @@ class AIClient:
             )
             if r.status_code != 200:
                 logger.error(f"DeepSeek API HTTP {r.status_code}: {r.text[:200]}")
-                if retry_count < 2:
-                    # 429 限流用更长的递增退避（5s / 15s / 30s），普通错误短退避
-                    if r.status_code == 429:
-                        await asyncio.sleep(5 + retry_count * 10)
-                    else:
-                        await asyncio.sleep(1 + random.random())
-                    return await self.chat(user_message, context, user_id, group_id, is_mentioned, retry_count+1)
+                # 429 限流：告知准入层用更长退避重试（重试在准入层，每次过预算）
+                if r.status_code == 429:
+                    self._api_backoff = 8.0
                 return None, None
 
             data = r.json()
@@ -209,9 +207,6 @@ class AIClient:
                 content = data["choices"][0]["message"]["content"].strip()
                 if not content:
                     logger.warning("API returned empty content")
-                    if retry_count < 2:
-                        await asyncio.sleep(1 + random.random())
-                        return await self.chat(user_message, context, user_id, group_id, is_mentioned, retry_count+1)
                     return None, None
 
                 # 解析记忆指令：优先 MEMORY_JSON:{"text":"..."}，兼容旧格式 记忆: 内容
@@ -244,23 +239,19 @@ class AIClient:
                 return reply_content, memory_update
             else:
                 logger.error(f"API unexpected response: {data}")
-                if retry_count < 2:
-                    await asyncio.sleep(1 + random.random())
-                    return await self.chat(user_message, context, user_id, group_id, is_mentioned, retry_count+1)
                 return None, None
 
         except (httpx.HTTPError, httpx.TimeoutException, ConnectionError) as e:
             logger.error(f"API network error: {e}")
-            if retry_count < 2:
-                await asyncio.sleep(2 + random.random() * 2)
-                return await self.chat(user_message, context, user_id, group_id, is_mentioned, retry_count+1)
             return None, None
         except Exception as e:
             logger.exception(f"API unknown error: {e}")
-            if retry_count < 2:
-                await asyncio.sleep(1 + random.random())
-                return await self.chat(user_message, context, user_id, group_id, is_mentioned, retry_count+1)
             return None, None
+
+    async def chat(self, user_message: str, context: str, user_id: Optional[int] = None,
+                   group_id: Optional[int] = None, is_mentioned: bool = False, retry_count: int = 0):
+        """兼容入口：单次尝试（重试请走 MessageRouter.guarded_chat 准入层，每次重试过预算）。"""
+        return await self.chat_once(user_message, context, user_id, group_id, is_mentioned)
 
     # ---------- AI 引战检测 ----------
     async def is_toxic(self, text: str) -> bool:

@@ -22,8 +22,12 @@ class BudgetManager:
         self.global_state = global_state
         self.sender = sender
 
-    def check(self, group_id: int, user_id: int) -> Tuple[bool, str]:
-        """返回 (是否允许, 拒绝原因)。原因: ''(允许) / 'user'(用户限速) / 'global'(全局预算) / 'group'(群预算)。"""
+    def check(self, group_id: int, user_id: int, user_interval: bool = True) -> Tuple[bool, str]:
+        """返回 (是否允许, 拒绝原因)。原因: ''(允许) / 'user'(用户限速) / 'global'(全局预算) / 'group'(群预算)。
+
+        user_interval=False：不检查也不更新用户聊天限速（用于引战检测等旁路调用，
+        避免"先 toxic 后 chat"把同一条消息自己的限速触发掉）。
+        """
         today = datetime.now().strftime("%Y-%m-%d")
         if self.global_state.ai_budget_date != today:
             # 跨天重置
@@ -32,8 +36,8 @@ class BudgetManager:
             self.global_state.group_ai_budget_count.clear()
             self.global_state.budget_notified_groups.clear()
 
-        # 用户级限速（per-user rate limit，不是预算，不触发提示）
-        if self.config.USER_AI_CALL_MIN_INTERVAL > 0:
+        # 用户级限速（per-user rate limit，只对聊天主路径生效）
+        if user_interval and self.config.USER_AI_CALL_MIN_INTERVAL > 0:
             last = self.global_state.user_ai_last_call.get(user_id, 0.0)
             if time.time() - last < self.config.USER_AI_CALL_MIN_INTERVAL:
                 return False, "user"
@@ -49,7 +53,8 @@ class BudgetManager:
         if self.config.GROUP_DAILY_AI_CALL_BUDGET > 0 and gcount > self.config.GROUP_DAILY_AI_CALL_BUDGET:
             return False, "group"
 
-        self.global_state.user_ai_last_call[user_id] = time.time()
+        if user_interval:
+            self.global_state.user_ai_last_call[user_id] = time.time()
         return True, ""
 
     async def notify_exhausted(self, group_id: int) -> None:
