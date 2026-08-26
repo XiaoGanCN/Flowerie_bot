@@ -190,6 +190,7 @@ python main.py
 | `VISION_MODEL` | 识图视觉模型 | `deepseek-v4-flash-vision-exp` |
 | `VISION_API_URL` / `VISION_API_KEY` | 视觉模型网址/密钥（留空回退用 DeepSeek） | — |
 | `VISION_TIMEOUT` | 识图超时（秒） | `30` |
+| `VISION_FORWARD_IMAGES` | 是否识别合并转发（聊天记录）里的图片（false 省视觉 token） | `false` |
 | `MEMORY_PATH` | 记忆库路径 | `./data/memory.json` |
 | `ARCHIVE_BASE_DIR` | 消息存档路径 | `./data/archive` |
 
