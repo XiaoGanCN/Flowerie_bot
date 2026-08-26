@@ -9,46 +9,94 @@ from src.core.message_router import MessageRouter
 
 
 class WebSocketServer:
+    """NapCat 反向 WebSocket 服务。
+
+    业务场景是单连接（花璃只对接一个 NapCat 实例），因此：
+    - 已有连接时拒绝新连接（1008），避免 self.ws 被覆盖导致状态错乱
+    - shutdown() 提供优雅停机：停重连、关连接、释放任务
+    - 重连采用逐档递增退避（5→10→20→40→60 封顶，倍增接近指数）
+    """
+
     def __init__(self, config: Settings, message_router: MessageRouter):
         self.config = config
         self.message_router = message_router
         self.ws: Optional[websockets.WebSocketServerProtocol] = None
         self._running = True
         self._server_task: Optional[asyncio.Task] = None
+        self._server: Optional[websockets.Server] = None
 
     async def run(self):
-        """启动 WebSocket 服务器（带自动重连和指数退避）"""
+        """启动 WebSocket 服务器（带自动重连与逐档递增退避）。"""
         while self._running:
             try:
                 logger.info(f"Starting WebSocket server on {self.config.WS_HOST}:{self.config.WS_PORT}")
-                async with websockets.serve(
+                self._server = await websockets.serve(
                     self._handler,
                     self.config.WS_HOST,
                     self.config.WS_PORT,
                     ping_interval=30,
                     ping_timeout=20,
                     close_timeout=10,
-                ):
-                    logger.info("WebSocket server started, waiting for connections...")
-                    # 保持运行直到被取消
-                    await asyncio.Event().wait()
+                )
+                logger.info("WebSocket server started, waiting for connections...")
+                self._server_task = asyncio.current_task()
+                # 保持运行：被 shutdown() 置 _running=False 或任务被取消时退出
+                while self._running:
+                    await asyncio.sleep(1)
             except asyncio.CancelledError:
                 logger.info("WebSocket server task cancelled")
                 break
             except Exception as e:
                 logger.exception(f"WebSocket server error: {e}")
-                # ✅ 修复：完整实现指数退避，逐档递增等待
+                await self._close_server()
+                # 逐档递增退避（倍增封顶，接近指数退避）：5→10→20→40→60 秒
                 for delay in [5, 10, 20, 40, 60]:
                     if not self._running:
                         break
                     logger.info(f"Reconnecting in {delay}s...")
                     await asyncio.sleep(delay)
-                    # 等待期间如果收到停止信号，立即退出重连循环
                     if not self._running:
                         break
-                # 所有 delay 档位尝试完后，外层 while 循环会重新进入
+        await self._close_server()
+
+    async def shutdown(self) -> None:
+        """优雅停机：停止重连循环、关闭当前 NapCat 连接并释放服务。"""
+        self._running = False
+        if self.ws is not None:
+            try:
+                await self.ws.close(code=1000, reason="shutdown")
+                await self.ws.wait_closed()
+            except Exception as e:
+                logger.debug(f"关闭连接异常: {e}")
+            self.ws = None
+            self.message_router.global_state.ws_connected = False
+        if self._server_task is not None and self._server_task is not asyncio.current_task():
+            self._server_task.cancel()
+            try:
+                await self._server_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        await self._close_server()
+        logger.info("WebSocket server 已优雅关闭")
+
+    async def _close_server(self) -> None:
+        if self._server is not None:
+            try:
+                self._server.close()
+                await self._server.wait_closed()
+            except Exception as e:
+                logger.debug(f"关闭 server 异常: {e}")
+            self._server = None
 
     async def _handler(self, ws: websockets.WebSocketServerProtocol):
+        # 单连接守卫：已有连接时拒绝新的 NapCat 连接，防止 self.ws 被覆盖
+        if self.ws is not None:
+            logger.warning("仅允许单连接，拒绝新的 NapCat 连接")
+            try:
+                await ws.close(code=1008, reason="仅允许单连接")
+            except Exception:
+                pass
+            return
         logger.info("NapCat WebSocket connected")
         self.ws = ws
         self.message_router.global_state.ws_connected = True
@@ -77,5 +125,7 @@ class WebSocketServer:
         except websockets.ConnectionClosed:
             logger.warning("NapCat WebSocket disconnected")
         finally:
-            self.ws = None
-            self.message_router.global_state.ws_connected = False
+            # 只有当前连接自己断开才清状态（避免把新连接的状态误清）
+            if self.ws is ws:
+                self.ws = None
+                self.message_router.global_state.ws_connected = False

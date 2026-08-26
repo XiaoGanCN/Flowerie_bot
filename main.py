@@ -46,8 +46,9 @@ async def main():
         try:
             await ws_server.run()
         finally:
-            # 优雅退出前：停掉后台循环并保存最近上下文（配合周期备份，意外去世后重启自动恢复）
+            # 优雅退出前：停掉后台循环、保存最近上下文、关闭 WS 服务
             await message_router.stop()
+            await ws_server.shutdown()
 
 
 if __name__ == "__main__":
