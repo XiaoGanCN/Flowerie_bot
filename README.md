@@ -191,6 +191,10 @@ python main.py
 | `VISION_API_URL` / `VISION_API_KEY` | 视觉模型网址/密钥（留空回退用 DeepSeek） | — |
 | `VISION_TIMEOUT` | 识图超时（秒） | `30` |
 | `VISION_FORWARD_IMAGES` | 是否识别合并转发（聊天记录）里的图片（false 省视觉 token） | `false` |
+| `EVENT_PROCESS_TIMEOUT` | 单条消息处理超时（秒），防一条慢消息堵住全群 | `90` |
+| `MAX_CONCURRENT_AI` | 同时处理消息的并发上限（AI/识图额度） | `3` |
+| `CONTEXT_BACKUP_PATH` | 上下文崩溃备份路径（意外去世后重启自动恢复最近 50 条） | `./data/context_backup.json` |
+| `CONTEXT_BACKUP_INTERVAL` | 上下文备份间隔（秒） | `60` |
 | `MEMORY_PATH` | 记忆库路径 | `./data/memory.json` |
 | `ARCHIVE_BASE_DIR` | 消息存档路径 | `./data/archive` |
 
@@ -211,7 +215,8 @@ Flowerie_bot/
 ├── requirements.txt      # Python 依赖
 ├── README.md             # 项目文档
 ├── main.py               # 程序入口
-├── data/                 # 运行时数据（记忆库、存档）
+├── run.sh                # 守护脚本（崩溃自动重启）
+├── data/                 # 运行时数据（记忆库、存档、上下文备份）
 ├── logs/                 # 日志文件
 └── src/
     ├── __init__.py
@@ -220,14 +225,20 @@ Flowerie_bot/
     ├── utils/
     │   └── logger.py     # loguru 日志配置
     ├── services/
-    │   ├── ai_client.py      # DeepSeek API 封装
-    │   ├── memory_manager.py # 记忆库 CRUD
-    │   ├── file_parser.py    # 文件/转发/卡片解析
-    │   └── sender.py         # HTTP 消息发送
+    │   ├── ai_client.py      # DeepSeek API + 视觉识图封装
+    │   ├── memory_manager.py # 记忆库 CRUD（原子写入 + 相似度去重）
+    │   ├── file_parser.py    # 文件/转发/卡片解析（转发内图片 url 提取）
+    │   └── sender.py         # HTTP 消息发送（带重试）
     └── core/
-        ├── policy_engine.py    # 冷却/复读/概率/引战策略
+        ├── policy_engine.py    # 策略门面（聚合各职责管理器，对外 API 不变）
+        ├── context_manager.py  # 上下文读写 / 接话概率 / 重复回复 / 崩溃备份
+        ├── cooldown_manager.py # 用户与机器人冷却 / 连续回复惩罚
+        ├── repeat_detector.py  # 复读检测
+        ├── memory_parser.py    # 记忆指令解析 / 强制记忆触发
+        ├── poke_manager.py     # 戳戳回复去重
+        ├── active_chat_manager.py # 主动聊天决策
         ├── message_router.py   # 事件分发与消息处理
-        └── websocket_server.py # WebSocket 连接管理（带自动重连）
+        └── websocket_server.py # WebSocket 连接管理（自动重连 + 超时 + 并发限制）
 ```
 
 ---

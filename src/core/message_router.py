@@ -31,12 +31,18 @@ class MessageRouter:
         self.policy_engine = policy_engine
         self.global_state = self.policy_engine.global_state
         self._active_chat_task: Optional[asyncio.Task] = None
+        self._context_backup_task: Optional[asyncio.Task] = None
+        # 并发上限：同时处理的消息数（WS 层用它限制 AI/识图并发，防止突发消息打爆 API）
+        self.process_semaphore = asyncio.Semaphore(max(1, config.MAX_CONCURRENT_AI))
 
     async def start(self):
-        """启动主动聊天循环（若配置允许）"""
+        """启动主动聊天循环（若配置允许）与上下文备份循环"""
         if not self.config.ONLY_REPLY_WHEN_AT:
             self._active_chat_task = asyncio.create_task(self._active_chat_loop())
             logger.info("Active chat loop started")
+        # 周期备份上下文（意外去世后重启可恢复最近 50 条）
+        self._context_backup_task = asyncio.create_task(self._context_backup_loop())
+        logger.info(f"Context backup loop started (every {self.config.CONTEXT_BACKUP_INTERVAL}s)")
 
     async def stop(self):
         if self._active_chat_task:
@@ -45,6 +51,26 @@ class MessageRouter:
                 await self._active_chat_task
             except asyncio.CancelledError:
                 pass
+        if self._context_backup_task:
+            self._context_backup_task.cancel()
+            try:
+                await self._context_backup_task
+            except asyncio.CancelledError:
+                pass
+        # 停前最后保存一次上下文
+        await self.policy_engine.save_context_backup()
+
+    async def _context_backup_loop(self):
+        """周期性保存每群最近 50 条上下文。"""
+        interval = max(10, self.config.CONTEXT_BACKUP_INTERVAL)
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                await self.policy_engine.save_context_backup()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Context backup loop error: {e}")
 
     async def process_event(self, data: Dict[str, Any]) -> None:
         post_type = data.get("post_type")

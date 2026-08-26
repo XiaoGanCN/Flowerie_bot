@@ -338,22 +338,26 @@ class AIClient:
         api_key = self.config.VISION_API_KEY or self.config.DEEPSEEK_API_KEY
         timeout = self.config.VISION_TIMEOUT or 30
 
-        # 1) 获取图片字节（支持 http(s) url 与 data: URI）
+        # 1) 获取图片字节（支持 http(s) url 与 data: URI），下载失败重试 1 次
+        image_bytes = b""
         try:
             if image_url.startswith("data:"):
                 b64_part = image_url.split(",", 1)[1] if "," in image_url else ""
                 image_bytes = base64.b64decode(b64_part) if b64_part else b""
-                if not image_bytes:
-                    return None
             else:
-                resp = await self.client.get(image_url, timeout=timeout)
-                if resp.status_code != 200:
-                    logger.error(f"Image fetch failed HTTP {resp.status_code}: {image_url[:80]}")
-                    return None
-                image_bytes = resp.content
+                for attempt in range(2):
+                    try:
+                        resp = await self.client.get(image_url, timeout=timeout)
+                        if resp.status_code == 200:
+                            image_bytes = resp.content
+                            break
+                        logger.error(f"Image fetch failed HTTP {resp.status_code} (attempt {attempt + 1}): {image_url[:80]}")
+                    except Exception as e:
+                        logger.error(f"Image fetch error (attempt {attempt + 1}): {e}")
+                    if attempt == 0:
+                        await asyncio.sleep(2)
         except Exception as e:
             logger.error(f"Image fetch error: {e}")
-            return None
 
         if not image_bytes:
             return None

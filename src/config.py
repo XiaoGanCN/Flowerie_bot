@@ -22,6 +22,15 @@ class Settings(BaseSettings):
 
     # 是否识别合并转发（聊天记录）里的图片（默认关闭，可省视觉 token；想开在 .env 里设 true）
     VISION_FORWARD_IMAGES: bool = False
+
+    # 稳定性
+    # 单条消息处理超时（秒）：超过视为卡死跳过，防止一条慢消息堵住整个群
+    EVENT_PROCESS_TIMEOUT: int = 90
+    # 同时处理消息的并发上限（AI/识图都会吃这个额度，防止突发消息打爆 API）
+    MAX_CONCURRENT_AI: int = 3
+    # 上下文崩溃持久化：周期备份最近 50 条上下文，意外去世后重启自动恢复
+    CONTEXT_BACKUP_PATH: str = "./data/context_backup.json"
+    CONTEXT_BACKUP_INTERVAL: int = 60
     
     # Bot
     BOT_QQ: int = Field(..., env="BOT_QQ")

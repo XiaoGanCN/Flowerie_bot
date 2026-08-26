@@ -43,7 +43,11 @@ async def main():
         await message_router.start()
 
         # 启动 WebSocket 服务（会自动阻塞直到中断）
-        await ws_server.run()
+        try:
+            await ws_server.run()
+        finally:
+            # 优雅退出前：停掉后台循环并保存最近上下文（配合周期备份，意外去世后重启自动恢复）
+            await message_router.stop()
 
 
 if __name__ == "__main__":

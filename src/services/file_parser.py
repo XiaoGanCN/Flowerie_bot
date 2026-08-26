@@ -31,6 +31,13 @@ class FileParser:
     def __init__(self, config: Settings):
         self.config = config
         self.file_cache: Dict[str, Tuple[str, float]] = {}  # url -> (content, timestamp)
+        self._client: Optional[httpx.AsyncClient] = None  # 复用的 HTTP 客户端（懒创建）
+
+    def _get_client(self, timeout: float = 30) -> httpx.AsyncClient:
+        """复用一个 AsyncClient，避免每次请求都新建连接（省连接开销）"""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=timeout)
+        return self._client
 
     # ========== 新增：通过 NapCat HTTP API 获取并解析文件 ==========
     async def fetch_and_parse_file(self, file_id: str, file_name: str) -> Tuple[str, bool]:
@@ -42,17 +49,17 @@ class FileParser:
             return "", False
 
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(
-                    f"{self.config.HTTP_API_BASE}/get_file",
-                    params={"file_id": file_id},
-                )
-                if resp.status_code != 200:
-                    logger.error(f"Fetch file {file_id} failed: HTTP {resp.status_code}")
-                    return "", False
+            client = self._get_client(timeout=30)
+            resp = await client.get(
+                f"{self.config.HTTP_API_BASE}/get_file",
+                params={"file_id": file_id},
+            )
+            if resp.status_code != 200:
+                logger.error(f"Fetch file {file_id} failed: HTTP {resp.status_code}")
+                return "", False
 
-                # 调用已有的解码方法
-                return self.decode_napcat_file_response(resp.text, file_name)
+            # 调用已有的解码方法
+            return self.decode_napcat_file_response(resp.text, file_name)
 
         except httpx.TimeoutException:
             logger.error(f"Fetch file {file_id} timeout")
@@ -202,15 +209,15 @@ class FileParser:
                     forward_id = forward_data.get("id")
                     if forward_id:
                         try:
-                            async with httpx.AsyncClient(timeout=10) as client:
-                                resp = await client.get(
-                                    f"{self.config.HTTP_API_BASE}/get_forward_msg",
-                                    params={"message_id": forward_id}
-                                )
-                                if resp.status_code == 200:
-                                    result = resp.json()
-                                    if result.get("retcode") == 0:
-                                        messages = result.get("data", {}).get("messages")
+                            client = self._get_client(timeout=10)
+                            resp = await client.get(
+                                f"{self.config.HTTP_API_BASE}/get_forward_msg",
+                                params={"message_id": forward_id}
+                            )
+                            if resp.status_code == 200:
+                                result = resp.json()
+                                if result.get("retcode") == 0:
+                                    messages = result.get("data", {}).get("messages")
                         except Exception as e:
                             logger.error(f"Get forward msg error: {e}")
                             continue

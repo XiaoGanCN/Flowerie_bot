@@ -62,7 +62,14 @@ class WebSocketServer:
                         data = json.loads(message)
                     else:
                         data = message
-                    await self.message_router.process_event(data)
+                    # 并发上限 + 单条超时：防止一条慢消息卡死整个群 / 突发消息打爆 API
+                    async with self.message_router.process_semaphore:
+                        await asyncio.wait_for(
+                            self.message_router.process_event(data),
+                            timeout=self.config.EVENT_PROCESS_TIMEOUT,
+                        )
+                except asyncio.TimeoutError:
+                    logger.error(f"Event processing timeout (>={self.config.EVENT_PROCESS_TIMEOUT}s), skipped: {str(message)[:100]}")
                 except json.JSONDecodeError as e:
                     logger.error(f"JSON decode error: {e}")
                 except Exception as e:

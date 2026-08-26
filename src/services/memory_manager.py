@@ -34,8 +34,11 @@ class MemoryManager:
         if dirname and not os.path.exists(dirname):
             os.makedirs(dirname, exist_ok=True)
         try:
-            with open(self.memory_path, 'w', encoding='utf-8') as f:
+            # 原子写入：先写 tmp 再 os.replace，防止写一半断电/被杀导致整个 JSON 损坏、记忆全丢
+            tmp_path = self.memory_path + ".tmp"
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(self.memory, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, self.memory_path)
         except Exception as e:
             logger.error(f"保存记忆库失败: {e}")
 

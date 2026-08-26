@@ -1,3 +1,4 @@
+import asyncio
 import aiohttp
 from loguru import logger
 from src.config import Settings
@@ -19,7 +20,7 @@ class Sender:
         if self.session:
             await self.session.close()
 
-    async def send_group_message(self, group_id: int, message: str) -> bool:
+    async def send_group_message(self, group_id: int, message: str, retries: int = 2) -> bool:
         if not message:
             return False
         if len(message) > self.config.MAX_REPLY_LENGTH:
@@ -27,22 +28,25 @@ class Sender:
         url = f"{self.config.HTTP_API_BASE}/send_group_msg"
         payload = {"group_id": group_id, "message": message}
         logger.info(f"Send to group {group_id}: {message[:30]}...")
-        try:
-            async with self.session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    logger.error(f"Send failed HTTP {resp.status}: {text}")
-                    return False
-                data = await resp.json()
-                if data.get("retcode") == 0:
-                    logger.info("Send success")
-                    return True
-                else:
-                    logger.error(f"Send failed retcode {data.get('retcode')}: {data}")
-                    return False
-        except Exception as e:
-            logger.error(f"Send exception: {e}")
-            return False
+        for attempt in range(max(1, retries + 1)):
+            try:
+                async with self.session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        logger.error(f"Send failed HTTP {resp.status}: {text}")
+                    else:
+                        data = await resp.json()
+                        if data.get("retcode") == 0:
+                            logger.info("Send success")
+                            return True
+                        else:
+                            logger.error(f"Send failed retcode {data.get('retcode')}: {data}")
+            except Exception as e:
+                logger.error(f"Send exception (attempt {attempt + 1}): {e}")
+            if attempt < retries:
+                logger.info(f"Send retry in 2s... ({attempt + 1}/{retries})")
+                await asyncio.sleep(2)
+        return False
 
     async def send_private_message(self, user_id: int, message: str) -> bool:
         if not message:
