@@ -211,9 +211,9 @@ bash run.sh
 | `MAX_AI_INPUT_CHARS` | 单次 AI 输入最大字符数 | `8000` |
 | `MAX_IMAGES_PER_MESSAGE` | 单条消息最多识图张数 | `10` |
 | `MAX_FORWARD_DEPTH` | 嵌套转发最大展开深度 | `5` |
-| `DAILY_AI_CALL_BUDGET` | 全局每日 AI 调用上限（0=不限） | `0` |
-| `GROUP_DAILY_AI_CALL_BUDGET` | 每群每日 AI 调用上限（0=不限） | `0` |
-| `USER_AI_CALL_MIN_INTERVAL` | 同一用户两次 AI 回复最小间隔（秒，0=不限） | `0` |
+| `DAILY_AI_CALL_BUDGET` | 全局每日 AI 调用上限（0=不限） | `1000` |
+| `GROUP_DAILY_AI_CALL_BUDGET` | 每群每日 AI 调用上限（0=不限） | `300` |
+| `USER_AI_CALL_MIN_INTERVAL` | 同一用户两次 AI 回复最小间隔（秒，0=不限） | `10` |
 | `BUDGET_EXHAUSTED_NOTICE` | 额度用尽时群里提示（每天每群一次） | `true` |
 | `IMAGE_ALLOWED_HOSTS` | 图片主机白名单（空=放行所有 http/https） | — |
 | `MEMORY_DISABLED_GROUPS` | 禁用记忆的群（逗号分隔） | — |

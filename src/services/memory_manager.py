@@ -175,6 +175,36 @@ class MemoryManager:
     def _note_text(self, note: Any) -> str:
         return note.get("text", "") if isinstance(note, dict) else (note or "")
 
+    # ---------- 记忆矛盾检测（治 misinformation） ----------
+    _NEGATION_WORDS = ("不", "没", "讨厌", "退游", "弃坑", "戒了", "不再", "卸载", "退", "弃", "戒")
+    _POSITIVE_WORDS = ("喜欢", "爱", "玩", "打", "吃", "喝", "穿", "戴", "看", "听", "用", "做")
+
+    @classmethod
+    def _core_words(cls, s: str) -> str:
+        """去掉正反倾向词后的核心词（用于比较两条记忆是否在讲同一件事）。"""
+        for w in cls._NEGATION_WORDS + cls._POSITIVE_WORDS:
+            s = s.replace(w, "")
+        s = re.sub(r"[\s，。！？、,.!?;；:：]+", "", s)
+        # 去掉时态词与语气词（现在/最近/以前/了/呢 等），只留核心名词短语
+        for w in ("现在", "最近", "以前", "之前", "当初", "了", "呢", "吧", "啊", "哦", "呀"):
+            s = s.replace(w, "")
+        return s
+
+    @classmethod
+    def _is_contradiction(cls, a: str, b: str) -> bool:
+        """a 与 b 是否构成"肯定↔否定"矛盾：一方含否定词、另一方不含，且核心词重叠 ≥0.6。"""
+        if not a or not b:
+            return False
+        a_neg = any(w in a for w in cls._NEGATION_WORDS)
+        b_neg = any(w in b for w in cls._NEGATION_WORDS)
+        if a_neg == b_neg:
+            return False  # 同为肯定或同为否定 → 交给去重逻辑，不算矛盾
+        core_a, core_b = cls._core_words(a), cls._core_words(b)
+        if not core_a or not core_b:
+            return False
+        from difflib import SequenceMatcher
+        return SequenceMatcher(None, core_a, core_b).ratio() >= 0.6
+
     async def append_memory_text(
         self,
         user_id: int,
@@ -200,6 +230,18 @@ class MemoryManager:
         if 'notes' not in self.memory[key]:
             self.memory[key]['notes'] = []
         notes = self.memory[key]['notes']
+
+        # 矛盾替换（治 misinformation）：新记忆是否定/退出、旧记忆是肯定/进行，且核心词重叠 → 旧被新顶掉。
+        # 例如「喜欢打三角洲」→「退游了 不打三角洲了」：只留新的，不让过时信息继续污染画像。
+        replaced_old = None
+        for i, existing in enumerate(notes):
+            if self._is_contradiction(self._note_text(existing), text):
+                replaced_old = self._note_text(existing)
+                notes.pop(i)
+                break
+        if replaced_old is not None:
+            logger.info(f"记忆矛盾替换: 旧=[{replaced_old}] 新=[{text}]")
+            self._audit("REPLACE", user_id, group_id, f"旧={replaced_old} 新={text}")
 
         # 高相似度去重：完全相同、互为子串、相似度 >= 0.85、
         # 或较短一条的字符集 ≥80% 被较长一条包含（可容忍错别字）的旧记忆不再重复记录

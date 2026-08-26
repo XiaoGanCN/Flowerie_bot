@@ -2,6 +2,31 @@ import re
 from typing import Optional, Tuple
 
 
+def check_image_url(url: str, allowed_hosts: Optional[list] = None) -> Tuple[bool, str]:
+    """校验图片下载 URL（SSRF 防线第一道闸，纯函数便于测试）。
+
+    规则：
+    - 空 URL 拒绝
+    - 仅允许 http/https 与 data: URI（file:// ftp:// javascript: 等一律拒绝）
+    - 设置 IMAGE_ALLOWED_HOSTS 时：只放行白名单主机 + loopback
+      （NapCat 本地图片就是 127.0.0.1，loopback 必须放行——这是已知的信任边界）
+    返回 (是否允许, 拒绝原因)。原因 '' 表示允许。
+    """
+    if not url:
+        return False, "empty"
+    if url.startswith("data:"):
+        return True, ""
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        return False, f"scheme_rejected:{url[:24]}"
+    if allowed_hosts:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+        loopback = host in ("127.0.0.1", "localhost", "::1")
+        if not loopback and host not in allowed_hosts:
+            return False, f"host_rejected:{host}"
+    return True, ""
+
+
 # 已知注入/系统覆盖句式（大小写不敏感）。命中即替换为占位符，打断注入，保留上下文可读性。
 _INJECTION_PATTERNS = [
     r"忽略\s*(以上|上述|之前|之前所有|所有|全部)?\s*(规则|指令|要求|提示|内容|一切)?",

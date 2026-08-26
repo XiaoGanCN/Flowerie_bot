@@ -9,6 +9,7 @@ from loguru import logger
 
 from src.config import Settings
 from src.services.memory_manager import MemoryManager
+from src.core.sanitizer import check_image_url
 
 
 def _looks_like_image(data: bytes) -> bool:
@@ -398,19 +399,11 @@ class AIClient:
                 b64_part = image_url.split(",", 1)[1] if "," in image_url else ""
                 image_bytes = base64.b64decode(b64_part) if b64_part else b""
             else:
-                if not re.match(r"^https?://", image_url):
-                    logger.error(f"Image url scheme rejected (only http/https): {image_url[:80]}")
+                # SSRF 第一道闸（scheme 白名单 + 可选主机白名单，loopback 放行）——纯函数便于测试
+                ok, reason = check_image_url(image_url, getattr(self.config, "IMAGE_ALLOWED_HOSTS", None))
+                if not ok:
+                    logger.error(f"Image url rejected ({reason}): {image_url[:80]}")
                     return None
-                # 可选主机白名单（IMAGE_ALLOWED_HOSTS）：设置了才生效；
-                # 永远放行 NapCat 本地 loopback（127.0.0.1/localhost），其余只允许白名单主机。
-                allowed_hosts = getattr(self.config, "IMAGE_ALLOWED_HOSTS", None)
-                if allowed_hosts:
-                    from urllib.parse import urlparse
-                    host = (urlparse(image_url).hostname or "").lower()
-                    loopback = host in ("127.0.0.1", "localhost", "::1")
-                    if not loopback and host not in allowed_hosts:
-                        logger.error(f"Image host not in allowlist, rejected: {host}")
-                        return None
                 for attempt in range(2):
                     try:
                         resp = await self.client.get(

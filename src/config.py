@@ -99,9 +99,10 @@ class Settings(BaseSettings):
     MAX_AI_INPUT_CHARS: int = 8000         # 单次 AI 输入（上下文+消息）最大字符数
     MAX_IMAGES_PER_MESSAGE: int = 10       # 单条消息最多识图张数（防图片轰炸）
     MAX_FORWARD_DEPTH: int = 5             # 嵌套转发最大展开深度
-    DAILY_AI_CALL_BUDGET: int = 0          # 全局每日 AI 调用次数上限（0=不限；>0 时超出即闭嘴）
-    GROUP_DAILY_AI_CALL_BUDGET: int = 0    # 每群每日 AI 调用次数上限（0=不限；防止一个群刷光全局额度）
-    USER_AI_CALL_MIN_INTERVAL: int = 0     # 同一用户两次 AI 回复的最小间隔秒数（0=不限；per-user 限速）
+    # 预算默认收紧（安全默认而非 0=不限）：个人 Bot 用量远低于此，公开群也不会被无限刷
+    DAILY_AI_CALL_BUDGET: int = 1000       # 全局每日 AI 调用次数上限（0=不限；>0 时超出即闭嘴）
+    GROUP_DAILY_AI_CALL_BUDGET: int = 300  # 每群每日 AI 调用次数上限（0=不限；防止一个群刷光全局额度）
+    USER_AI_CALL_MIN_INTERVAL: int = 10    # 同一用户两次 AI 回复的最小间隔秒数（0=不限；per-user 限速）
     BUDGET_EXHAUSTED_NOTICE: bool = True   # 额度用尽时在群里说一句提示（每天每群一次）
     MAX_IMAGE_DOWNLOAD_BYTES: int = 10485760  # 单张图片下载大小上限（10MB）
     IMAGE_DOWNLOAD_MAX_REDIRECTS: int = 3  # 图片下载最大重定向次数
