@@ -59,16 +59,36 @@ class FileParser:
 
         try:
             client = self._get_client(timeout=30)
-            resp = await client.get(
+            # 流式读取 + 字节兜底上限：/get_file 返回的是 base64 文本（≈原始字节 × 4/3），
+            # 超上限立刻中止，防止 NapCat 返回超大内容时整包载入内存
+            max_bytes = int(getattr(self.config, "MAX_FILE_DOWNLOAD_BYTES", 2 * 1024 * 1024))
+            cap = max_bytes * 2 + 4096  # base64 上限 + 余量
+            body = b""
+            rejected = False
+            async with client.stream(
+                "GET",
                 f"{self.config.HTTP_API_BASE}/get_file",
                 params={"file_id": file_id},
-            )
-            if resp.status_code != 200:
-                logger.error(f"Fetch file {file_id} failed: HTTP {resp.status_code}")
+            ) as resp:
+                if resp.status_code != 200:
+                    logger.error(f"Fetch file {file_id} failed: HTTP {resp.status_code}")
+                    return "", False
+                cl = resp.headers.get("content-length")
+                if cl and cl.isdigit() and int(cl) > cap:
+                    rejected = True
+                else:
+                    async for chunk in resp.aiter_bytes():
+                        body += chunk
+                        if len(body) > cap:
+                            rejected = True
+                            body = b""
+                            break
+            if rejected:
+                logger.error(f"Fetch file {file_id} response exceeds limit ({cap} bytes), aborted")
                 return "", False
 
             # 调用已有的解码方法
-            return self.decode_napcat_file_response(resp.text, file_name)
+            return self.decode_napcat_file_response(body.decode("utf-8", errors="ignore"), file_name)
 
         except httpx.TimeoutException:
             logger.error(f"Fetch file {file_id} timeout")
@@ -104,10 +124,10 @@ class FileParser:
                 for enc in ['utf-8', 'gbk']:
                     try:
                         extracted_text = content_bytes.decode(enc)
-                        return extracted_text, True
+                        return self._cap(extracted_text), True
                     except UnicodeDecodeError:
                         continue
-                return content_bytes.decode('utf-8', errors='ignore'), True
+                return self._cap(content_bytes.decode('utf-8', errors='ignore')), True
 
             elif ext == 'pdf':
                 if PyPDF2 is None:
@@ -183,7 +203,9 @@ class FileParser:
                 except:
                     return "", False
         except json.JSONDecodeError:
-            return response_text, True
+            # 非 JSON 响应（如 NapCat 返回错误页）一律视为失败，绝不把原始响应当文件内容
+            logger.error("NapCat get_file 响应不是合法 JSON，已拒绝")
+            return "", False
         except Exception as e:
             logger.error(f"File decode error: {e}")
             return "", False
@@ -292,6 +314,10 @@ class FileParser:
         state = {"nodes": 0, "messages": 0, "fetches": 0}
         seen_forwards: Dict[str, List[Dict]] = {}
 
+        if not isinstance(message_array, list):
+            logger.warning("message_array 不是列表，跳过转发解析")
+            return "", [], False
+
         for msg in message_array:
             if msg.get("type") == "forward":
                 forward_data = msg.get("data", {})
@@ -312,15 +338,22 @@ class FileParser:
     # ========== 提取 JSON 卡片内容 ==========
     def extract_json_card_content(self, message_array: List[Dict]) -> Tuple[str, bool]:
         """递归提取 JSON 卡片中的所有文本"""
-        def collect_strings(obj, collected: set):
+        if not isinstance(message_array, list):
+            return "", False
+
+        _MAX_CARD_DEPTH = 20  # 防恶意深层嵌套卡片导致递归过深
+
+        def collect_strings(obj, collected: set, depth: int = 0):
+            if depth > _MAX_CARD_DEPTH:
+                return
             if isinstance(obj, dict):
                 for key, value in obj.items():
                     if key in ['url', 'jumpUrl', 'preview', 'icon', 'appid', 'uin', 'scene', 'token', 'ctime', 'width', 'height', 'forward', 'autoSize']:
                         continue
-                    collect_strings(value, collected)
+                    collect_strings(value, collected, depth + 1)
             elif isinstance(obj, list):
                 for item in obj:
-                    collect_strings(item, collected)
+                    collect_strings(item, collected, depth + 1)
             elif isinstance(obj, str):
                 if len(obj.strip()) > 1 and not obj.strip().isdigit():
                     collected.add(obj.strip())
@@ -352,6 +385,8 @@ class FileParser:
     # ========== 提取 @ 和纯文本 ==========
     def extract_mention_and_text(self, message_array: List[Dict], bot_qq: int) -> Tuple[str, bool]:
         """提取纯文本和是否@机器人"""
+        if not isinstance(message_array, list):
+            return "", False
         self_id = str(bot_qq)
         is_mentioned = False
         text_parts = []

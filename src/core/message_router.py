@@ -119,11 +119,25 @@ class MessageRouter:
             return
 
         message_array = data.get("message", [])
+        # OneBot11 兼容：纯文本消息可能以字符串形式下发（而非段数组）
+        if isinstance(message_array, str):
+            message_array = [{"type": "text", "data": {"text": message_array}}]
+        elif not isinstance(message_array, list):
+            logger.debug(f"Unsupported message format: {type(message_array).__name__}")
+            message_array = []
+
         raw_time = data.get("time", int(time.time()))
         user_id = data.get("user_id")
         msg_id = data.get("message_id")
         if not user_id:
             return
+
+        # 消息去重（在指令处理之前：NapCat 重投旧消息时，指令也不会重复执行）
+        state = self.policy_engine.get_group_state(group_id)
+        if msg_id in state.processed_msg_ids:
+            logger.debug(f"Message {msg_id} already processed")
+            return
+        state.processed_msg_ids.append(msg_id)
 
         # 消息组装（文本/识图/转发/卡片/文件/存档）交给 MessageAssembler
         full_text, image_descriptions, is_reply_to_bot, has_reply_to_other, has_at_others = await self.assembler.assemble(
@@ -135,13 +149,6 @@ class MessageRouter:
         # 用户命令（P2-9 记忆管理：/help /memory /forget /forget_me；管理员 /memory_clear /memory_dump）
         if clean_text.strip().startswith("/") and await self.commands.handle(clean_text.strip(), user_id, group_id):
             return
-
-        # 去重
-        state = self.policy_engine.get_group_state(group_id)
-        if msg_id in state.processed_msg_ids:
-            logger.debug(f"Message {msg_id} already processed")
-            return
-        state.processed_msg_ids.append(msg_id)
 
         # 复读检测
         if full_text:
@@ -181,14 +188,31 @@ class MessageRouter:
         # 更新上下文
         self.policy_engine.add_context(group_id, user_id, full_text[:200], is_bot=False)
 
+        # ---------- 强制记忆（静默，先于回复决策） ----------
+        # 用户明确表达个人偏好/特征但未被@：只记记忆、不回复、不烧 AI 调用。
+        # 修复：此前静默记忆被"接话概率"随机闸门挡住，经常漏记；
+        # 现在只要命中个人偏好句式就确定记录（记忆禁用群除外，降级为普通消息继续走回复流程）。
+        force_memory = self.policy_engine.should_force_memory(clean_text, full_text, has_at_others)
+        silent_memory_only = force_memory and not is_mentioned and not is_reply_to_bot
+        if silent_memory_only and not self._memory_disabled(group_id):
+            claim = validate_memory_content(clean_text[:100])
+            if claim is None:
+                logger.warning(f"强制记忆被代码层校验拒绝（疑似注入）: {clean_text[:60]}")
+                return
+            await self.memory_manager.append_memory_text(
+                user_id, group_id, claim,
+                source_user=user_id,
+                source_group=group_id,
+                source_message_id=msg_id,
+                confidence="self_claim",
+            )
+            logger.info(f"Force memory for user {user_id} in group {group_id}: {claim}")
+            return
+
         # ---------- 决定是否回复 ----------
         should_reply = self._should_reply(msg)
         if not should_reply:
             return
-
-        # 强制记忆检测
-        force_memory = self.policy_engine.should_force_memory(clean_text, full_text, has_at_others)
-        silent_memory_only = force_memory and not is_mentioned and not is_reply_to_bot
 
         # 机器人冷却检查
         if not self.policy_engine.can_bot_reply(group_id):
@@ -211,19 +235,12 @@ class MessageRouter:
         user_prompt = full_text if full_text.strip() else (
             f"用户刚刚发了一张图片，图片内容：{'; '.join(image_descriptions)}" if image_descriptions else "用户刚刚@了你，但没有说话。"
         )
-        # AI 输入截断（P1-5）：防止超长文件/转发内容一次性烧掉大量 token
-        max_input = max(500, self.config.MAX_AI_INPUT_CHARS)
-        if len(user_prompt) > max_input:
-            user_prompt = user_prompt[:max_input] + "\n...(输入过长已截断)"
-        if len(context_text) > max_input:
-            context_text = context_text[-max_input:] + "\n...(上下文过长已截断)"
+        # 输入截断已统一收敛到 AIClient.chat_once（覆盖主动聊天等所有路径）
         reply, memory_update, denied = await self.guarded_chat(
             group_id,
             user_id,
             user_message=user_prompt,
             context=context_text,
-            user_id=user_id,
-            group_id=group_id,
             is_mentioned=is_mentioned or is_reply_to_bot,
         )
         if denied:
@@ -248,22 +265,6 @@ class MessageRouter:
                         confidence="model",
                     )
                     logger.info(f"Memory updated for user {target_uid} in group {group_id}: {mem_content}")
-
-        # 静默记忆模式（用户明确表达偏好但未被@）：只记记忆，不回复
-        if silent_memory_only and not self._memory_disabled(group_id):
-            claim = validate_memory_content(clean_text[:100])
-            if claim is None:
-                logger.warning(f"强制记忆被代码层校验拒绝（疑似注入）: {clean_text[:60]}")
-                return
-            await self.memory_manager.append_memory_text(
-                user_id, group_id, claim,
-                source_user=user_id,
-                source_group=group_id,
-                source_message_id=msg_id,
-                confidence="self_claim",
-            )
-            logger.info(f"Force memory for user {user_id} in group {group_id}: {claim}")
-            return
 
         # 兜底：guarded_chat 已内部重试过（每次重试过预算），仍空则给个兜底回复
         if is_mentioned and (not reply or not reply.strip()):
@@ -367,8 +368,27 @@ class MessageRouter:
                 "time": data.get("time", time.time())
             }
             logger.debug(f"File upload cached: {file_data.get('name')} from {user_id} in {group_id}")
+            # 待配对文件缓存治理：超过 10 分钟没等到消息的条目丢弃 + 总数上限
+            # （防"上传了但一直没发消息"导致 pending_files 无限增长）
+            self._prune_pending_files()
+
+    def _prune_pending_files(self) -> None:
+        now = time.time()
+        stale_keys = [
+            k for k, v in self.global_state.pending_files.items()
+            if now - float(v.get("time", 0) or 0) > 600
+        ]
+        for k in stale_keys:
+            self.global_state.pending_files.pop(k, None)
+        # 总数上限：超限丢最旧的（dict 保持插入序）
+        if len(self.global_state.pending_files) > 100:
+            for k in list(self.global_state.pending_files)[:50]:
+                self.global_state.pending_files.pop(k, None)
 
     # ---------- 戳戳 ----------
+    # 每用户戳戳冷却（秒）：防戳戳刷屏刷爆消息发送
+    POKE_USER_COOLDOWN = 10
+
     async def _handle_poke(self, data: Dict[str, Any]):
         target_id = data.get("target_id") or data.get("target") or data.get("user_id")
         if target_id != self.config.BOT_QQ:
@@ -380,6 +400,14 @@ class MessageRouter:
             logger.debug(f"Poke from non-whitelisted group {group_id}, ignoring")
             return
         user_id = data.get("user_id")
+        # 每用户戳戳冷却：同一人连续猛戳只回一次
+        now = time.time()
+        if user_id:
+            last = self.global_state.poke_last_time.get(user_id, 0.0)
+            if now - last < self.POKE_USER_COOLDOWN:
+                logger.debug(f"User {user_id} poke cooldown, skip")
+                return
+            self.global_state.poke_last_time[user_id] = now
         reply = self.policy_engine.get_poke_reply()
         if len(reply) > self.config.MAX_REPLY_LENGTH:
             reply = reply[:self.config.MAX_REPLY_LENGTH] + "..."
@@ -416,6 +444,12 @@ class MessageRouter:
             await self._do_active_chat(target_group)
 
     async def _do_active_chat(self, group_id: int):
+        # 主动聊天也吃并发额度（与 WS 消息处理共用 process_semaphore），
+        # 防止主动聊天与突发群消息叠加打爆 API
+        async with self.process_semaphore:
+            await self._do_active_chat_inner(group_id)
+
+    async def _do_active_chat_inner(self, group_id: int):
         context_text = self.policy_engine.get_context_text(group_id, max_messages=150)
         if not context_text:
             logger.debug(f"No context for group {group_id}, skip active")
@@ -428,8 +462,6 @@ class MessageRouter:
                 0,
                 user_message=prompt,
                 context=context_text,
-                user_id=0,
-                group_id=group_id,
                 is_mentioned=False,
             )
             if denied:  # 预算拦截：停止主动聊天

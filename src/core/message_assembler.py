@@ -149,9 +149,15 @@ class MessageAssembler:
         file_info = self.global_state.pending_files.pop(pending_key)
         file_id = file_info.get("file_id")
         file_name = file_info.get("file_name", "未命名文件")
-        file_size = file_info.get("file_size", 0)
+        try:
+            file_size = int(file_info.get("file_size") or 0)
+        except (TypeError, ValueError):
+            file_size = 0  # 上传通知缺大小/脏数据：按小文件走解析，解码层还有兜底上限
 
-        if file_id and file_size <= 1 * 1024 * 1024:
+        # 大小门槛与解码兜底上限对齐（MAX_FILE_DOWNLOAD_BYTES），避免"通知说 1MB 内但实际超限"
+        size_limit = max(1, int(getattr(self.config, "MAX_FILE_DOWNLOAD_BYTES", 2 * 1024 * 1024)))
+
+        if file_id and file_size <= size_limit:
             file_content, success = await self.file_parser.fetch_and_parse_file(file_id, file_name)
             if success and file_content:
                 # 代码层防注入：文件内容清洗后再进上下文（文件是最高危注入载体）
@@ -161,7 +167,7 @@ class MessageAssembler:
                 logger.debug(f"File parsed: {file_name} ({len(file_content)} chars)")
                 return f"\n[用户上传了一个文件，内容如下：]\n{file_content}\n[文件内容结束]"
             logger.warning(f"Failed to parse file: {file_name}")
-        elif file_size > 1 * 1024 * 1024:
+        elif file_size > size_limit:
             logger.warning(f"File too large, skipped: {file_name} ({file_size} bytes)")
         else:
             logger.debug(f"No file_id for pending file: {file_name}")

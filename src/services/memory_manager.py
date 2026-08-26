@@ -86,7 +86,9 @@ class MemoryManager:
                 created = None
                 if isinstance(note, dict):
                     created = note.get("created_at")
-                # 没有时间戳的旧数据无法判断年龄 → 保留
+                # 时间戳必须是数值；旧数据/脏数据里可能是字符串等非数值 → 无法判断年龄 → 保留（不误删、不崩）
+                if not isinstance(created, (int, float)):
+                    created = None
                 if created is None or (now - created) < ttl * 86400:
                     kept.append(note)
                 else:

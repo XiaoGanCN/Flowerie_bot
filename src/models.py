@@ -15,17 +15,19 @@ class BotDependencies:
     ws_server: Any
 
 # ---------- 群状态（按群隔离） ----------
-@dataclass
 class GroupState:
-    context: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=300))
-    user_last_time: Dict[str, float] = field(default_factory=dict)  # key: f"{user_id}"
-    group_last_reply_time: float = 0.0
-    consecutive_replies: int = 0
-    block_until: float = 0.0
-    processed_msg_ids: Deque[int] = field(default_factory=lambda: deque(maxlen=1000))
-    recent_bot_replies: Deque[str] = field(default_factory=lambda: deque(maxlen=30))
-    repeat_cache: Dict[str, float] = field(default_factory=dict)    # key: f"{content}"
-    msg_timestamps: Dict[str, Deque[float]] = field(default_factory=dict)
+    """群级运行状态。context 容量由 CONTEXT_SIZE 配置决定（默认 300）。"""
+
+    def __init__(self, context_size: int = 300):
+        self.context: Deque[Dict[str, Any]] = deque(maxlen=max(10, int(context_size or 300)))
+        self.user_last_time: Dict[str, float] = {}  # key: f"{user_id}"
+        self.group_last_reply_time: float = 0.0
+        self.consecutive_replies: int = 0
+        self.block_until: float = 0.0
+        self.processed_msg_ids: Deque[int] = deque(maxlen=1000)
+        self.recent_bot_replies: Deque[str] = deque(maxlen=30)
+        self.repeat_cache: Dict[str, float] = {}  # key: f"{content}"
+        self.msg_timestamps: Dict[str, Deque[float]] = {}
 
 @dataclass
 class GlobalState:
@@ -37,6 +39,7 @@ class GlobalState:
     last_user_message_time: float = time.time()
     ws_connected: bool = False
     poke_recent_replies: Deque[str] = field(default_factory=lambda: deque(maxlen=5))
+    poke_last_time: Dict[int, float] = field(default_factory=dict)  # 每用户戳戳冷却（防戳戳刷屏）
     last_toxic_warning: Dict[int, float] = field(default_factory=dict)
     pending_files: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # key: f"{user_id}_{group_id}"
     # 每日 AI 调用预算（P1-5）：记录"哪天"用了"多少次"

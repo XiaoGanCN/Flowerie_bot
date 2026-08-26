@@ -25,7 +25,7 @@ class ActiveChatManager:
 
     def get_group_state(self, group_id: int) -> GroupState:
         if group_id not in self.groups:
-            self.groups[group_id] = GroupState()
+            self.groups[group_id] = GroupState(context_size=getattr(self.config, "CONTEXT_SIZE", 300))
         return self.groups[group_id]
 
     def can_bot_reply(self, group_id: int) -> bool:

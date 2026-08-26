@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
-from src.models import GlobalState
+from src.models import GlobalState, GroupState
 from src.core.context_manager import ContextManager
 
 
@@ -14,7 +14,23 @@ def run(coro):
 
 
 def make_config(path):
-    return SimpleNamespace(CONTEXT_BACKUP_PATH=path)
+    return SimpleNamespace(CONTEXT_BACKUP_PATH=path, CONTEXT_SIZE=300)
+
+
+class TestGroupStateContextSize(unittest.TestCase):
+    def test_context_size_wired(self):
+        """CONTEXT_SIZE 配置应作用于 GroupState 的上下文容量。"""
+        config = SimpleNamespace(CONTEXT_BACKUP_PATH=None, CONTEXT_SIZE=10)
+        cm = ContextManager(config, {}, GlobalState())
+        state = cm.get_group_state(1)
+        for i in range(20):
+            state.context.append({"user_id": 1, "message": f"m{i}", "is_bot": False, "time": i})
+        self.assertEqual(len(state.context), 10)
+        self.assertEqual(state.context[-1]["message"], "m19")
+
+    def test_group_state_default(self):
+        self.assertEqual(GroupState().context.maxlen, 300)
+        self.assertEqual(GroupState(context_size=50).context.maxlen, 50)
 
 
 class TestContextManagerBackup(unittest.TestCase):

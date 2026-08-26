@@ -44,6 +44,9 @@ class TestImageUrlGuard(unittest.TestCase):
         # loopback 永远放行（NapCat 本地图依赖此行为——已知信任边界）
         self.assertTrue(check_image_url("http://127.0.0.1:3000/img/1.jpg", allowed)[0])
         self.assertTrue(check_image_url("http://localhost:3000/img/1.jpg", allowed)[0])
+        # 整个 127.0.0.0/8 都视为 loopback
+        self.assertTrue(check_image_url("http://127.0.0.2:3000/img/1.jpg", allowed)[0])
+        self.assertTrue(check_image_url("http://127.8.8.8/a.jpg", allowed)[0])
         # 未设置白名单（None / 空列表）→ 放行所有 http/https
         self.assertTrue(check_image_url("http://evil.com/a.jpg", None)[0])
         self.assertTrue(check_image_url("http://evil.com/a.jpg", [])[0])

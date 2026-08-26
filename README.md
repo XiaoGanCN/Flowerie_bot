@@ -186,6 +186,7 @@ bash run.sh
 | `WS_HOST` | WebSocket 监听地址 | `127.0.0.1` |
 | `WS_PORT` | WebSocket 监听端口 | `3001` |
 | `HTTP_API_BASE` | NapCat HTTP API 地址 | `http://127.0.0.1:3000` |
+| `WS_TOKEN` | 反向 WS 鉴权 token（可选；空=不鉴权，设置后 NapCat 需带 `Authorization: Bearer <token>` 或 `?access_token=<token>`） | — |
 | `ONLY_REPLY_WHEN_AT` | 仅回复 @ 消息 | `false` |
 | `MAX_REPLY_LENGTH` | 最大回复长度 | `40` |
 | `USER_COOLDOWN` | 用户冷却（秒） | `5` |
@@ -284,8 +285,18 @@ tests/
     ├── test_memory_manager.py   # 记忆去重（含错别字容忍）单元测试
     ├── test_cooldown_manager.py # 冷却逻辑单元测试
     ├── test_context_manager.py  # 上下文备份/恢复单元测试
-    └── test_sanitizer.py        # 防注入清洗/记忆校验单元测试
+    ├── test_sanitizer.py        # 防注入清洗/记忆校验单元测试
+    └── test_url_and_contradiction.py # SSRF 图片 URL 闸门 / 记忆矛盾替换单元测试
 ```
+
+---
+
+## 🔐 安全说明
+
+- **WS 鉴权（可选）**：反向 WS 默认只监听 `127.0.0.1`（本机）。若修改 `WS_HOST` 对外暴露端口，务必设置 `WS_TOKEN`，否则任何能连上端口的人都能伪造事件驱动花璃发言。
+- **图片/文件下载**：图片下载只允许 `http/https` 与 `data:image/`，带大小上限与 MIME 嗅探；`IMAGE_ALLOWED_HOSTS` 可进一步收紧到白名单主机。**已知信任边界**：NapCat 本地图片走 `127.0.0.1` loopback，因此 loopback 始终放行。
+- **记忆隐私**：记忆按 `(用户, 群)` 隔离；代码层闸门会拒绝含 QQ 号（5~12 位）、超长、指令句式的记忆写入；`MEMORY_DISABLED_GROUPS` 群完全不写记忆；用户可用 `/memory /forget /forget_me` 查看/删除自己的记忆。
+- **AI 预算**：全局每日 / 每群每日 / 每用户限速三层闸门，所有消耗 AI 的路径（聊天/引战检测/主动聊天）统一过闸，防 API 额度被刷爆。
 
 ---
 

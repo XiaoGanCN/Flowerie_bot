@@ -89,6 +89,33 @@ class WebSocketServer:
             self._server = None
 
     async def _handler(self, ws: websockets.WebSocketServerProtocol):
+        # 可选鉴权（WS_TOKEN）：配置后，NapCat 握手需携带
+        # Authorization: Bearer <token> 头，或 URL 带 ?access_token=<token>
+        # （OneBot11 规范约定；默认空=不鉴权，保持向后兼容）
+        token = getattr(self.config, "WS_TOKEN", "") or ""
+        if token:
+            auth_ok = False
+            try:
+                if ws.request is not None:
+                    auth_header = ws.request.headers.get("Authorization", "")
+                    auth_ok = auth_header == f"Bearer {token}"
+            except Exception:
+                auth_ok = False
+            if not auth_ok:
+                try:
+                    from urllib.parse import urlparse, parse_qs
+                    query = parse_qs(urlparse(ws.path).query)
+                    auth_ok = (query.get("access_token") or [""])[0] == token
+                except Exception:
+                    auth_ok = False
+            if not auth_ok:
+                logger.warning("WS 鉴权失败，拒绝连接")
+                try:
+                    await ws.close(code=1008, reason="unauthorized")
+                except Exception:
+                    pass
+                return
+
         # 单连接守卫：已有连接时拒绝新的 NapCat 连接，防止 self.ws 被覆盖
         if self.ws is not None:
             logger.warning("仅允许单连接，拒绝新的 NapCat 连接")

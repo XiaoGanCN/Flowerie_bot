@@ -70,6 +70,23 @@ class TestMemoryManagerDedup(unittest.TestCase):
         notes = reloaded.get_user_memory(1, 10).get("notes", [])
         self.assertEqual([n.get("text") if isinstance(n, dict) else n for n in notes], ["喜欢打三角洲"])
 
+    def test_string_timestamp_does_not_crash_prune(self):
+        """回归：旧数据里 created_at 是字符串时，TTL 清理不得抛异常/清空整个记忆库。"""
+        import json
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump({
+                "1_10": {"notes": [
+                    {"text": "喜欢打三角洲", "created_at": "2024-01-01", "confidence": "model"},
+                    {"text": "怕黑", "created_at": 1700000000, "confidence": "model"},
+                ]}
+            }, f)
+        mm2 = MemoryManager(self.path, ttl_days=0, model_memory_ttl_days=30)
+        notes = mm2.get_user_memory(1, 10).get("notes", [])
+        # 字符串时间戳那条无法判断年龄 → 保留；数值时间戳超期 → 清理
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0].get("text"), "喜欢打三角洲")
+
 
 if __name__ == "__main__":
     unittest.main()

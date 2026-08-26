@@ -20,7 +20,7 @@ class ContextManager:
 
     def get_group_state(self, group_id: int) -> GroupState:
         if group_id not in self.groups:
-            self.groups[group_id] = GroupState()
+            self.groups[group_id] = GroupState(context_size=getattr(self.config, "CONTEXT_SIZE", 300))
         return self.groups[group_id]
 
     # ---------- 上下文 ----------
@@ -38,9 +38,9 @@ class ContextManager:
         msgs = list(state.context)[-max_messages:]
         lines = []
         for idx, m in enumerate(msgs, 1):
-            who = "机器人(花璃)" if m["is_bot"] else f"用户{m['user_id']}"
+            who = "机器人(花璃)" if m.get("is_bot", False) else f"用户{m.get('user_id', 0)}"
             # 代码层防注入：历史消息按不可信数据处理，清洗后再进上下文
-            msg_text, _ = sanitize_untrusted_text(str(m["message"]))
+            msg_text, _ = sanitize_untrusted_text(str(m.get("message", "")))
             lines.append(f"[{idx}] {who}: {msg_text}")
         return "\n".join(lines)
 
@@ -59,7 +59,7 @@ class ContextManager:
         if len(set(m["user_id"] for m in user_msgs)) == 1:
             prob = 0.02
         last_msg = recent_msgs[-1]
-        if last_msg and not last_msg["is_bot"] and len(last_msg["message"]) < 2:
+        if last_msg and not last_msg.get("is_bot", False) and len(str(last_msg.get("message", ""))) < 2:
             prob = 0.02
         bot_count = sum(1 for m in recent_msgs[-3:] if m.get("is_bot", False))
         if bot_count >= 2:

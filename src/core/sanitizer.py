@@ -21,7 +21,9 @@ def check_image_url(url: str, allowed_hosts: Optional[list] = None) -> Tuple[boo
     if allowed_hosts:
         from urllib.parse import urlparse
         host = (urlparse(url).hostname or "").lower()
-        loopback = host in ("127.0.0.1", "localhost", "::1")
+        # loopback 放行（NapCat 本地图片就是 127.0.0.1——已知信任边界）：
+        # 覆盖整个 127.0.0.0/8 与 localhost / ::1
+        loopback = host in ("localhost", "::1") or (host or "").startswith("127.")
         if not loopback and host not in allowed_hosts:
             return False, f"host_rejected:{host}"
     return True, ""
@@ -57,8 +59,12 @@ def sanitize_untrusted_text(text: str) -> Tuple[str, bool]:
         return text, False
     changed = False
     result = text
-    # 清理控制字符（防终端/渲染注入）
-    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", result)
+    # 清理控制字符与零宽/格式字符（防终端/渲染注入、防零宽字符绕过关键词过滤）
+    cleaned = re.sub(
+        r"[\x00-\x08\x0b\x0c\x0e-\x1f\u200b-\u200f\u2028-\u202f\ufeff\u00ad]",
+        "",
+        result,
+    )
     if cleaned != result:
         changed = True
         result = cleaned
@@ -88,7 +94,8 @@ def validate_memory_content(text: str) -> Optional[str]:
         return None
     if len(t) > 100:
         return None
-    if re.search(r"\d{7,12}", t):
+    # QQ 号（5~12 位数字，覆盖老号段）一律拒绝，防止记忆里残留他人/自己的 QQ
+    if re.search(r"\d{5,12}", t):
         return None
     if re.search(r"【记忆】|记忆\s*[:：]|MEMORY_JSON", t, re.IGNORECASE):
         return None

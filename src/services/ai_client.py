@@ -9,7 +9,7 @@ from loguru import logger
 
 from src.config import Settings
 from src.services.memory_manager import MemoryManager
-from src.core.sanitizer import check_image_url
+from src.core.sanitizer import check_image_url, sanitize_untrusted_text
 
 
 def _looks_like_image(data: bytes) -> bool:
@@ -72,6 +72,17 @@ class AIClient:
         self._api_backoff = 0.0  # 429 时置为更长退避，供准入层重试等待
         if not context or len(context.strip()) < 5:
             context = "（暂无历史聊天记录）"
+
+        # 统一输入截断（P1-5）：所有调用方（含主动聊天）都受 MAX_AI_INPUT_CHARS 约束，
+        # 防止超长文件/转发内容一次性烧掉大量 token
+        max_input = max(500, self.config.MAX_AI_INPUT_CHARS)
+        if len(user_message) > max_input:
+            user_message = user_message[:max_input] + "\n...(输入过长已截断)"
+        if len(context) > max_input:
+            context = context[-max_input:] + "\n...(上下文过长已截断)"
+
+        # 代码层防注入：当前这条最新消息同样按不可信数据处理（替换注入句式/控制字符）
+        user_message, _inject_hit = sanitize_untrusted_text(user_message)
 
         # 获取用户记忆
         memory_text = ""
@@ -188,7 +199,7 @@ class AIClient:
         }
 
         try:
-            logger.debug(f"API call: user={user_id}, group={group_id}, msg={user_message[:30]}... (attempt {retry_count+1}/3)")
+            logger.debug(f"API call: user={user_id}, group={group_id}, msg={user_message[:30]}...")
             r = await self.client.post(
                 self.config.DEEPSEEK_API_URL,
                 headers=headers,
@@ -204,7 +215,8 @@ class AIClient:
             data = r.json()
             logger.debug(f"API raw response: {json.dumps(data, ensure_ascii=False)[:500]}")
             if "choices" in data and len(data["choices"]) > 0:
-                content = data["choices"][0]["message"]["content"].strip()
+                content = (data["choices"][0].get("message") or {}).get("content")
+                content = (content or "").strip()
                 if not content:
                     logger.warning("API returned empty content")
                     return None, None
@@ -287,11 +299,19 @@ class AIClient:
         # P2-10 归一化：NFKC 统一（全角→半角、兼容字符），降低谐音/变形绕过
         import unicodedata
         norm_text = unicodedata.normalize("NFKC", text).lower()
+        # 短 ASCII 关键词（如 "sb"）要求词边界：防止误伤 "this book"/"asbestos" 等正常英文
+        # （误伤不仅会误报引战，还会白烧一次 AI 检测调用）
+        short_ascii_kw = re.compile(r"^[a-z0-9 ]{1,4}$")
         for kw in toxic_keywords:
             kw_norm = unicodedata.normalize("NFKC", kw).lower()
             if kw_norm in norm_text:
-                keyword_hit = True
-                break
+                if short_ascii_kw.match(kw_norm):
+                    if re.search(rf"(?<![a-z0-9]){re.escape(kw_norm)}(?![a-z0-9])", norm_text):
+                        keyword_hit = True
+                        break
+                else:
+                    keyword_hit = True
+                    break
         if not keyword_hit:
             toxic_patterns = [
                 r"草\s*你\s*[妈吗嫲][的得]?",
@@ -387,8 +407,21 @@ class AIClient:
         image_bytes = b""
         try:
             if image_url.startswith("data:"):
+                # data: URI 同样受大小上限约束（防超大 base64 内存轰炸），且必须声明 image/ 类型
+                if not image_url.lower().startswith("data:image/"):
+                    logger.error(f"Image data: URI not an image type: {image_url[:80]}")
+                    return None
+                size_cap = self.config.MAX_IMAGE_DOWNLOAD_BYTES
+                # base64 体积 ≈ 原始字节 × 4/3，加少量余量后仍超上限直接拒绝
+                b64_cap = int(size_cap * 1.4) + 1024
                 b64_part = image_url.split(",", 1)[1] if "," in image_url else ""
-                image_bytes = base64.b64decode(b64_part) if b64_part else b""
+                if not b64_part or len(b64_part) > b64_cap:
+                    logger.error(f"Image data: URI too large (> {size_cap} bytes): {image_url[:80]}")
+                    return None
+                image_bytes = base64.b64decode(b64_part)
+                if not _looks_like_image(image_bytes):
+                    logger.error(f"Image data: URI content is not an image: {image_url[:80]}")
+                    return None
             else:
                 # SSRF 第一道闸（scheme 白名单 + 可选主机白名单，loopback 放行）——纯函数便于测试
                 ok, reason = check_image_url(image_url, getattr(self.config, "IMAGE_ALLOWED_HOSTS", None))

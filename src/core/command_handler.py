@@ -88,6 +88,9 @@ class CommandHandler:
     async def _cmd_memory_clear(self, group_id: int) -> None:
         group_cleared = 0
         for key in list(self.memory_manager.memory.keys()):
+            # 防御脏数据：key 不是 "user_group" 格式时跳过（不崩溃）
+            if "_" not in key:
+                continue
             uid_part, gid_part = key.split("_", 1)
             if str(gid_part) == str(group_id):
                 try:
@@ -99,6 +102,9 @@ class CommandHandler:
     async def _cmd_memory_dump(self, group_id: int) -> None:
         lines = []
         for key, mem in self.memory_manager.memory.items():
+            # 防御脏数据：key 不是 "user_group" 格式时跳过
+            if "_" not in key:
+                continue
             uid_part, gid_part = key.split("_", 1)
             if str(gid_part) == str(group_id):
                 notes = self.memory_manager.get_user_notes(int(uid_part), group_id)

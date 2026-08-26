@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     WS_HOST: str = "127.0.0.1"
     WS_PORT: int = 3001
     HTTP_API_BASE: str = "http://127.0.0.1:3000"
+    # 可选：反向 WS 鉴权 token（空=不鉴权，仅建议在 WS_HOST 绑 loopback 时留空；
+    # 设置后 NapCat 握手需带 Authorization: Bearer <token> 或 ?access_token=<token>）
+    WS_TOKEN: str = ""
     
     # Behavior
     ONLY_REPLY_WHEN_AT: bool = False
