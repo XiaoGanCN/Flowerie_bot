@@ -3,26 +3,27 @@ from typing import Tuple
 
 
 class MemoryParser:
-    """记忆指令解析：识别 AI 回复里的「记忆: / 【记忆】QQ号:」指令，以及强制记忆触发检测。"""
+    """记忆指令解析：识别 AI 回复里的记忆指令，以及强制记忆触发检测。
+
+    安全边界（P1）：LLM 永远不能指定目标用户——target_uid 恒为当前发言者。
+    即使 AI 输出「【记忆】888: xxx」这类带 QQ 号的指令，也会被剥离 QQ、
+    强制记到当前用户头上，防止 Prompt Injection 污染他人画像。
+    """
 
     def parse_memory_update(self, memory_update: str, default_user_id: int) -> Tuple[int, str]:
-        """把记忆指令解析成 (目标用户QQ, 记忆内容)；无效时返回 (default_user_id, "")。"""
+        """把记忆指令解析成 (当前用户QQ, 记忆内容)。
+
+        安全说明：无论指令里写了谁的 QQ，target 一律返回 default_user_id
+        （当前发言者），模型输出里的任何 QQ 号都会被剥掉，不参与寻址。
+        """
         if not memory_update:
             return default_user_id, ""
-        match = re.match(r'^【记忆】\s*(\d+)\s*[:：]\s*(.*)', memory_update)
-        if match:
-            target_uid = int(match.group(1))
-            mem_text = match.group(2).strip()
-            return target_uid, mem_text
-        if memory_update.startswith("记忆:") or memory_update.startswith("记忆："):
-            parts = re.split(r'[:：]', memory_update, maxsplit=1)
-            if len(parts) == 2:
-                mem_text = parts[1].strip()
-                return default_user_id, mem_text
-        mem_text = memory_update.replace("【记忆】", "").strip()
-        if mem_text:
-            return default_user_id, mem_text
-        return default_user_id, ""
+        text = memory_update.strip()
+        # 剥离各种前缀：记忆: / 记忆：/ 【记忆】888: / 【记忆】888：
+        text = re.sub(r"^【记忆】\s*\d+\s*[:：]\s*", "", text)
+        text = re.sub(r"^记忆\s*[:：]\s*", "", text)
+        text = text.replace("【记忆】", "").strip()
+        return default_user_id, text
 
     def should_force_memory(self, clean_text: str, full_text: str, has_at_others: bool) -> bool:
         """判断消息是否包含明显的个人偏好/特征表达，触发静默记忆记录。"""

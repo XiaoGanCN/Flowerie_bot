@@ -39,6 +39,15 @@ class FileParser:
             self._client = httpx.AsyncClient(timeout=timeout)
         return self._client
 
+    def _cap(self, text: str) -> str:
+        """P1-4 资源上限：提取文本统一截断到 MAX_FILE_TEXT_CHARS，防止超长内容烧 token。"""
+        if not text:
+            return ""
+        limit = getattr(self.config, "MAX_FILE_TEXT_CHARS", 8000)
+        if len(text) > limit:
+            return text[:limit] + "\n...(内容过长已截断)"
+        return text
+
     # ========== 新增：通过 NapCat HTTP API 获取并解析文件 ==========
     async def fetch_and_parse_file(self, file_id: str, file_name: str) -> Tuple[str, bool]:
         """
@@ -100,8 +109,8 @@ class FileParser:
                     return "", False
                 try:
                     pdf_reader = PyPDF2.PdfReader(BytesIO(content_bytes))
-                    pages = [page.extract_text() or "" for page in pdf_reader.pages]
-                    extracted_text = "\n".join(pages)
+                    pages = [page.extract_text() or "" for page in pdf_reader.pages[:self.config.MAX_PDF_PAGES]]
+                    extracted_text = self._cap("\n".join(pages))
                     return extracted_text, True
                 except Exception as e:
                     logger.error(f"PDF parse error: {e}")
@@ -113,7 +122,7 @@ class FileParser:
                 try:
                     doc = docx.Document(BytesIO(content_bytes))
                     paragraphs = [p.text for p in doc.paragraphs]
-                    extracted_text = "\n".join(paragraphs)
+                    extracted_text = self._cap("\n".join(paragraphs))
                     return extracted_text, True
                 except Exception as e:
                     logger.error(f"DOCX parse error: {e}")
@@ -125,11 +134,18 @@ class FileParser:
                 try:
                     wb = openpyxl.load_workbook(BytesIO(content_bytes), data_only=True)
                     rows = []
+                    cell_count = 0
                     for sheet in wb.worksheets:
                         rows.append(f"--- 工作表: {sheet.title} ---")
                         for row in sheet.iter_rows(values=True):
                             rows.append("\t".join([str(cell) if cell is not None else "" for cell in row]))
-                    extracted_text = "\n".join(rows)
+                            cell_count += len(row)
+                            if cell_count >= self.config.MAX_EXCEL_CELLS:
+                                rows.append("...(已达到解析上限)")
+                                break
+                        if cell_count >= self.config.MAX_EXCEL_CELLS:
+                            break
+                    extracted_text = self._cap("\n".join(rows))
                     return extracted_text, True
                 except Exception as e:
                     logger.error(f"XLSX parse error: {e}")
@@ -148,8 +164,8 @@ class FileParser:
                     else:
                         text_content = content_bytes.decode('utf-8', errors='ignore')
                     reader = csv.reader(StringIO(text_content))
-                    rows = [",".join(row) for row in reader]
-                    extracted_text = "\n".join(rows)
+                    rows = [",".join(row) for row in reader][:self.config.MAX_CSV_ROWS]
+                    extracted_text = self._cap("\n".join(rows))
                     return extracted_text, True
                 except Exception as e:
                     logger.error(f"CSV parse error: {e}")
@@ -157,7 +173,7 @@ class FileParser:
             else:
                 # 尝试作为文本
                 try:
-                    extracted_text = content_bytes.decode('utf-8')
+                    extracted_text = self._cap(content_bytes.decode('utf-8'))
                     return extracted_text, True
                 except:
                     return "", False
@@ -217,13 +233,16 @@ class FileParser:
                 logger.error(f"Get forward msg error: {e}")
             return None
 
-        async def resolve_nested_forwards(node):
+        async def resolve_nested_forwards(node, depth: int = 0):
             """递归展开嵌套转发：把 forward 节点（无内联 messages 但有 id）拉取后展开。
 
             这样聊天记录里嵌套的聊天记录、以及转发里的转发都能解析出来。
+            深度上限 MAX_FORWARD_DEPTH（P1-5），防止恶意多层嵌套拖垮服务。
             """
+            if depth > getattr(self.config, "MAX_FORWARD_DEPTH", 5):
+                return node
             if isinstance(node, list):
-                return [await resolve_nested_forwards(item) for item in node]
+                return [await resolve_nested_forwards(item, depth) for item in node]
             if not isinstance(node, dict):
                 return node
             if node.get("type") == "forward":
@@ -237,10 +256,10 @@ class FileParser:
                             data["messages"] = fetched
                             messages = fetched
                 if messages:
-                    return await resolve_nested_forwards(messages)
+                    return await resolve_nested_forwards(messages, depth + 1)
                 return node
             # 普通节点：递归展开所有字段（含 message 数组里的嵌套 forward）
-            return {key: await resolve_nested_forwards(value) for key, value in node.items()}
+            return {key: await resolve_nested_forwards(value, depth) for key, value in node.items()}
 
         for msg in message_array:
             if msg.get("type") == "forward":

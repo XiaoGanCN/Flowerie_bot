@@ -23,7 +23,7 @@ async def main():
     config = load_config()
     setup_logger(config.LOG_LEVEL)
 
-    memory_manager = MemoryManager(config.MEMORY_PATH)
+    memory_manager = MemoryManager(config.MEMORY_PATH, config.MEMORY_TTL_DAYS, config.AUDIT_LOG_PATH)
 
     # 优雅管理异步资源
     async with AIClient(config, memory_manager) as ai_client, Sender(config) as sender:

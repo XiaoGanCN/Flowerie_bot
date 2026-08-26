@@ -68,7 +68,7 @@ class TestMemoryManagerDedup(unittest.TestCase):
         run(self.mm.append_memory_text(1, 10, "喜欢打三角洲"))
         reloaded = MemoryManager(self.path)
         notes = reloaded.get_user_memory(1, 10).get("notes", [])
-        self.assertEqual(notes, ["喜欢打三角洲"])
+        self.assertEqual([n.get("text") if isinstance(n, dict) else n for n in notes], ["喜欢打三角洲"])
 
 
 if __name__ == "__main__":

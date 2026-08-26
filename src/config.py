@@ -80,12 +80,32 @@ class Settings(BaseSettings):
     # File paths
     MEMORY_PATH: str = "./data/memory.json"
     ARCHIVE_BASE_DIR: str = "./data/archive"
-    
+    AUDIT_LOG_PATH: str = "./data/audit.log"
+
     # White list
     ALLOWED_GROUP_IDS: Optional[List[int]] = Field(None, env="ALLOWED_GROUP_IDS")
     TOXIC_GROUP_IDS: Optional[List[int]] = Field(None, env="TOXIC_GROUP_IDS")
-    
-    @field_validator("ALLOWED_GROUP_IDS", "TOXIC_GROUP_IDS", mode="before")
+    # 记忆隐私：这些群里完全禁止写入记忆
+    MEMORY_DISABLED_GROUPS: Optional[List[int]] = Field(None, env="MEMORY_DISABLED_GROUPS")
+    # 管理员 QQ（可执行 /memory_clear /memory_dump）
+    ADMIN_QQ_IDS: Optional[List[int]] = Field(None, env="ADMIN_QQ_IDS")
+
+    # ===== 安全审计加固（P1/P2/P3）=====
+    # 资源限制：防止超大文件/超长输入消耗 CPU/RAM/Token
+    MAX_FILE_TEXT_CHARS: int = 8000        # 文件解析后提取文本的最大字符数
+    MAX_PDF_PAGES: int = 100               # PDF 最多解析页数
+    MAX_EXCEL_CELLS: int = 50000           # Excel 最多解析单元格数
+    MAX_CSV_ROWS: int = 10000              # CSV 最多解析行数
+    MAX_AI_INPUT_CHARS: int = 8000         # 单次 AI 输入（上下文+消息）最大字符数
+    MAX_IMAGES_PER_MESSAGE: int = 10       # 单条消息最多识图张数（防图片轰炸）
+    MAX_FORWARD_DEPTH: int = 5             # 嵌套转发最大展开深度
+    DAILY_AI_CALL_BUDGET: int = 0          # 每日 AI 调用次数上限（0=不限；>0 时超出即闭嘴）
+    MAX_IMAGE_DOWNLOAD_BYTES: int = 10485760  # 单张图片下载大小上限（10MB）
+    IMAGE_DOWNLOAD_MAX_REDIRECTS: int = 3  # 图片下载最大重定向次数
+    # 数据治理
+    MEMORY_TTL_DAYS: int = 0               # 记忆保留天数（0=永久保留）
+
+    @field_validator("ALLOWED_GROUP_IDS", "TOXIC_GROUP_IDS", "MEMORY_DISABLED_GROUPS", "ADMIN_QQ_IDS", mode="before")
     @classmethod
     def parse_list(cls, v):
         if isinstance(v, str):

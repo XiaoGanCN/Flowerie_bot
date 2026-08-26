@@ -61,8 +61,12 @@ class MessageAssembler:
     # ---------- 顶层图片识图 ----------
     async def _describe_images(self, message_array: List[Dict]) -> List[str]:
         descriptions = []
+        max_images = max(1, self.config.MAX_IMAGES_PER_MESSAGE)
         for seg in message_array:
             if seg.get("type") == "image":
+                if len(descriptions) >= max_images:
+                    logger.warning(f"图片超过单条消息上限({max_images}张)，跳过后续识图")
+                    break
                 seg_data = seg.get("data") or {}
                 url = seg_data.get("url", "")
                 if url:
@@ -103,12 +107,15 @@ class MessageAssembler:
         # 转发里的图片：由 VISION_FORWARD_IMAGES 开关控制（默认关，省视觉 token）
         if forward_image_urls and self.config.VISION_FORWARD_IMAGES:
             forward_image_descriptions = []
-            for fwd_url in forward_image_urls:
+            max_images = max(1, self.config.MAX_IMAGES_PER_MESSAGE)
+            for fwd_url in forward_image_urls[:max_images]:
                 fwd_desc = await self.ai_client.describe_image(fwd_url)
                 if fwd_desc:
                     forward_image_descriptions.append(fwd_desc)
                 else:
                     logger.warning(f"Vision describe failed for forward image url: {fwd_url[:80]}")
+            if len(forward_image_urls) > max_images:
+                logger.warning(f"转发图片超过上限({max_images}张)，仅识别前 {max_images} 张")
             if forward_image_descriptions:
                 block += f"\n[用户转发的消息中包含图片，内容如下：]\n{'; '.join(forward_image_descriptions)}\n[图片内容结束]"
                 logger.debug(f"Forward image descriptions: {forward_image_descriptions}")

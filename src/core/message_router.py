@@ -112,6 +112,10 @@ class MessageRouter:
         # 提取纯文本与是否@机器人（决策需要）
         clean_text, is_mentioned = self.file_parser.extract_mention_and_text(message_array, self.config.BOT_QQ)
 
+        # 用户命令（P2-9 记忆管理：/memory /forget /forget_me；管理员 /memory_clear /memory_dump）
+        if clean_text.strip().startswith("/") and await self._handle_user_command(clean_text.strip(), user_id, group_id):
+            return
+
         # 去重
         state = self.policy_engine.get_group_state(group_id)
         if msg_id in state.processed_msg_ids:
@@ -180,11 +184,22 @@ class MessageRouter:
         else:
             self.policy_engine.update_user_time(user_id, group_id)
 
+        # 每日 AI 调用预算（P1-5）：超出即闭嘴，防 API 额度被刷爆
+        if not self._ai_budget_available():
+            logger.warning("今日 AI 调用预算已用完，跳过回复")
+            return
+
         # ---------- 调用 AI ----------
         context_text = self.policy_engine.get_context_text(group_id, max_messages=150)
         user_prompt = full_text if full_text.strip() else (
             f"用户刚刚发了一张图片，图片内容：{'; '.join(image_descriptions)}" if image_descriptions else "用户刚刚@了你，但没有说话。"
         )
+        # AI 输入截断（P1-5）：防止超长文件/转发内容一次性烧掉大量 token
+        max_input = max(500, self.config.MAX_AI_INPUT_CHARS)
+        if len(user_prompt) > max_input:
+            user_prompt = user_prompt[:max_input] + "\n...(输入过长已截断)"
+        if len(context_text) > max_input:
+            context_text = context_text[-max_input:] + "\n...(上下文过长已截断)"
         reply, memory_update = await self.ai_client.chat(
             user_message=user_prompt,
             context=context_text,
@@ -193,16 +208,29 @@ class MessageRouter:
             is_mentioned=is_mentioned or is_reply_to_bot,
         )
 
-        # 处理记忆更新
-        if memory_update and user_id:
+        # 处理记忆更新（P1 权限边界：target 恒为当前用户；P3 隐私：禁用群不写记忆）
+        if memory_update and user_id and not self._memory_disabled(group_id):
             target_uid, mem_content = self.policy_engine.parse_memory_update(memory_update, user_id)
             if mem_content:
-                await self.memory_manager.append_memory_text(target_uid, group_id, mem_content)
+                await self.memory_manager.append_memory_text(
+                    target_uid, group_id, mem_content,
+                    source_user=user_id,
+                    source_group=group_id,
+                    source_message_id=msg_id,
+                    confidence="model",
+                )
                 logger.info(f"Memory updated for user {target_uid} in group {group_id}: {mem_content}")
 
-        # 静默记忆模式不回复
-        if silent_memory_only:
-            logger.debug("Silent memory mode, no reply")
+        # 静默记忆模式（用户明确表达偏好但未被@）：只记记忆，不回复
+        if silent_memory_only and not self._memory_disabled(group_id):
+            await self.memory_manager.append_memory_text(
+                user_id, group_id, clean_text[:80],
+                source_user=user_id,
+                source_group=group_id,
+                source_message_id=msg_id,
+                confidence="self_claim",
+            )
+            logger.info(f"Force memory for user {user_id} in group {group_id}: {clean_text[:80]}")
             return
 
         # 重试兜底
@@ -246,6 +274,91 @@ class MessageRouter:
             if self.policy_engine.should_reply_by_context(msg.group_id):
                 return True
             return False
+
+    # ---------- 用户命令：记忆管理（P2-9 用户数据控制权） ----------
+    async def _handle_user_command(self, text: str, user_id: int, group_id: int) -> bool:
+        """处理记忆相关命令，返回 True 表示已处理（不再走正常流程）。"""
+        parts = text.split(maxsplit=1)
+        cmd = parts[0].lower()
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if cmd == "/memory":
+            notes = self.memory_manager.get_user_notes(user_id, group_id)
+            if not notes:
+                await self.sender.send_group_message(group_id, "关于你的记忆：目前一条都没有哦")
+            else:
+                snippet = "；".join(notes[-10:])[:200]
+                await self.sender.send_group_message(group_id, f"关于你的记忆：{snippet}")
+            return True
+
+        if cmd == "/forget":
+            if not arg:
+                await self.sender.send_group_message(group_id, "用法：/forget 关键词（删除包含该词的记忆）")
+                return True
+            removed = await self.memory_manager.remove_notes_containing(user_id, group_id, arg)
+            if removed:
+                await self.sender.send_group_message(group_id, f"已删除 {removed} 条包含「{arg[:20]}」的记忆")
+            else:
+                await self.sender.send_group_message(group_id, f"没找到包含「{arg[:20]}」的记忆")
+            return True
+
+        if cmd == "/forget_me":
+            removed = await self.memory_manager.clear_user_memory(user_id, group_id)
+            if removed:
+                await self.sender.send_group_message(group_id, f"已清空关于你的 {removed} 条记忆")
+            else:
+                await self.sender.send_group_message(group_id, "你还没有被我记住什么")
+            return True
+
+        # 管理员命令（P3-15）
+        is_admin = self.config.ADMIN_QQ_IDS and user_id in self.config.ADMIN_QQ_IDS
+        if is_admin and cmd == "/memory_clear":
+            group_cleared = 0
+            for key in list(self.memory_manager.memory.keys()):
+                if key.endswith(f"_{group_id}"):
+                    gid_part = key.rsplit("_", 1)[-1]
+                    if str(gid_part) == str(group_id):
+                        uid_part = key.split("_", 1)[0]
+                        try:
+                            group_cleared += await self.memory_manager.clear_user_memory(int(uid_part), group_id)
+                        except (ValueError, TypeError):
+                            continue
+            await self.sender.send_group_message(group_id, f"已清空本群 {group_cleared} 条记忆")
+            return True
+
+        if is_admin and cmd == "/memory_dump":
+            lines = []
+            for key, mem in self.memory_manager.memory.items():
+                uid_part, gid_part = key.split("_", 1)
+                if str(gid_part) == str(group_id):
+                    notes = self.memory_manager.get_user_notes(int(uid_part), group_id)
+                    if notes:
+                        lines.append(f"用户{uid_part}: " + "；".join(notes[-5:])[:100])
+            dump = "\n".join(lines) if lines else "本群暂无记忆"
+            await self.sender.send_group_message(group_id, dump[:400])
+            return True
+
+        return False
+
+    # ---------- 每日 AI 预算（P1-5） ----------
+    def _ai_budget_available(self) -> bool:
+        budget = self.config.DAILY_AI_CALL_BUDGET
+        if not budget or budget <= 0:
+            return True
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self.global_state.ai_budget_date != today:
+            self.global_state.ai_budget_date = today
+            self.global_state.ai_budget_count = 0
+        self.global_state.ai_budget_count += 1
+        if self.global_state.ai_budget_count > budget:
+            return False
+        return True
+
+    # ---------- 群级记忆隐私开关（P3-13） ----------
+    def _memory_disabled(self, group_id: int) -> bool:
+        disabled = self.config.MEMORY_DISABLED_GROUPS
+        return bool(disabled) and group_id in disabled
 
     # ---------- 存档 ----------
     # ---------- 文件上传 ----------

@@ -39,6 +39,9 @@ class GlobalState:
     poke_recent_replies: Deque[str] = field(default_factory=lambda: deque(maxlen=5))
     last_toxic_warning: Dict[int, float] = field(default_factory=dict)
     pending_files: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # key: f"{user_id}_{group_id}"
+    # 每日 AI 调用预算（P1-5）：记录"哪天"用了"多少次"
+    ai_budget_date: str = ""
+    ai_budget_count: int = 0
 
 # ---------- 消息结构 ----------
 @dataclass
