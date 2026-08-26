@@ -99,11 +99,17 @@ class Settings(BaseSettings):
     MAX_AI_INPUT_CHARS: int = 8000         # 单次 AI 输入（上下文+消息）最大字符数
     MAX_IMAGES_PER_MESSAGE: int = 10       # 单条消息最多识图张数（防图片轰炸）
     MAX_FORWARD_DEPTH: int = 5             # 嵌套转发最大展开深度
-    DAILY_AI_CALL_BUDGET: int = 0          # 每日 AI 调用次数上限（0=不限；>0 时超出即闭嘴）
+    DAILY_AI_CALL_BUDGET: int = 0          # 全局每日 AI 调用次数上限（0=不限；>0 时超出即闭嘴）
+    GROUP_DAILY_AI_CALL_BUDGET: int = 0    # 每群每日 AI 调用次数上限（0=不限；防止一个群刷光全局额度）
+    USER_AI_CALL_MIN_INTERVAL: int = 0     # 同一用户两次 AI 回复的最小间隔秒数（0=不限；per-user 限速）
+    BUDGET_EXHAUSTED_NOTICE: bool = True   # 额度用尽时在群里说一句提示（每天每群一次）
     MAX_IMAGE_DOWNLOAD_BYTES: int = 10485760  # 单张图片下载大小上限（10MB）
     IMAGE_DOWNLOAD_MAX_REDIRECTS: int = 3  # 图片下载最大重定向次数
+    # 可选图片主机白名单（逗号分隔；空=放行所有 http/https，设置后只放行白名单+NapCat 本地 loopback）
+    IMAGE_ALLOWED_HOSTS: Optional[List[str]] = Field(None, env="IMAGE_ALLOWED_HOSTS")
     # 数据治理
-    MEMORY_TTL_DAYS: int = 0               # 记忆保留天数（0=永久保留）
+    MEMORY_TTL_DAYS: int = 0               # 用户原话记忆保留天数（0=永久保留）
+    MODEL_MEMORY_TTL_DAYS: int = 30        # AI 推断记忆(model)保留天数（低信任，默认 30 天自动过期）
 
     @field_validator("ALLOWED_GROUP_IDS", "TOXIC_GROUP_IDS", "MEMORY_DISABLED_GROUPS", "ADMIN_QQ_IDS", mode="before")
     @classmethod
@@ -112,6 +118,15 @@ class Settings(BaseSettings):
             if v.strip() == "":
                 return []
             return [int(x.strip()) for x in v.split(",") if x.strip().isdigit()]
+        return v
+
+    @field_validator("IMAGE_ALLOWED_HOSTS", mode="before")
+    @classmethod
+    def parse_str_list(cls, v):
+        if isinstance(v, str):
+            if v.strip() == "":
+                return []
+            return [x.strip().lower() for x in v.split(",") if x.strip()]
         return v
     
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

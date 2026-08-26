@@ -18,9 +18,10 @@ class MemoryManager:
     - P3 数据治理：TTL 过期清理 + 审计日志
     """
 
-    def __init__(self, memory_path: str, ttl_days: int = 0, audit_log_path: Optional[str] = None):
+    def __init__(self, memory_path: str, ttl_days: int = 0, audit_log_path: Optional[str] = None, model_memory_ttl_days: int = 30):
         self.memory_path = memory_path
         self.ttl_days = max(0, int(ttl_days or 0))
+        self.model_memory_ttl_days = max(0, int(model_memory_ttl_days or 0))
         self.audit_log_path = audit_log_path
         self.memory: Dict[str, Dict] = {}
         self._save_lock = asyncio.Lock()
@@ -61,10 +62,16 @@ class MemoryManager:
             await asyncio.to_thread(self._save_sync)
 
     # ---------- TTL 过期清理（P3 数据治理） ----------
+    def _note_effective_ttl(self, note) -> int:
+        """按置信度分级 TTL：AI 推断记忆(model)低信任、默认 30 天过期；用户原话/无标记按 ttl_days。"""
+        if isinstance(note, dict) and note.get("confidence") == "model":
+            return self.model_memory_ttl_days
+        return self.ttl_days
+
     def _prune_expired(self) -> None:
-        if self.ttl_days <= 0:
+        if self.ttl_days <= 0 and self.model_memory_ttl_days <= 0:
             return
-        cutoff = time.time() - self.ttl_days * 86400
+        now = time.time()
         changed = False
         for key, mem in self.memory.items():
             notes = mem.get("notes")
@@ -72,10 +79,15 @@ class MemoryManager:
                 continue
             kept = []
             for note in notes:
+                ttl = self._note_effective_ttl(note)
+                if ttl <= 0:
+                    kept.append(note)
+                    continue
                 created = None
                 if isinstance(note, dict):
                     created = note.get("created_at")
-                if created is None or created >= cutoff:
+                # 没有时间戳的旧数据无法判断年龄 → 保留
+                if created is None or (now - created) < ttl * 86400:
                     kept.append(note)
                 else:
                     changed = True

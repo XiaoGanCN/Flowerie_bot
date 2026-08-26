@@ -203,23 +203,29 @@ bash run.sh
 | `CONTEXT_BACKUP_INTERVAL` | 上下文备份间隔（秒） | `60` |
 | `MEMORY_PATH` | 记忆库路径 | `./data/memory.json` |
 | `ARCHIVE_BASE_DIR` | 消息存档路径 | `./data/archive` |
-| `MEMORY_TTL_DAYS` | 记忆保留天数（0=永久） | `0` |
+| `MEMORY_TTL_DAYS` | 用户原话记忆保留天数（0=永久） | `0` |
+| `MODEL_MEMORY_TTL_DAYS` | AI 推断记忆保留天数（低信任，默认 30 天过期） | `30` |
 | `AUDIT_LOG_PATH` | 记忆写入/删除审计日志 | `./data/audit.log` |
 | `MAX_FILE_TEXT_CHARS` | 文件解析文本最大字符数 | `8000` |
 | `MAX_PDF_PAGES` / `MAX_EXCEL_CELLS` / `MAX_CSV_ROWS` | 文件解析规模上限 | `100` / `50000` / `10000` |
 | `MAX_AI_INPUT_CHARS` | 单次 AI 输入最大字符数 | `8000` |
 | `MAX_IMAGES_PER_MESSAGE` | 单条消息最多识图张数 | `10` |
 | `MAX_FORWARD_DEPTH` | 嵌套转发最大展开深度 | `5` |
-| `DAILY_AI_CALL_BUDGET` | 每日 AI 调用上限（0=不限） | `0` |
+| `DAILY_AI_CALL_BUDGET` | 全局每日 AI 调用上限（0=不限） | `0` |
+| `GROUP_DAILY_AI_CALL_BUDGET` | 每群每日 AI 调用上限（0=不限） | `0` |
+| `USER_AI_CALL_MIN_INTERVAL` | 同一用户两次 AI 回复最小间隔（秒，0=不限） | `0` |
+| `BUDGET_EXHAUSTED_NOTICE` | 额度用尽时群里提示（每天每群一次） | `true` |
+| `IMAGE_ALLOWED_HOSTS` | 图片主机白名单（空=放行所有 http/https） | — |
 | `MEMORY_DISABLED_GROUPS` | 禁用记忆的群（逗号分隔） | — |
 | `ADMIN_QQ_IDS` | 管理员 QQ（可执行 /memory_clear /memory_dump） | — |
 
 完整配置请参考 .env.example。
 
-### 🛡️ 记忆管理命令（用户数据控制权）
+### 🛡️ 指令菜单（用户数据控制权）
 
 | 命令 | 权限 | 作用 |
 |---|---|---|
+| `/help` | 所有人 | 显示指令菜单 |
 | `/memory` | 所有人 | 查看花璃记住了自己什么 |
 | `/forget 关键词` | 所有人 | 删除包含关键词的自己的记忆 |
 | `/forget_me` | 所有人 | 清空花璃对自己的全部记忆 |

@@ -42,6 +42,9 @@ class GlobalState:
     # 每日 AI 调用预算（P1-5）：记录"哪天"用了"多少次"
     ai_budget_date: str = ""
     ai_budget_count: int = 0
+    group_ai_budget_count: Dict[int, int] = field(default_factory=dict)  # 每群每日 AI 调用次数
+    user_ai_last_call: Dict[int, float] = field(default_factory=dict)    # 每用户最近一次 AI 调用时间
+    budget_notified_groups: Dict[int, str] = field(default_factory=dict)  # 群 -> 已提示额度的日期
 
 # ---------- 消息结构 ----------
 @dataclass

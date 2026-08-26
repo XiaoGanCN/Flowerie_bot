@@ -184,9 +184,12 @@ class MessageRouter:
         else:
             self.policy_engine.update_user_time(user_id, group_id)
 
-        # 每日 AI 调用预算（P1-5）：超出即闭嘴，防 API 额度被刷爆
-        if not self._ai_budget_available():
-            logger.warning("今日 AI 调用预算已用完，跳过回复")
+        # 每日 AI 调用预算（P1-5）：全局+每群+每用户限速，超出即拦截（可选在群里提示）
+        allowed, budget_reason = self._ai_budget_available(group_id, user_id)
+        if not allowed:
+            if budget_reason in ("global", "group") and self.config.BUDGET_EXHAUSTED_NOTICE:
+                await self._notify_budget_exhausted(group_id)
+            logger.warning(f"AI 预算/限速拦截: group={group_id} user={user_id} reason={budget_reason}")
             return
 
         # ---------- 调用 AI ----------
@@ -281,6 +284,22 @@ class MessageRouter:
         parts = text.split(maxsplit=1)
         cmd = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
+        is_admin = self.config.ADMIN_QQ_IDS and user_id in self.config.ADMIN_QQ_IDS
+
+        if cmd == "/help":
+            lines = [
+                "花璃指令菜单：",
+                "/help 显示本菜单",
+                "/memory 看看我记住了你什么",
+                "/forget 关键词 删掉包含该词的记忆",
+                "/forget_me 清空我对你的全部记忆",
+            ]
+            if is_admin:
+                lines.append("/memory_clear 清空本群所有记忆（管理员）")
+                lines.append("/memory_dump 导出本群记忆（管理员）")
+            lines.append("另外 @花璃 或在群里聊天就有机会被她接话～")
+            await self.sender.send_group_message(group_id, "\n".join(lines))
+            return True
 
         if cmd == "/memory":
             notes = self.memory_manager.get_user_notes(user_id, group_id)
@@ -311,7 +330,6 @@ class MessageRouter:
             return True
 
         # 管理员命令（P3-15）
-        is_admin = self.config.ADMIN_QQ_IDS and user_id in self.config.ADMIN_QQ_IDS
         if is_admin and cmd == "/memory_clear":
             group_cleared = 0
             for key in list(self.memory_manager.memory.keys()):
@@ -340,20 +358,52 @@ class MessageRouter:
 
         return False
 
-    # ---------- 每日 AI 预算（P1-5） ----------
-    def _ai_budget_available(self) -> bool:
-        budget = self.config.DAILY_AI_CALL_BUDGET
-        if not budget or budget <= 0:
-            return True
+    # ---------- 每日 AI 预算（P1-5：全局 + 每群 + 每用户限速） ----------
+    def _ai_budget_available(self, group_id: int, user_id: int) -> Tuple[bool, str]:
+        """返回 (是否允许, 拒绝原因)。原因: ''(允许) / 'user'(用户限速) / 'global'(全局预算) / 'group'(群预算)。"""
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
         if self.global_state.ai_budget_date != today:
             self.global_state.ai_budget_date = today
             self.global_state.ai_budget_count = 0
+            self.global_state.group_ai_budget_count.clear()
+            self.global_state.budget_notified_groups.clear()
+
+        # 用户级限速（per-user rate limit，不是预算，不触发提示）
+        if self.config.USER_AI_CALL_MIN_INTERVAL > 0:
+            last = self.global_state.user_ai_last_call.get(user_id, 0.0)
+            if time.time() - last < self.config.USER_AI_CALL_MIN_INTERVAL:
+                return False, "user"
+
+        # 全局预算
         self.global_state.ai_budget_count += 1
-        if self.global_state.ai_budget_count > budget:
-            return False
-        return True
+        if self.config.DAILY_AI_CALL_BUDGET > 0 and self.global_state.ai_budget_count > self.config.DAILY_AI_CALL_BUDGET:
+            return False, "global"
+
+        # 群级预算：防止一个群把全局额度刷光
+        gcount = self.global_state.group_ai_budget_count.get(group_id, 0) + 1
+        self.global_state.group_ai_budget_count[group_id] = gcount
+        if self.config.GROUP_DAILY_AI_CALL_BUDGET > 0 and gcount > self.config.GROUP_DAILY_AI_CALL_BUDGET:
+            return False, "group"
+
+        self.global_state.user_ai_last_call[user_id] = time.time()
+        return True, ""
+
+    async def _notify_budget_exhausted(self, group_id: int) -> None:
+        """额度用尽提示：每天每群最多发一次，避免刷屏。"""
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self.global_state.budget_notified_groups.get(group_id) == today:
+            return
+        self.global_state.budget_notified_groups[group_id] = today
+        cap = self.config.GROUP_DAILY_AI_CALL_BUDGET or self.config.DAILY_AI_CALL_BUDGET or 0
+        used = self.global_state.ai_budget_count
+        try:
+            await self.sender.send_group_message(
+                group_id, f"今日AI额度已用尽（已用{used}次/上限{cap}次），明天再来找花璃玩吧～"
+            )
+        except Exception as e:
+            logger.error(f"额度提示发送失败: {e}")
 
     # ---------- 群级记忆隐私开关（P3-13） ----------
     def _memory_disabled(self, group_id: int) -> bool:
