@@ -203,15 +203,18 @@ bash run.sh
 | `CONTEXT_BACKUP_INTERVAL` | 上下文备份间隔（秒） | `60` |
 | `MEMORY_PATH` | 记忆库路径 | `./data/memory.json` |
 | `ARCHIVE_ENABLED` | 是否启用消息存档（默认关，隐私优先） | `false` |
+| `ARCHIVE_RETENTION_DAYS` / `ARCHIVE_MAX_SIZE_MB` | 存档保留天数 / 每群大小上限 | `0` / `0` |
 | `ARCHIVE_BASE_DIR` | 消息存档路径 | `./data/archive` |
 | `MEMORY_TTL_DAYS` | 用户原话记忆保留天数（0=永久） | `0` |
 | `MODEL_MEMORY_TTL_DAYS` | AI 推断记忆保留天数（低信任，默认 30 天过期） | `30` |
 | `AUDIT_LOG_PATH` | 记忆写入/删除审计日志 | `./data/audit.log` |
 | `MAX_FILE_TEXT_CHARS` | 文件解析文本最大字符数 | `8000` |
+| `MAX_FILE_DOWNLOAD_BYTES` | 文件解码字节兜底上限 | `2MB` |
 | `MAX_PDF_PAGES` / `MAX_EXCEL_CELLS` / `MAX_CSV_ROWS` | 文件解析规模上限 | `100` / `50000` / `10000` |
 | `MAX_AI_INPUT_CHARS` | 单次 AI 输入最大字符数 | `8000` |
 | `MAX_IMAGES_PER_MESSAGE` | 单条消息最多识图张数 | `10` |
 | `MAX_FORWARD_DEPTH` | 嵌套转发最大展开深度 | `5` |
+| `MAX_FORWARD_MESSAGES` / `MAX_FORWARD_NODES` / `MAX_FORWARD_FETCHES` | 转发解析消息/节点/拉取预算（防套娃 DoS） | `100` / `500` / `20` |
 | `DAILY_AI_CALL_BUDGET` | 全局每日 AI 调用上限（0=不限） | `1000` |
 | `GROUP_DAILY_AI_CALL_BUDGET` | 每群每日 AI 调用上限（0=不限） | `300` |
 | `USER_AI_CALL_MIN_INTERVAL` | 同一用户两次 AI 回复最小间隔（秒，0=不限） | `10` |

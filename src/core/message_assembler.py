@@ -185,5 +185,44 @@ class MessageAssembler:
             line = f"[{time_str}] 用户{user_id}：{text}\n"
             with open(filename, "a", encoding="utf-8") as f:
                 f.write(line)
+            # 存档治理：保留天数 + 每群目录大小上限（隐私数据不是无限堆积）
+            self._archive_cleanup(group_dir)
         except Exception as e:
             logger.error(f"Archive error: {e}")
+
+    def _archive_cleanup(self, group_dir: str) -> None:
+        """按 ARCHIVE_RETENTION_DAYS（保留天数）与 ARCHIVE_MAX_SIZE_MB（每群大小上限）清理存档。"""
+        try:
+            retention_days = getattr(self.config, "ARCHIVE_RETENTION_DAYS", 0)
+            max_size_mb = getattr(self.config, "ARCHIVE_MAX_SIZE_MB", 0)
+            if not retention_days and not max_size_mb:
+                return
+            files = [os.path.join(group_dir, f) for f in os.listdir(group_dir)
+                     if os.path.isfile(os.path.join(group_dir, f))]
+            # 1) 按保留天数清理过期文件
+            if retention_days and retention_days > 0:
+                cutoff = time.time() - retention_days * 86400
+                for fp in files:
+                    try:
+                        if os.path.getmtime(fp) < cutoff:
+                            os.remove(fp)
+                    except OSError:
+                        pass
+            # 2) 按目录大小上限删最旧（从旧到新删到不超限）
+            if max_size_mb and max_size_mb > 0:
+                limit = max_size_mb * 1024 * 1024
+                files = [os.path.join(group_dir, f) for f in os.listdir(group_dir)
+                         if os.path.isfile(os.path.join(group_dir, f))]
+                files.sort(key=os.path.getmtime)
+                total = sum(os.path.getsize(fp) for fp in files)
+                for fp in files:
+                    if total <= limit:
+                        break
+                    try:
+                        total -= os.path.getsize(fp)
+                        os.remove(fp)
+                        logger.debug(f"Archive pruned (size cap): {os.path.basename(fp)}")
+                    except OSError:
+                        pass
+        except Exception as e:
+            logger.error(f"Archive cleanup error: {e}")

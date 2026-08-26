@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     MEMORY_PATH: str = "./data/memory.json"
     ARCHIVE_BASE_DIR: str = "./data/archive"
     ARCHIVE_ENABLED: bool = False          # 是否启用消息存档（默认关，隐私优先；开=true 才写入 archive/）
+    ARCHIVE_RETENTION_DAYS: int = 0        # 存档保留天数（0=永久；>0 自动清理过期文件）
+    ARCHIVE_MAX_SIZE_MB: int = 0           # 每群存档目录总大小上限 MB（0=不限；超出删最旧）
     AUDIT_LOG_PATH: str = "./data/audit.log"
 
     # White list
@@ -94,12 +96,17 @@ class Settings(BaseSettings):
     # ===== 安全审计加固（P1/P2/P3）=====
     # 资源限制：防止超大文件/超长输入消耗 CPU/RAM/Token
     MAX_FILE_TEXT_CHARS: int = 8000        # 文件解析后提取文本的最大字符数
+    MAX_FILE_DOWNLOAD_BYTES: int = 2097152  # 文件下载解码字节兜底上限（2MB，防 NapCat 返回超预期内容）
     MAX_PDF_PAGES: int = 100               # PDF 最多解析页数
     MAX_EXCEL_CELLS: int = 50000           # Excel 最多解析单元格数
     MAX_CSV_ROWS: int = 10000              # CSV 最多解析行数
     MAX_AI_INPUT_CHARS: int = 8000         # 单次 AI 输入（上下文+消息）最大字符数
     MAX_IMAGES_PER_MESSAGE: int = 10       # 单条消息最多识图张数（防图片轰炸）
+    # 转发解析预算（防套娃转发 DoS）：深度/消息数/节点数/拉取次数四重上限
     MAX_FORWARD_DEPTH: int = 5             # 嵌套转发最大展开深度
+    MAX_FORWARD_MESSAGES: int = 100        # 展开后的消息总数上限
+    MAX_FORWARD_NODES: int = 500           # 递归遍历节点总数上限
+    MAX_FORWARD_FETCHES: int = 20          # 单条消息最多 /get_forward_msg 拉取次数（含缓存去重）
     # 预算默认收紧（安全默认而非 0=不限）：个人 Bot 用量远低于此，公开群也不会被无限刷
     DAILY_AI_CALL_BUDGET: int = 1000       # 全局每日 AI 调用次数上限（0=不限；>0 时超出即闭嘴）
     GROUP_DAILY_AI_CALL_BUDGET: int = 300  # 每群每日 AI 调用次数上限（0=不限；防止一个群刷光全局额度）

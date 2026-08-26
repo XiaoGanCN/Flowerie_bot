@@ -92,6 +92,11 @@ class FileParser:
             if not b64:
                 return "", False
             content_bytes = base64.b64decode(b64)
+            # 兜底字节上限（防 NapCat 返回超预期内容，不信任上传通知里的 file_size）
+            max_bytes = getattr(self.config, "MAX_FILE_DOWNLOAD_BYTES", 2 * 1024 * 1024)
+            if len(content_bytes) > max_bytes:
+                logger.error(f"File decode bytes exceed limit: {len(content_bytes)} > {max_bytes}")
+                return "", False
             ext = file_name.split('.')[-1].lower() if '.' in file_name else ''
             extracted_text = ""
 
@@ -218,7 +223,14 @@ class FileParser:
             return results
 
         async def fetch_forward_messages(forward_id) -> Optional[List[Dict]]:
-            """通过 NapCat HTTP API 拉取一次转发内容。"""
+            """通过 NapCat HTTP API 拉取一次转发内容（带缓存去重，同一 id 只拉一次）。"""
+            if forward_id in seen_forwards:
+                logger.debug(f"Forward {forward_id} served from cache")
+                return seen_forwards[forward_id]
+            if state["fetches"] >= max_fetches:
+                logger.warning(f"Forward fetch budget exceeded ({max_fetches}), stop fetching")
+                return None
+            state["fetches"] += 1
             try:
                 client = self._get_client(timeout=10)
                 resp = await client.get(
@@ -228,20 +240,31 @@ class FileParser:
                 if resp.status_code == 200:
                     result = resp.json()
                     if result.get("retcode") == 0:
-                        return result.get("data", {}).get("messages")
+                        messages = result.get("data", {}).get("messages")
+                        seen_forwards[forward_id] = messages
+                        return messages
             except Exception as e:
                 logger.error(f"Get forward msg error: {e}")
             return None
 
         async def resolve_nested_forwards(node, depth: int = 0):
-            """递归展开嵌套转发：把 forward 节点（无内联 messages 但有 id）拉取后展开。
+            """递归展开嵌套转发（带缓存 + 节点/消息/拉取预算，防套娃转发 DoS）。
 
-            这样聊天记录里嵌套的聊天记录、以及转发里的转发都能解析出来。
-            深度上限 MAX_FORWARD_DEPTH（P1-5），防止恶意多层嵌套拖垮服务。
+            - MAX_FORWARD_DEPTH：展开深度上限
+            - MAX_FORWARD_NODES：递归遍历节点总数上限
+            - MAX_FORWARD_MESSAGES：展开后消息总数上限（超出截断）
+            - MAX_FORWARD_FETCHES：/get_forward_msg 拉取次数上限
+            - seen_forwards：同一 forward id 只拉一次（防重复请求）
             """
-            if depth > getattr(self.config, "MAX_FORWARD_DEPTH", 5):
+            state["nodes"] += 1
+            if depth > max_depth or state["nodes"] > max_nodes:
                 return node
             if isinstance(node, list):
+                # 消息总数预算：超出直接截断
+                if state["messages"] + len(node) > max_messages:
+                    node = node[: max(0, max_messages - state["messages"])]
+                    logger.warning(f"Forward message budget exceeded ({max_messages}), truncated")
+                state["messages"] += len(node)
                 return [await resolve_nested_forwards(item, depth) for item in node]
             if not isinstance(node, dict):
                 return node
@@ -260,6 +283,14 @@ class FileParser:
                 return node
             # 普通节点：递归展开所有字段（含 message 数组里的嵌套 forward）
             return {key: await resolve_nested_forwards(value, depth) for key, value in node.items()}
+
+        # 转发预算状态（一次 extract_forward_messages 调用共享）
+        max_depth = getattr(self.config, "MAX_FORWARD_DEPTH", 5)
+        max_messages = getattr(self.config, "MAX_FORWARD_MESSAGES", 100)
+        max_nodes = getattr(self.config, "MAX_FORWARD_NODES", 500)
+        max_fetches = getattr(self.config, "MAX_FORWARD_FETCHES", 20)
+        state = {"nodes": 0, "messages": 0, "fetches": 0}
+        seen_forwards: Dict[str, List[Dict]] = {}
 
         for msg in message_array:
             if msg.get("type") == "forward":

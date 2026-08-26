@@ -406,25 +406,40 @@ class AIClient:
                     return None
                 for attempt in range(2):
                     try:
-                        resp = await self.client.get(
+                        # 流式下载 + content-length 预检：超上限立刻中止，不等下载完再拒绝
+                        size_cap = self.config.MAX_IMAGE_DOWNLOAD_BYTES
+                        body = b""
+                        rejected = False
+                        async with self.client.stream(
+                            "GET",
                             image_url,
                             timeout=timeout,
                             follow_redirects=True,
                             max_redirects=max(1, self.config.IMAGE_DOWNLOAD_MAX_REDIRECTS),
-                        )
-                        if resp.status_code == 200:
-                            body = resp.content
-                            # 大小上限：防止超大图片耗尽内存/带宽
-                            if len(body) > self.config.MAX_IMAGE_DOWNLOAD_BYTES:
-                                logger.error(f"Image too large: {len(body)} bytes > {self.config.MAX_IMAGE_DOWNLOAD_BYTES}")
-                                return None
-                            # MIME 嗅探：只接受常见图片格式（jpg/png/gif/webp/bmp）
-                            if not _looks_like_image(body):
-                                logger.error(f"Downloaded content is not an image: {image_url[:80]}")
-                                return None
+                        ) as resp:
+                            if resp.status_code != 200:
+                                logger.error(f"Image fetch failed HTTP {resp.status_code} (attempt {attempt + 1}): {image_url[:80]}")
+                            else:
+                                # Content-Length 预检
+                                cl = resp.headers.get("content-length")
+                                if cl and cl.isdigit() and int(cl) > size_cap:
+                                    logger.error(f"Image content-length too large: {cl} bytes > {size_cap}")
+                                    rejected = True
+                                else:
+                                    async for chunk in resp.aiter_bytes():
+                                        body += chunk
+                                        if len(body) > size_cap:
+                                            rejected = True
+                                            body = b""
+                                            break
+                        if rejected:
+                            logger.error(f"Image too large (> {size_cap} bytes), download aborted: {image_url[:80]}")
+                            break  # 超大/超限不重试
+                        if body and _looks_like_image(body):
                             image_bytes = body
                             break
-                        logger.error(f"Image fetch failed HTTP {resp.status_code} (attempt {attempt + 1}): {image_url[:80]}")
+                        if body:
+                            logger.error(f"Downloaded content is not an image: {image_url[:80]}")
                     except Exception as e:
                         logger.error(f"Image fetch error (attempt {attempt + 1}): {e}")
                     if attempt == 0:
