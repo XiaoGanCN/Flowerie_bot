@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import asyncio
 from typing import Dict, Any, Optional
 from loguru import logger
@@ -63,8 +64,26 @@ class MemoryManager:
         if 'notes' not in self.memory[key]:
             self.memory[key]['notes'] = []
         notes = self.memory[key]['notes']
-        if notes and notes[-1] == text:
-            return
+
+        # 高相似度去重：完全相同、互为子串、或字符相似度 >= 0.85 的旧记忆不再重复记录
+        from difflib import SequenceMatcher
+
+        def _norm(s: str) -> str:
+            # 去掉空白与常见标点，只比内容骨架
+            return re.sub(r"[\s，。！？、,.!?;；:：()（）「」『』【】\[\]]+", "", s)
+
+        text_norm = _norm(text)
+        for existing in notes:
+            existing_norm = _norm(existing)
+            if not existing_norm:
+                continue
+            if existing_norm == text_norm:
+                return
+            if existing_norm in text_norm or text_norm in existing_norm:
+                return
+            if SequenceMatcher(None, existing_norm, text_norm).ratio() >= 0.85:
+                return
+
         notes.append(text)
         if len(notes) > 50:
             self.memory[key]['notes'] = notes[-25:]

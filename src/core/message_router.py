@@ -80,6 +80,22 @@ class MessageRouter:
         clean_text, is_mentioned = self.file_parser.extract_mention_and_text(message_array, self.config.BOT_QQ)
         full_text = clean_text
 
+        # 识别图片/表情包（OneBot11 image 段，NapCat 消息里带 url）
+        image_descriptions = []
+        for seg in message_array:
+            if seg.get("type") == "image":
+                seg_data = seg.get("data") or {}
+                url = seg_data.get("url", "")
+                if url:
+                    desc = await self.ai_client.describe_image(url)
+                    if desc:
+                        image_descriptions.append(desc)
+                    else:
+                        logger.warning(f"Vision describe failed for image url: {url[:80]}")
+        if image_descriptions:
+            full_text += f"\n[用户发送了一张图片，内容如下：]\n{'; '.join(image_descriptions)}\n[图片内容结束]"
+            logger.debug(f"Image descriptions: {image_descriptions}")
+
         # 检查是否被回复或提及
         is_reply_to_bot = False
         has_reply_to_other = False
@@ -199,7 +215,9 @@ class MessageRouter:
 
         # ---------- 调用 AI ----------
         context_text = self.policy_engine.get_context_text(group_id, max_messages=150)
-        user_prompt = full_text if full_text.strip() else "用户刚刚@了你，但没有说话。"
+        user_prompt = full_text if full_text.strip() else (
+            f"用户刚刚发了一张图片，图片内容：{'; '.join(image_descriptions)}" if image_descriptions else "用户刚刚@了你，但没有说话。"
+        )
         reply, memory_update = await self.ai_client.chat(
             user_message=user_prompt,
             context=context_text,

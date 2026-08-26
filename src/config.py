@@ -8,6 +8,17 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = Field(..., env="DEEPSEEK_API_KEY")
     DEEPSEEK_API_URL: str = "https://api.deepseek.com/chat/completions"
     DEEPSEEK_MODEL: str = "deepseek-v4-flash"
+
+    # 引战检测 AI（可选；留空则回退用 DeepSeek 的 key/网址/模型）
+    TOXIC_API_KEY: Optional[str] = None
+    TOXIC_API_URL: Optional[str] = None
+    TOXIC_MODEL: Optional[str] = None
+
+    # 视觉识图（花璃看图用；可选，留空回退用 DeepSeek key/网址）
+    VISION_API_KEY: Optional[str] = None
+    VISION_API_URL: Optional[str] = None
+    VISION_MODEL: Optional[str] = None
+    VISION_TIMEOUT: int = 30
     
     # Bot
     BOT_QQ: int = Field(..., env="BOT_QQ")

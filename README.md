@@ -35,13 +35,14 @@
 
 | 功能 | 说明 |
 | :--- | :--- |
-| 💬 **AI 对话** | DeepSeek v4 驱动，20 字内简洁回复，小恶魔系语气 |
+| 💬 **AI 对话** | DeepSeek v4 驱动，20 字内简洁回复，小恶魔系语气（模型/API 网址环境变量可配）|
+| 👁️ **识图回复** | 群里的图片与表情包不再是空消息：NapCat 图片段 → 视觉模型识图 → 自然回复（视觉模型/网址/key 环境变量可配）|
 | 📎 **文件解析** | 自动识别并读取 txt / pdf / docx / xlsx / csv 内容 |
 | 📦 **转发解析** | 递归提取合并转发消息中的所有文本 |
 | 🃏 **卡片解析** | 提取 JSON 卡片（分享链接、小程序等）的文本内容 |
-| 🧠 **记忆库** | 按 `(用户, 群)` 隔离，自动记录群友偏好，持久化 JSON |
+| 🧠 **记忆库** | 按 `(用户, 群)` 隔离，自动记录群友偏好，持久化 JSON；**高相似度自动去重**，记忆内容只写客观事实不写内心戏 |
 | 🔁 **复读检测** | 3 次相同消息触发复读，带冷却 |
-| ⚔️ **引战检测** | 关键词 + AI 双重校验，15 分钟冷却，避免误伤 |
+| ⚔️ **引战检测** | 关键词 + AI 双重校验，15 分钟冷却，避免误伤（**检测模型/网址/key 可独立配置**，留空回退 DeepSeek）|
 | 🎯 **冷却系统** | 用户级（5s）+ 机器人级（2s）+ 连续回复惩罚 |
 | ☀️ **主动聊天** | 4~6 小时间隔，10% 概率触发，夜间静默 |
 | 👆 **戳戳回复** | 被戳头像随机回复，带最近 5 条去重 |
@@ -173,6 +174,8 @@ python main.py
 | 环境变量 | 说明 | 默认值 |
 | :--- | :--- | :--- |
 | `DEEPSEEK_API_KEY` | DeepSeek API 密钥（**必填**） | — |
+| `DEEPSEEK_API_URL` | DeepSeek API 地址（群聊模型走这里） | `https://api.deepseek.com/chat/completions` |
+| `DEEPSEEK_MODEL` | DeepSeek 群聊模型 | `deepseek-v4-flash` |
 | `BOT_QQ` | 机器人 QQ 号（**必填**） | — |
 | `WS_HOST` | WebSocket 监听地址 | `127.0.0.1` |
 | `WS_PORT` | WebSocket 监听端口 | `3001` |
@@ -183,17 +186,25 @@ python main.py
 | `BOT_COOLDOWN` | 机器人全局冷却（秒） | `2` |
 | `ALLOWED_GROUP_IDS` | 白名单群号（逗号分隔，留空=所有群） | — |
 | `TOXIC_GROUP_IDS` | 引战检测群号（逗号分隔） | — |
+| `TOXIC_API_KEY` / `TOXIC_API_URL` / `TOXIC_MODEL` | 引战检测 AI 独立配置（留空回退用 DeepSeek） | — |
+| `VISION_MODEL` | 识图视觉模型 | `deepseek-v4-flash-vision-exp` |
+| `VISION_API_URL` / `VISION_API_KEY` | 视觉模型网址/密钥（留空回退用 DeepSeek） | — |
+| `VISION_TIMEOUT` | 识图超时（秒） | `30` |
 | `MEMORY_PATH` | 记忆库路径 | `./data/memory.json` |
 | `ARCHIVE_BASE_DIR` | 消息存档路径 | `./data/archive` |
 
 完整配置请参考 .env.example。
+
+> 💡 **识图说明**：花璃现在能"看"群里的图片和表情包（NapCat OneBot11 的 `image` 段带 `url`）。识图走独立的视觉模型（默认 `deepseek-v4-flash-vision-exp`），把图片转成一句描述再自然回复；视觉 key 留空时复用 DeepSeek 的 key。
+>
+> 💡 **记忆去重**：记忆库现在会对高相似度的记录去重（完全相同/互为子串/相似度 ≥0.85 都不再重复写入），并约束 AI 记忆内容只写客观事实、不写内心戏，避免记忆卡像"喜欢打三角州 已退游 / 喜欢打三角洲 已退游 好家伙…"这样越积越乱。
 
 ---
 
 ## 📁 项目结构
 
 ```
-lingbot/
+Flowerie_bot/
 ├── .env.example          # 环境变量模板
 ├── .gitignore            # Git 忽略配置
 ├── requirements.txt      # Python 依赖

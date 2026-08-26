@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import random  # ✅ 新增：修复重试时 random.random() 未定义的问题
+import base64
 from typing import Optional, Tuple, Any
 import httpx
 from loguru import logger
@@ -108,6 +109,9 @@ class AIClient:
             "**重要：无论你是否被 @，只要用户在群聊中说出“我喜欢...”、“我讨厌...”、“我害怕...”、“我是...”、“我的...是...”等明确表达个人偏好或特征的句子，你必须在回复中主动记录，格式为“记忆: 内容”（例如：记忆: 喜欢玩三角洲）。**\n"
             "如果用户没有明确说出个人信息，则不要记录。\n"
             "记录时，如果该信息是当前发言用户自己的，可以省略用户QQ号，直接写“记忆: 内容”；如果记录的是其他用户的信息，请写“【记忆】用户QQ号: 你想记住的内容”。\n"
+            "【记忆书写铁律】记忆内容必须极简客观，只写事实本身（如“喜欢玩三角洲”“怕黑”），不超过15个字。\n"
+            "严禁在记忆里加入任何内心戏、吐槽、评价、感慨或联想，例如“好家伙”“退游了还提这个”“是怀念了吗”“笑死”“绷不住了”这类话绝对不能写进记忆。\n"
+            "同样的信息已经记录过（或内容高度相似）时，绝对不要重复记录。\n"
             "我会在后台保存这些记忆，之后每次对话都会把这些记忆告诉你，你就可以更好地了解大家。\n"
             f"{memory_text}"
             "\n-------- 以下是你必须严格遵循的群聊记录（最近150条消息） --------\n"
@@ -119,6 +123,7 @@ class AIClient:
             "3. 如果记录中没有提到相关话题 请如实说'不知道'或'没看到' 不要胡编\n"
             "4. 你的回复要自然地融入上面的对话 像真实群友一样接话 不要突兀\n"
             "5. 如果用户发送了文件或转发了消息 你会看到以 '[用户上传了一个文件，内容如下：]' 或 '[用户转发了多条消息，内容如下：]' 开头的内容 请基于这些内容来回复\n"
+            "5.1 如果用户发送了图片或表情包 你会看到以 '[用户发送了一张图片，内容如下：]' 开头的内容 那是图片的描述 请基于描述自然回复 不要说'我看到图片了'之类的话\n"
             "6. 如果用户分享了链接或卡片 你会看到以 '[用户分享了一个卡片，内容如下：]' 开头的内容 包含标题 描述 链接等信息 如果用户问的是'这是什么软件/视频/链接'等 请直接根据卡片内容回答\n"
             "7. 禁止在任何情况下使用'七哥' '七君' '七'加任何称呼来指代群友\n"
             "8. 请根据以上上下文 回复最新的一条消息"
@@ -274,7 +279,10 @@ class AIClient:
         if not keyword_hit:
             return False
 
-        # AI 二次确认
+        # AI 二次确认（引战检测可独立配置模型/网址/key，留空回退用 DeepSeek）
+        toxic_model = self.config.TOXIC_MODEL or self.config.DEEPSEEK_MODEL
+        toxic_url = self.config.TOXIC_API_URL or self.config.DEEPSEEK_API_URL
+        toxic_key = self.config.TOXIC_API_KEY or self.config.DEEPSEEK_API_KEY
         prompt = (
             f"任务：判断以下聊天内容是否属于引战、骂人、人身攻击、歧视或煽动对立的恶意言论。\n"
             f"内容：{text}\n"
@@ -282,7 +290,7 @@ class AIClient:
         )
         try:
             payload = {
-                "model": self.config.DEEPSEEK_MODEL,
+                "model": toxic_model,
                 "messages": [
                     {"role": "system", "content": "你是一个内容安全检测助手，只回答'是'或'否'。"},
                     {"role": "user", "content": prompt}
@@ -291,9 +299,9 @@ class AIClient:
                 "max_tokens": 5,
                 "top_p": 0.9,
             }
-            headers = {"Authorization": f"Bearer {self.config.DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+            headers = {"Authorization": f"Bearer {toxic_key}", "Content-Type": "application/json"}
             r = await self.client.post(
-                self.config.DEEPSEEK_API_URL,
+                toxic_url,
                 headers=headers,
                 json=payload,
                 timeout=10
@@ -314,3 +322,65 @@ class AIClient:
             logger.error(f"Toxic AI detection error: {e}, fallback to keyword")
             return keyword_hit
         return False
+
+    # ---------- 视觉识图（花璃看图，OneBot11 image 段的 url） ----------
+    async def describe_image(self, image_url: str) -> Optional[str]:
+        """下载图片并调用视觉模型识别，返回一句话描述；失败返回 None。
+
+        视觉模型/网址/key 由环境变量 VISION_MODEL / VISION_API_URL / VISION_API_KEY
+        独立配置，留空时回退用 DeepSeek 的 key/网址，默认模型 deepseek-v4-flash-vision-exp。
+        """
+        if not image_url:
+            return None
+        model = self.config.VISION_MODEL or "deepseek-v4-flash-vision-exp"
+        api_url = self.config.VISION_API_URL or self.config.DEEPSEEK_API_URL
+        api_key = self.config.VISION_API_KEY or self.config.DEEPSEEK_API_KEY
+        timeout = self.config.VISION_TIMEOUT or 30
+
+        # 1) 获取图片字节（支持 http(s) url 与 data: URI）
+        try:
+            if image_url.startswith("data:"):
+                b64_part = image_url.split(",", 1)[1] if "," in image_url else ""
+                image_bytes = base64.b64decode(b64_part) if b64_part else b""
+                if not image_bytes:
+                    return None
+            else:
+                resp = await self.client.get(image_url, timeout=timeout)
+                if resp.status_code != 200:
+                    logger.error(f"Image fetch failed HTTP {resp.status_code}: {image_url[:80]}")
+                    return None
+                image_bytes = resp.content
+        except Exception as e:
+            logger.error(f"Image fetch error: {e}")
+            return None
+
+        if not image_bytes:
+            return None
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+
+        payload = {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                    {"type": "text", "text": "请用一句简短自然的话（25字以内）描述这张图片的内容，不要提'这是一张图片'之类的话。"},
+                ],
+            }],
+            "temperature": 0.3,
+            "max_tokens": 200,
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            r = await self.client.post(api_url, headers=headers, json=payload, timeout=timeout)
+            if r.status_code != 200:
+                logger.error(f"Vision API HTTP {r.status_code}: {r.text[:200]}")
+                return None
+            data = r.json()
+            if "choices" in data and len(data["choices"]) > 0:
+                content = data["choices"][0]["message"]["content"].strip()
+                return content or None
+            logger.error(f"Vision API unexpected response: {str(data)[:200]}")
+        except Exception as e:
+            logger.error(f"Vision API error: {e}")
+        return None
