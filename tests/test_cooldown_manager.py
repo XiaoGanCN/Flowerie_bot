@@ -1,8 +1,8 @@
 import unittest
 from types import SimpleNamespace
 
-from src.models import GlobalState
 from src.core.cooldown_manager import CooldownManager
+from src.models import GlobalState
 
 
 def make_config(**overrides):

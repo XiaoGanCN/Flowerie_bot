@@ -1,7 +1,8 @@
-from dataclasses import dataclass, field
-from typing import Dict, Any, List, Deque
-from collections import deque
 import time
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Any, Deque, Dict, List
+
 
 @dataclass
 class BotDependencies:

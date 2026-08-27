@@ -8,15 +8,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.config import load_config, validate_config
-from src.utils.logging_setup import init_logging, get_logger
-from src.utils.metrics import registry
-from src.services.ai_client import AIClient
-from src.services.memory_manager import MemoryManager
-from src.services.file_parser import FileParser
-from src.services.sender import Sender
-from src.core.policy_engine import PolicyEngine
 from src.core.message_router import MessageRouter
+from src.core.policy_engine import PolicyEngine
 from src.core.websocket_server import WebSocketServer
+from src.services.ai_client import AIClient
+from src.services.file_parser import FileParser
+from src.services.memory_manager import MemoryManager
+from src.services.sender import Sender
+from src.utils.logging_setup import get_logger, init_logging
+from src.utils.metrics import registry
 
 logger = get_logger(__name__)
 

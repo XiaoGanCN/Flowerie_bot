@@ -1,9 +1,8 @@
 import time
 from typing import Dict
 
-
 from src.config import Settings
-from src.models import GroupState, GlobalState
+from src.models import GlobalState, GroupState
 from src.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)

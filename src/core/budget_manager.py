@@ -1,7 +1,6 @@
 import time
-from typing import Tuple
 from datetime import datetime
-
+from typing import Tuple
 
 from src.config import Settings
 from src.models import GlobalState

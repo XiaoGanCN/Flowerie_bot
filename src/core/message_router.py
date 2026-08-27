@@ -1,23 +1,22 @@
 import asyncio
-import time
 import random
-from typing import Dict, Any, Optional, Tuple
-from src.utils.metrics import registry
-
+import time
+from typing import Any, Dict, Optional, Tuple
 
 from src.config import Settings
+from src.core.budget_manager import BudgetManager
+from src.core.command_handler import CommandHandler
+from src.core.message_assembler import MessageAssembler
+from src.core.policy_engine import PolicyEngine
+from src.core.sanitizer import validate_memory_content
 from src.models import GroupMessage
 from src.services.ai_client import AIClient
-from src.services.memory_manager import MemoryManager
 from src.services.file_parser import FileParser
+from src.services.memory_manager import MemoryManager
 from src.services.sender import Sender
-from src.core.policy_engine import PolicyEngine
-from src.core.message_assembler import MessageAssembler
-from src.core.sanitizer import validate_memory_content
-from src.core.command_handler import CommandHandler
-from src.core.budget_manager import BudgetManager
-from src.utils.task_manager import BackgroundTaskManager
 from src.utils.logging_setup import get_logger
+from src.utils.metrics import registry
+from src.utils.task_manager import BackgroundTaskManager
 
 logger = get_logger(__name__)
 
@@ -513,7 +512,7 @@ class MessageRouter:
         if not context_text:
             logger.debug(f"No context for group {group_id}, skip active")
             return
-        for attempt in range(3):
+        for _attempt in range(3):
             prompt = "你现在就是QQ群里的花璃，一个17岁高中生，正在自然地跟群友聊天。\n没有人在叫你。\n如果最近大家讨论一个话题，自然接一句，像平时一样简短而自然地说句话。\n如果群冷了，可以偶尔冒一句，简短就好。\n不要解释。\n不要说自己是AI。\n不要刻意活跃气氛。\n一句话即可，尽量短，自然。"
             # 主动聊天同样过预算闸门（user_id=0 表示机器人主动发起；受群级/全局预算约束）
             reply, _active_mem, denied = await self.guarded_chat(

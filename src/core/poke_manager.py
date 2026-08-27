@@ -1,6 +1,5 @@
 import random
 
-
 from src.config import Settings
 from src.models import GlobalState
 from src.utils.logging_setup import get_logger

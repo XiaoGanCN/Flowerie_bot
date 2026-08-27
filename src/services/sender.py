@@ -1,9 +1,10 @@
 import asyncio
+
 import aiohttp
-from src.utils.metrics import registry
 
 from src.config import Settings
 from src.utils.logging_setup import get_logger
+from src.utils.metrics import registry
 
 logger = get_logger(__name__)
 

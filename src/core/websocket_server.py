@@ -1,15 +1,14 @@
 import asyncio
 import json
-import websockets
 from typing import Optional
 
-
-from src.utils.trace import trace_context
-from src.utils.metrics import registry
+import websockets
 
 from src.config import Settings
 from src.core.message_router import MessageRouter
 from src.utils.logging_setup import get_logger
+from src.utils.metrics import registry
+from src.utils.trace import trace_context
 
 logger = get_logger(__name__)
 
@@ -117,7 +116,7 @@ class WebSocketServer:
                 auth_ok = False
             if not auth_ok:
                 try:
-                    from urllib.parse import urlparse, parse_qs
+                    from urllib.parse import parse_qs, urlparse
                     query = parse_qs(urlparse(ws.path).query)
                     auth_ok = (query.get("access_token") or [""])[0] == token
                 except Exception:

@@ -1,9 +1,9 @@
-import json
 import base64
-import httpx
+import json
 from io import BytesIO, StringIO
-from typing import Tuple, Optional, List, Dict
+from typing import Dict, List, Optional, Tuple
 
+import httpx
 
 from src.config import Settings
 from src.utils.logging_setup import get_logger
@@ -207,7 +207,7 @@ class FileParser:
                 try:
                     extracted_text = self._cap(content_bytes.decode('utf-8'))
                     return extracted_text, True
-                except:
+                except Exception:
                     return "", False
         except json.JSONDecodeError:
             # 非 JSON 响应（如 NapCat 返回错误页）一律视为失败，绝不把原始响应当文件内容

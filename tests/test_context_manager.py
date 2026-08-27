@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
-from src.models import GlobalState, GroupState
 from src.core.context_manager import ContextManager
+from src.models import GlobalState, GroupState
 
 
 def run(coro):

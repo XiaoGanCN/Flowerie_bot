@@ -1,8 +1,8 @@
 
 
 from src.config import Settings
-from src.services.sender import Sender
 from src.services.memory_manager import MemoryManager
+from src.services.sender import Sender
 from src.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)

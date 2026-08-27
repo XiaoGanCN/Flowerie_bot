@@ -2,7 +2,6 @@ import time
 from collections import deque
 from typing import Dict
 
-
 from src.config import Settings
 from src.models import GroupState
 from src.utils.logging_setup import get_logger

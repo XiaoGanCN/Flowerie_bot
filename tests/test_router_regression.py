@@ -10,9 +10,9 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 
-from src.core.policy_engine import PolicyEngine
 from src.core.budget_manager import BudgetManager
 from src.core.message_router import MessageRouter
+from src.core.policy_engine import PolicyEngine
 
 
 def run(coro):

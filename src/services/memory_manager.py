@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.repositories.base import MemoryNote, MemoryRepository
 from src.repositories.sqlite_repository import SQLiteMemoryRepository
-from src.utils.metrics import registry
 from src.utils.logging_setup import get_logger
+from src.utils.metrics import registry
 
 logger = get_logger(__name__)
 
