@@ -67,7 +67,15 @@ class MessageRouter:
         # 后台任务统一管理（TaskManager：注册/跟踪/异常记录/优雅关闭）
         self.task_manager = task_manager or BackgroundTaskManager()
         # 并发上限：同时处理的消息数（WS 层用它限制 AI/识图并发，防止突发消息打爆 API）
-        self.process_semaphore = asyncio.Semaphore(max(1, config.MAX_CONCURRENT_AI))
+        # 惰性创建：Python 3.9 的 asyncio.Semaphore 构造时即绑定事件循环，
+        # 延迟到 async 上下文中首次使用（保证有 running loop）更健壮。
+        self._process_semaphore: Optional[asyncio.Semaphore] = None
+
+    @property
+    def process_semaphore(self) -> asyncio.Semaphore:
+        if self._process_semaphore is None:
+            self._process_semaphore = asyncio.Semaphore(max(1, self.config.MAX_CONCURRENT_AI))
+        return self._process_semaphore
 
     async def start(self):
         """启动主动聊天循环（若配置允许）与上下文备份循环（经 TaskManager 注册）"""

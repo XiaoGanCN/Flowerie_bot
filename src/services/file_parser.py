@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 
 # 可选依赖
 try:
-    import PyPDF2
+    import pypdf as PyPDF2  # PyPDF2 已弃用，pypdf 为其官方继任者（API 兼容）
 except ImportError:
     PyPDF2 = None
 try:

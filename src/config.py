@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # DeepSeek
-    DEEPSEEK_API_KEY: str = Field(..., env="DEEPSEEK_API_KEY")
+    DEEPSEEK_API_KEY: str = Field(...)  # 环境变量名 = 字段名（pydantic-settings）
     DEEPSEEK_API_URL: str = "https://api.deepseek.com/chat/completions"
     DEEPSEEK_MODEL: str = "deepseek-v4-flash"
 
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     CONTEXT_BACKUP_INTERVAL: int = 60
 
     # Bot
-    BOT_QQ: int = Field(..., env="BOT_QQ")
+    BOT_QQ: int = Field(...)  # 环境变量名 = 字段名
     BOT_NICKNAME: str = "花璃"
 
     # Connection
@@ -94,12 +94,12 @@ class Settings(BaseSettings):
     AUDIT_LOG_PATH: str = "./data/audit.log"
 
     # White list
-    ALLOWED_GROUP_IDS: Optional[List[int]] = Field(None, env="ALLOWED_GROUP_IDS")
-    TOXIC_GROUP_IDS: Optional[List[int]] = Field(None, env="TOXIC_GROUP_IDS")
+    ALLOWED_GROUP_IDS: Optional[List[int]] = None
+    TOXIC_GROUP_IDS: Optional[List[int]] = None
     # 记忆隐私：这些群里完全禁止写入记忆
-    MEMORY_DISABLED_GROUPS: Optional[List[int]] = Field(None, env="MEMORY_DISABLED_GROUPS")
+    MEMORY_DISABLED_GROUPS: Optional[List[int]] = None
     # 管理员 QQ（可执行 /memory_clear /memory_dump）
-    ADMIN_QQ_IDS: Optional[List[int]] = Field(None, env="ADMIN_QQ_IDS")
+    ADMIN_QQ_IDS: Optional[List[int]] = None
 
     # ===== 安全审计加固（P1/P2/P3）=====
     # 资源限制：防止超大文件/超长输入消耗 CPU/RAM/Token
@@ -123,7 +123,7 @@ class Settings(BaseSettings):
     MAX_IMAGE_DOWNLOAD_BYTES: int = 10485760  # 单张图片下载大小上限（10MB）
     IMAGE_DOWNLOAD_MAX_REDIRECTS: int = 3  # 图片下载最大重定向次数
     # 可选图片主机白名单（逗号分隔；空=放行所有 http/https，设置后只放行白名单+NapCat 本地 loopback）
-    IMAGE_ALLOWED_HOSTS: Optional[List[str]] = Field(None, env="IMAGE_ALLOWED_HOSTS")
+    IMAGE_ALLOWED_HOSTS: Optional[List[str]] = None
     # 数据治理
     MEMORY_TTL_DAYS: int = 0               # 用户原话记忆保留天数（0=永久保留）
     MODEL_MEMORY_TTL_DAYS: int = 30        # AI 推断记忆(model)保留天数（低信任，默认 30 天自动过期）
