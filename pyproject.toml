@@ -28,7 +28,3 @@ ignore = [
     "B010",  # setattr 同理
     "B028",  # 日志 stacklevel 提示（回调场景下不适用）
 ]
-
-[tool.ruff.lint.isort]
-# 与本地 isort --profile black 保持一致，避免 I001 误报
-profile = "black"
