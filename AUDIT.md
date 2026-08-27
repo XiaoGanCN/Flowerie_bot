@@ -227,3 +227,44 @@ guarded_chat(group_id, user_id, ...)
 | 15 | Prompt Injection | 不可信数据区 + 清洗 + 记忆闸门 + 目标用户锁定，多层防护 | 低 | — | 补记忆污染测试 |
 | 16 | 日志安全 | 不记录 prompt/响应全文；redact 保底；**图片 URL（含签名 query）进入错误日志** | 低 | **P2** | URL 日志只记 host+path |
 | 17 | Metrics | Counter/Histogram 有锁；**export_text 的 label 输出不符合 Prometheus 规范**（`{"a","b"}` 而非 `{name="value"}`） | 中 | **P1** | 修复 label 输出 |
+
+---
+
+# 第三轮：故障隔离与状态治理审计
+
+> 审计时间：2026-08-28。核心结论：
+> ① Circuit Breaker 为**全局单点**——群 A 的失败会熔断所有群的 AI（故障传播，P1）；
+> ② 全局熔断状态无生命周期/状态机（无 HALF_OPEN，wall clock）；
+> ③ 每群 GroupState 在 groups dict 中**无限增长**（无 inactive 清理，P1）；
+> ④ last_toxic_warning 等细粒度状态 TTL 依赖 backup loop（review 明确要求状态自治，P2）；
+> ⑤ Metrics 无高 cardinality label（低风险，确认即可）。
+
+## 长期状态清单（谁创建/读取/修改/清理/上限/TTL）
+
+| State | Scope | 创建 | 读取 | 修改 | 清理 | Max | TTL |
+|---|---|---|---|---|---|---|---|
+| `context` (deque) | per-group | get_group_state | router/AI | router | — | CONTEXT_SIZE | 随群清理 |
+| `user_last_time` | per-group/user | 首次冷却检查 | can_user_reply | update_user_time | backup loop prune | 群成员数 | 24h |
+| `processed_msg_ids` | per-group | 消息处理 | 去重 | 消息处理 | — | 1000 | — |
+| `recent_bot_replies` | per-group | 回复 | 重复检测 | 回复 | — | 30 | — |
+| `repeat_cache`/`msg_timestamps` | per-group | 复读检测 | 复读检测 | 复读检测 | 自身淘汰 | 200 | — |
+| `user_ai_last_call` | global/user | budget.check | budget.check | budget.check | backup loop prune | 用户数 | 24h |
+| `poke_last_time` | global/user | poke | poke | poke | backup loop prune | 用户数 | 24h |
+| `last_toxic_warning` | global/group | 引战警告 | 引战警告 | 引战警告 | backup loop prune | 群数 | 24h |
+| `group_ai_budget_count`/`budget_notified_groups` | global/group | budget | budget | budget | 跨天重置 | 群数 | 1 天 |
+| **`groups` (GroupState dict)** | per-group | get_group_state | 全部 | 全部 | **无** | **无上限（P1）** | **无** |
+| **`ai_consecutive_failures`/`ai_circuit_open_until`** | global | guarded_chat | guarded_chat | guarded_chat | 成功清零 | 1 | 冷却后 |
+| task registry | global | register | shutdown | done callback | done callback | 任务数 | 任务结束 |
+| metrics registry | global | 模块导入 | export | 埋点 | — | 固定集合 | — |
+
+## 本轮修复方案（先说明，再实施）
+
+1. **双层 Circuit Breaker**（provider 级全局 + 群级有界）：
+   - `CircuitBreaker` 类：CLOSED/OPEN/HALF_OPEN 状态机、monotonic clock、HALF_OPEN 单并发 probe
+   - Provider breaker：全局一个，计可重试瞬时失败（超时/网络/429/5xx），4xx 永久错误不计
+   - Group breaker：per-group、ExpiringMap 容器（TTL 7 天 + max 1000 LRU 淘汰），防单群失败拖垮其他群
+   - 调用顺序：Circuit admission（逻辑请求层一次）→ Budget admission（每次尝试）→ semaphore → timeout → attempt → retry decision → record_result
+   - 故障分类：provider-level（网络/5xx/429/超时）→ provider breaker；group-level（该群逻辑请求连续失败）→ group breaker；用户输入/4xx/预算不足 → 不计任何 breaker
+2. **ExpiringMap**（轻量 TTL 容器，monotonic + 惰性过期 + max_size 淘汰）：统一 user_last_time / user_ai_last_call / poke_last_time / last_toxic_warning / group breakers——状态自治，不再依赖 backup loop
+3. **inactive 群清理**：GroupState 增加 last_activity，超过 24h 无活动的群从 groups 移除（context 短期记忆随群清理，长期记忆在 SQLite 不受影响）
+4. **Metrics**：新增 ai_attempts_total / ai_circuit_rejections_total{level}，确认无 group_id/user_id label（低 cardinality）

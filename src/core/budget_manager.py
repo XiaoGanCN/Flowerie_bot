@@ -56,7 +56,7 @@ class BudgetManager:
             return False, "group"
 
         if user_interval:
-            self.global_state.user_ai_last_call[user_id] = time.time()
+            self.global_state.user_ai_last_call.set(user_id, time.time())
         return True, ""
 
     async def notify_exhausted(self, group_id: int) -> None:

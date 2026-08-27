@@ -31,9 +31,15 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_AI: int = 3
     # 单次逻辑 AI 操作的最大重试次数（首次尝试 + 重试；每次尝试都单独过预算闸门）
     AI_MAX_RETRIES: int = 3
-    # AI 全局熔断：连续失败达到阈值后暂停 AI 调用一段时间（防失败风暴打爆 API）
+    # AI 熔断（防失败风暴打爆 API）：
+    # - Provider 级（全局）：计可重试瞬时失败（超时/网络/429/5xx），4xx 不计
+    # - 群级：该群逻辑请求连续失败即熔断该群，防止单群故障拖垮其他群
     AI_CIRCUIT_BREAKER_FAILURES: int = 10
     AI_CIRCUIT_BREAKER_PAUSE_SECONDS: int = 60
+    GROUP_CIRCUIT_BREAKER_FAILURES: int = 5
+    GROUP_CIRCUIT_BREAKER_PAUSE_SECONDS: int = 30
+    GROUP_CIRCUIT_BREAKER_MAX_GROUPS: int = 1000   # 群级熔断器容量上限（超出淘汰最旧）
+    GROUP_CIRCUIT_BREAKER_TTL_SECONDS: int = 604800  # 群级熔断器空闲 TTL（7 天）
     # 上下文崩溃持久化：周期备份最近 50 条上下文（SQLite），意外去世后重启自动恢复
     CONTEXT_BACKUP_PATH: str = "./data/context_backup.db"
     CONTEXT_BACKUP_INTERVAL: int = 60

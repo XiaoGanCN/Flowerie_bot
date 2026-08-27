@@ -39,8 +39,6 @@ async def test_100_concurrent_messages_full_pipeline():
 
 async def test_ai_failure_storm_no_deadlock():
     """AI 连续失败风暴（50 条消息 × 重试）：不卡死、熔断最终打开、后续被拒。"""
-    import time
-
     router, config, ai, sender, mm = build_router()
     config.AI_MAX_RETRIES = 1
     config.AI_CIRCUIT_BREAKER_FAILURES = 5
@@ -64,8 +62,8 @@ async def test_ai_failure_storm_no_deadlock():
             await router.guarded_chat(3000 + (i % 3), 4000 + i, user_message="x", context="ctx")
 
         await asyncio.gather(*(one(i) for i in range(50)))
-        # 熔断打开：后续调用直接被拒，不再触发 API
-        assert router.global_state.ai_circuit_open_until > time.time()
+        # Provider 熔断打开：后续调用直接被拒，不再触发 API
+        assert router.provider_breaker.state == "OPEN"
         reply, mem, denied = await router.guarded_chat(9999, 9999, user_message="x", context="ctx")
         assert denied is True
     finally:

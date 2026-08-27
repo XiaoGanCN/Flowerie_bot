@@ -98,27 +98,34 @@ class PolicyEngine:
     def record_active_chat(self) -> None:
         return self.active_chat.record_active_chat()
 
-    # ---------- 内存治理：清理陈旧用户维度状态 ----------
-    def prune_stale_state(self, max_age_seconds: float = 86400.0) -> int:
-        """清理超过 max_age 未活动的用户级状态条目（防用户维度 dict 无限增长）。
+    # ---------- 内存治理：状态自治 TTL + inactive 群清理 ----------
+    def prune_stale_state(self) -> int:
+        """清理各 TTL 状态容器的过期条目（防用户/群维度状态无限增长）。
 
-        清理对象：用户冷却 / 用户 AI 限速 / 戳戳冷却 / 引战警告。
-        返回清理的条目总数。
+        业务正确性不依赖本方法：ExpiringMap 在 get/contains 时惰性过期；
+        这里只是周期性地把过期条目从容器中移除，防止条目堆积。
         """
-        import time
-        now = time.time()
         removed = 0
         gs = self.global_state
         for table in (gs.user_ai_last_call, gs.poke_last_time, gs.last_toxic_warning):
-            stale = [k for k, v in table.items() if now - float(v or 0) > max_age_seconds]
-            for k in stale:
-                table.pop(k, None)
-                removed += 1
+            removed += table.cleanup()
         for state in self.groups.values():
-            stale = [k for k, v in state.user_last_time.items() if now - float(v or 0) > max_age_seconds]
-            for k in stale:
-                state.user_last_time.pop(k, None)
-                removed += 1
+            removed += state.user_last_time.cleanup()
         if removed:
-            logger.info("已清理 %d 条陈旧用户状态", removed)
+            logger.info("已清理 %d 条过期状态", removed)
         return removed
+
+    def prune_stale_groups(self, max_idle_seconds: float = 86400.0) -> int:
+        """清理超过 max_idle 无活动的群状态（短期会话历史，防 groups dict 无限增长）。
+
+        长期记忆在 SQLite（MemoryManager），不受影响；群复活时重建空状态。
+        """
+        import time
+        now = time.time()
+        stale = [gid for gid, state in self.groups.items()
+                 if now - state.last_activity > max_idle_seconds]
+        for gid in stale:
+            self.groups.pop(gid, None)
+        if stale:
+            logger.info("已清理 %d 个 inactive 群状态", len(stale))
+        return len(stale)

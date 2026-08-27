@@ -29,7 +29,7 @@ class CooldownManager:
 
     def update_user_time(self, user_id: int, group_id: int) -> None:
         state = self.get_group_state(group_id)
-        state.user_last_time[str(user_id)] = time.time()
+        state.user_last_time.set(str(user_id), time.time())
 
     # ---------- 机器人冷却 ----------
     def can_bot_reply(self, group_id: int) -> bool:

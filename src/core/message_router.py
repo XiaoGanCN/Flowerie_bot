@@ -14,6 +14,8 @@ from src.services.ai_client import AIClient
 from src.services.file_parser import FileParser
 from src.services.memory_manager import MemoryManager
 from src.services.sender import Sender
+from src.utils.circuit_breaker import CircuitBreaker
+from src.utils.expiring_map import ExpiringMap
 from src.utils.logging_setup import get_logger
 from src.utils.metrics import registry
 from src.utils.task_manager import BackgroundTaskManager
@@ -24,11 +26,13 @@ logger = get_logger(__name__)
 _M_RECEIVED = registry.counter("received_messages_total", "收到的群消息总数")
 _M_PROCESSED = registry.counter("processed_messages_total", "通过去重、进入处理流程的消息总数")
 _M_REJECTED = registry.counter("rejected_messages_total", "被拒绝的消息总数（按原因）", ["reason"])
-_M_AI_REQ = registry.counter("ai_requests_total", "AI 逻辑请求总数（含重试）")
+_M_AI_REQ = registry.counter("ai_requests_total", "AI 逻辑请求总数（用户发起的逻辑操作）")
+_M_AI_ATTEMPTS = registry.counter("ai_attempts_total", "实际发往 Provider 的 HTTP 尝试总数（含重试）")
 _M_AI_RETRY = registry.counter("ai_retry_total", "AI 请求重试次数")
 _M_AI_OK = registry.counter("ai_success_total", "AI 请求成功数")
 _M_AI_FAIL = registry.counter("ai_failure_total", "AI 请求失败数")
 _M_AI_LATENCY = registry.histogram("ai_latency_seconds", "AI 请求耗时（秒）")
+_M_CIRCUIT_REJECT = registry.counter("ai_circuit_rejections_total", "熔断拒绝的 AI 请求数（按层级）", ["level"])
 
 
 class MessageRouter:
@@ -66,6 +70,19 @@ class MessageRouter:
         self.budget = BudgetManager(config, self.global_state, sender)
         # 后台任务统一管理（TaskManager：注册/跟踪/异常记录/优雅关闭）
         self.task_manager = task_manager or BackgroundTaskManager()
+        # ---- Circuit Breaker（双层：provider 级全局 + 群级有界）----
+        # Provider 级：全局唯一，计可重试瞬时失败（超时/网络/429/5xx）
+        self.provider_breaker = CircuitBreaker(
+            name="provider",
+            failure_threshold=max(1, int(getattr(config, "AI_CIRCUIT_BREAKER_FAILURES", 10))),
+            cooldown_seconds=max(5, int(getattr(config, "AI_CIRCUIT_BREAKER_PAUSE_SECONDS", 60))),
+        )
+        # 群级：ExpiringMap 容器（TTL + 容量上限），防单群故障拖垮其他群，
+        # 且不会因历史群无限增长（TTL 7 天 + max 1000 淘汰最旧）
+        self.group_breakers: ExpiringMap = ExpiringMap(
+            ttl_seconds=max(60, int(getattr(config, "GROUP_CIRCUIT_BREAKER_TTL_SECONDS", 604800))),
+            max_size=max(10, int(getattr(config, "GROUP_CIRCUIT_BREAKER_MAX_GROUPS", 1000))),
+        )
         # 并发上限：同时处理的消息数（WS 层用它限制 AI/识图并发，防止突发消息打爆 API）
         # 惰性创建：Python 3.9 的 asyncio.Semaphore 构造时即绑定事件循环，
         # 延迟到 async 上下文中首次使用（保证有 running loop）更健壮。
@@ -99,8 +116,9 @@ class MessageRouter:
             try:
                 await asyncio.sleep(interval)
                 await self.policy_engine.save_context_backup()
-                # 内存治理：顺带清理超过 24h 未活动的用户级状态条目
+                # 内存治理：清理过期 TTL 状态 + 超过 24h 无活动的群状态
                 self.policy_engine.prune_stale_state()
+                self.policy_engine.prune_stale_groups()
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -192,7 +210,7 @@ class MessageRouter:
                 last_warn = self.global_state.last_toxic_warning.get(group_id, 0)
                 if now - last_warn >= self.config.TOXIC_WARNING_COOLDOWN:
                     await self.sender.send_group_message(group_id, "居然有人在引战喔（坏笑，马上发消息给群主咪）")
-                    self.global_state.last_toxic_warning[group_id] = now
+                    self.global_state.last_toxic_warning.set(group_id, now)
                     self.policy_engine.record_bot_reply(group_id)
                 return
 
@@ -327,31 +345,46 @@ class MessageRouter:
         return allowed
 
     async def guarded_chat(self, group_id: int, user_id: int, **kwargs) -> Tuple[Optional[str], Optional[str], bool]:
-        """统一 AI 对话入口：每一次真实 API 尝试前都过预算。
+        """统一 AI 对话入口（logical request 层）。
 
-        返回 (reply, memory_update, denied)。denied=True 表示预算/限速拦截。
-        chat_once() 内部不重试；空回复/失败在这里重试（最多 AI_MAX_RETRIES 次），
-        每次重试单独过预算——保证 retry 永远不绕过 BudgetManager。
+        调用顺序（与 Retry/Circuit/Budget 协作）：
+          1. Circuit admission（逻辑请求层，只检查一次，不随 retry 重复）：
+             provider 级熔断 → 群级熔断；被拒不消耗预算
+          2. attempts 循环（每个 attempt 单独过预算闸门——retry 永不绕过额度）
+          3. 结果回写 Circuit（成功/可重试失败/4xx 永久错误分类计数）
+
+        返回 (reply, memory_update, denied)。denied=True 表示预算/熔断拦截。
         """
         max_retries = max(0, int(getattr(self.config, "AI_MAX_RETRIES", 3)))
         attempts = max_retries + 1  # 首次 + 重试
         started = time.monotonic()
         model = getattr(self.config, "DEEPSEEK_MODEL", "-")
-        # AI 全局熔断：连续失败达到阈值后暂停调用，防失败风暴下多消息并发重试打爆 API
-        circuit_until = getattr(self.global_state, "ai_circuit_open_until", 0.0)
-        if time.time() < circuit_until:
+
+        # ---- 1) Circuit admission（逻辑请求层一次）----
+        if not self.provider_breaker.allow():
+            _M_CIRCUIT_REJECT.inc({"level": "provider"})
             logger.warning(
-                "ai_circuit_open group=%s user=%s 熔断中，跳过 AI 调用",
-                group_id, user_id,
-                extra={"event": "budget_rejected"},
+                "ai_circuit_rejected level=provider group=%s user=%s state=%s",
+                group_id, user_id, self.provider_breaker.state,
+                extra={"event": "ai_circuit_rejected", "level": "provider"},
             )
             return None, None, True
+        group_breaker = self._get_group_breaker(group_id)
+        if not group_breaker.allow():
+            _M_CIRCUIT_REJECT.inc({"level": "group"})
+            logger.warning(
+                "ai_circuit_rejected level=group group=%s user=%s state=%s",
+                group_id, user_id, group_breaker.state,
+                extra={"event": "ai_circuit_rejected", "level": "group"},
+            )
+            return None, None, True
+
         logger.info(
             "ai_request_started group=%s user=%s model=%s",
             group_id, user_id, model,
             extra={"event": "ai_request_started", "model": model},
         )
-        _M_AI_REQ.inc()
+        _M_AI_REQ.inc()  # logical request 计数
         reply, memory_update = None, None
         retryable_failure = False  # 是否发生了可重试的瞬时失败（用于熔断计数）
         for attempt in range(attempts):
@@ -361,20 +394,22 @@ class MessageRouter:
                 logger.info("budget_rejected group=%s user=%s", group_id, user_id, extra={"event": "budget_rejected"})
                 _M_REJECTED.inc({"reason": "budget"})
                 return None, None, True
+            _M_AI_ATTEMPTS.inc()  # 实际 HTTP attempt 计数
             reply, memory_update = await self.ai_client.chat_once(**kwargs)
             if reply and reply.strip():
                 latency = time.monotonic() - started
                 _M_AI_OK.inc()
                 _M_AI_LATENCY.observe(latency)
-                # 成功：清零连续失败计数，关闭熔断
-                self.global_state.ai_consecutive_failures = 0
+                # 成功：回写 Circuit（CLOSED 清零 / HALF_OPEN probe 成功 → CLOSED）
+                self.provider_breaker.record_success()
+                group_breaker.record_success()
                 logger.info(
                     "ai_request_finished group=%s user=%s latency_ms=%.0f attempts=%d",
                     group_id, user_id, latency * 1000, attempt + 1,
                     extra={"event": "ai_request_finished", "latency_ms": round(latency * 1000), "attempts": attempt + 1},
                 )
                 return reply, memory_update, False
-            # 4xx 业务错误（chat_once 标记不可重试）：立即放弃，不再尝试
+            # 4xx 业务错误（chat_once 标记不可重试）：永久性错误，不计入任何熔断
             if not getattr(self.ai_client, "_retryable", True):
                 logger.warning(
                     "ai_request_failed group=%s user=%s attempt=%d/%d retryable=false",
@@ -382,7 +417,7 @@ class MessageRouter:
                     extra={"event": "ai_request_failed", "attempt": attempt + 1, "max_attempts": attempts, "retryable": False},
                 )
                 break
-            retryable_failure = True  # 走到这里说明是超时/网络/5xx/空回复等可重试失败
+            retryable_failure = True  # 超时/网络/429/5xx/空回复等可重试失败
             if attempt + 1 < attempts:
                 _M_AI_RETRY.inc()
             # 指数退避：429（chat_once 置 _api_backoff=8）→ 8/16/30s 封顶；
@@ -397,20 +432,38 @@ class MessageRouter:
             await asyncio.sleep(backoff)
         _M_AI_FAIL.inc()
         _M_AI_LATENCY.observe(time.monotonic() - started)
-        # 熔断计数：只统计可重试的瞬时失败（超时/网络/5xx/空回复），
-        # 4xx 业务错误（retryable=False）是永久性错误，不计入熔断
+        # ---- 3) 结果回写 Circuit ----
+        # 只统计可重试的瞬时失败（超时/网络/5xx/空回复）；
+        # 4xx 永久错误、预算不足、用户输入问题都不算 Provider/群级故障
         if retryable_failure:
-            self.global_state.ai_consecutive_failures += 1
-            threshold = max(1, int(getattr(self.config, "AI_CIRCUIT_BREAKER_FAILURES", 10)))
-            if self.global_state.ai_consecutive_failures >= threshold:
-                pause = max(5, int(getattr(self.config, "AI_CIRCUIT_BREAKER_PAUSE_SECONDS", 60)))
-                self.global_state.ai_circuit_open_until = time.time() + pause
-                self.global_state.ai_consecutive_failures = 0
+            self.provider_breaker.record_failure()
+            group_breaker.record_failure()
+            if self.provider_breaker.state == "OPEN":
                 logger.warning(
-                    "ai_circuit_opened failures=%d pause=%ss", threshold, pause,
-                    extra={"event": "ai_circuit_opened"},
+                    "ai_circuit_opened level=provider failures=%d pause=%ss",
+                    self.provider_breaker.failure_threshold,
+                    self.provider_breaker.cooldown_seconds,
+                    extra={"event": "ai_circuit_opened", "level": "provider"},
+                )
+            if group_breaker.state == "OPEN":
+                logger.warning(
+                    "ai_circuit_opened level=group group=%s failures=%d pause=%ss",
+                    group_id, group_breaker.failure_threshold, group_breaker.cooldown_seconds,
+                    extra={"event": "ai_circuit_opened", "level": "group"},
                 )
         return reply, memory_update, False
+
+    def _get_group_breaker(self, group_id: int) -> CircuitBreaker:
+        """获取群级熔断器（惰性创建，容器有 TTL 与容量上限，不会无限增长）。"""
+        breaker = self.group_breakers.get(group_id)
+        if breaker is None:
+            breaker = CircuitBreaker(
+                name=f"group:{group_id}",
+                failure_threshold=max(1, int(getattr(self.config, "GROUP_CIRCUIT_BREAKER_FAILURES", 5))),
+                cooldown_seconds=max(5, int(getattr(self.config, "GROUP_CIRCUIT_BREAKER_PAUSE_SECONDS", 30))),
+            )
+            self.group_breakers.set(group_id, breaker)
+        return breaker
 
     async def guarded_is_toxic(self, group_id: int, user_id: int, text: str) -> bool:
         """统一引战检测入口：预算放行才调用 is_toxic()；拦截返回 False（放行消息，宁可漏检不烧钱）。
@@ -501,7 +554,7 @@ class MessageRouter:
             if now - last < self.POKE_USER_COOLDOWN:
                 logger.debug(f"User {user_id} poke cooldown, skip")
                 return
-            self.global_state.poke_last_time[user_id] = now
+            self.global_state.poke_last_time.set(user_id, now)
         reply = self.policy_engine.get_poke_reply()
         if len(reply) > self.config.MAX_REPLY_LENGTH:
             reply = reply[:self.config.MAX_REPLY_LENGTH] + "..."
