@@ -58,10 +58,11 @@ class TestImageUrlGuard(unittest.TestCase):
 class TestMemoryContradiction(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.path = os.path.join(self.tmp.name, "memory.json")
+        self.path = os.path.join(self.tmp.name, "memory.db")
         self.mm = MemoryManager(self.path)
 
     def tearDown(self):
+        self.mm.close()
         self.tmp.cleanup()
 
     def notes(self, uid=1, gid=10):

@@ -3,101 +3,203 @@ import json
 import re
 import time
 import asyncio
-from typing import Dict, Any, Optional, List
+import sqlite3
+import threading
+from typing import Dict, Any, Optional, List, Tuple
 from loguru import logger
 
 
-class MemoryManager:
-    """按 (user_id, group_id) 隔离的记忆库，持久化到 JSON。
+def _resolve_db_path(path: str) -> str:
+    """兼容旧配置：以 .json 结尾的路径自动映射到同目录 .db 文件。"""
+    if path and str(path).lower().endswith(".json"):
+        return str(path)[:-5] + ".db"
+    return path
 
-    安全审计加固：
-    - P1 权限边界：写入目标恒为调用方传入的 user_id（LLM 无法指定他人）
-    - P2 来源元数据：每条记忆记录 source_user / source_group / created_at /
-      source_message_id / confidence，避免"模型推断当事实"
-    - P2 用户控制：支持 /memory /forget /forget_me（用户主动查看/删除）
-    - P3 数据治理：TTL 过期清理 + 审计日志
+
+def _as_int(v) -> Optional[int]:
+    try:
+        return int(v) if v is not None else None
+    except (ValueError, TypeError):
+        return None
+
+
+class MemoryManager:
+    """按 (user_id, group_id) 隔离的记忆库，SQLite 持久化。
+
+    存储结构：
+    - memory 表：每条记忆一行，带来源元数据（source_user / source_group /
+      source_message_id / created_at / confidence），避免"模型推断当事实"
+    - memory_kv 表：通用键值（update_memory 用）
+
+    迁移：旧版 memory.json 首次启动自动导入（原文件改名为 .migrated 备份），
+    升级不丢数据；配置里仍写 .json 路径也兼容（自动映射 .db）。
+
+    线程安全：check_same_thread=False + RLock，save() 走 to_thread 不阻塞事件循环。
     """
 
     def __init__(self, memory_path: str, ttl_days: int = 0, audit_log_path: Optional[str] = None, model_memory_ttl_days: int = 30):
         self.memory_path = memory_path
+        self.db_path = _resolve_db_path(memory_path)
         self.ttl_days = max(0, int(ttl_days or 0))
         self.model_memory_ttl_days = max(0, int(model_memory_ttl_days or 0))
         self.audit_log_path = audit_log_path
-        self.memory: Dict[str, Dict] = {}
-        self._save_lock = asyncio.Lock()
-        self._load()
-
-    def _key(self, user_id: int, group_id: int) -> str:
-        return f"{user_id}_{group_id}"
-
-    def _load(self) -> None:
-        if os.path.exists(self.memory_path):
-            try:
-                with open(self.memory_path, 'r', encoding='utf-8') as f:
-                    self.memory = json.load(f)
-                logger.info(f"记忆库已加载，共 {len(self.memory)} 个用户-群组合")
-                self._prune_expired()
-            except Exception as e:
-                logger.error(f"加载记忆库失败: {e}")
-                self.memory = {}
-        else:
-            self.memory = {}
-            self._save_sync()
-
-    def _save_sync(self) -> None:
-        dirname = os.path.dirname(self.memory_path)
-        if dirname and not os.path.exists(dirname):
+        self._lock = threading.RLock()
+        dirname = os.path.dirname(self.db_path)
+        if dirname:
             os.makedirs(dirname, exist_ok=True)
-        try:
-            # 原子写入：先写 tmp 再 os.replace，防止写一半断电/被杀导致整个 JSON 损坏、记忆全丢
-            tmp_path = self.memory_path + ".tmp"
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(self.memory, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, self.memory_path)
-        except Exception as e:
-            logger.error(f"保存记忆库失败: {e}")
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._init_schema()
+        self._migrate_from_json()
+        self._prune_expired()
+
+    def close(self) -> None:
+        with self._lock:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+
+    # ---------- 内部：SQL 辅助 ----------
+    def _init_schema(self) -> None:
+        with self._lock:
+            self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS memory (
+                user_id INTEGER NOT NULL,
+                group_id INTEGER NOT NULL,
+                note_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text TEXT NOT NULL,
+                source_user INTEGER,
+                source_group INTEGER,
+                source_message_id INTEGER,
+                created_at REAL,
+                confidence TEXT NOT NULL DEFAULT 'model'
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_ug ON memory(user_id, group_id);
+            CREATE TABLE IF NOT EXISTS memory_kv (
+                user_id INTEGER NOT NULL,
+                group_id INTEGER NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT,
+                PRIMARY KEY (user_id, group_id, key)
+            );
+            """)
+            self._conn.commit()
+
+    def _query_all(self, sql: str, params: tuple = ()) -> List[sqlite3.Row]:
+        with self._lock:
+            return self._conn.execute(sql, params).fetchall()
+
+    def _execute(self, sql: str, params: tuple = ()) -> int:
+        with self._lock:
+            return self._conn.execute(sql, params).rowcount
+
+    def _commit(self) -> None:
+        with self._lock:
+            self._conn.commit()
 
     async def save(self) -> None:
-        async with self._save_lock:
-            await asyncio.to_thread(self._save_sync)
+        await asyncio.to_thread(self._commit)
+
+    def _insert_note(self, user_id: int, group_id: int, text: str,
+                     source_user=None, source_group=None, source_message_id=None,
+                     created_at=None, confidence: str = "model") -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO memory (user_id, group_id, text, source_user, source_group, source_message_id, created_at, confidence)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (int(user_id), int(group_id), text,
+                 _as_int(source_user), _as_int(source_group), _as_int(source_message_id),
+                 created_at, confidence),
+            )
+
+    # ---------- 旧版 JSON 迁移 ----------
+    def _migrate_from_json(self) -> None:
+        """首次启动时把旧 memory.json 导入 SQLite（db 已有数据则跳过），迁移后原文件改名备份。"""
+        legacy = self.memory_path
+        if not legacy or not str(legacy).lower().endswith(".json"):
+            return
+        if not os.path.exists(legacy):
+            return
+        with self._lock:
+            cnt = self._conn.execute("SELECT COUNT(*) FROM memory").fetchone()[0]
+        if cnt:
+            logger.info("SQLite 记忆库已有数据，跳过 JSON 迁移")
+            return
+        try:
+            with open(legacy, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.error(f"记忆库迁移失败：读取旧 JSON 出错: {e}")
+            return
+        if not isinstance(data, dict):
+            logger.warning("旧记忆库 JSON 格式异常，跳过迁移")
+            return
+        inserted = 0
+        for key, mem in data.items():
+            if "_" not in key:
+                continue
+            uid_s, gid_s = key.split("_", 1)
+            uid, gid = _as_int(uid_s), _as_int(gid_s)
+            if uid is None or gid is None:
+                continue
+            notes = mem.get("notes", []) if isinstance(mem, dict) else []
+            if not isinstance(notes, list):
+                continue
+            for note in notes:
+                if isinstance(note, str):
+                    text, created, conf = note, None, "model"
+                elif isinstance(note, dict):
+                    text = note.get("text", "")
+                    created = note.get("created_at")
+                    conf = note.get("confidence", "model")
+                else:
+                    continue
+                if not text or not text.strip():
+                    continue
+                # 无可靠时间戳的旧数据 → 存 NULL（永不因 TTL 删除，不误删）
+                if not isinstance(created, (int, float)):
+                    created = None
+                src = note if isinstance(note, dict) else {}
+                self._insert_note(
+                    uid, gid, text.strip(),
+                    source_user=src.get("source_user"),
+                    source_group=src.get("source_group"),
+                    source_message_id=src.get("source_message_id"),
+                    created_at=created,
+                    confidence=conf,
+                )
+                inserted += 1
+        self._commit()
+        try:
+            os.replace(legacy, legacy + ".migrated")
+            logger.info(f"旧记忆库 JSON 已备份为: {legacy}.migrated")
+        except OSError as e:
+            logger.warning(f"旧记忆库 JSON 备份改名失败（可手动删除）: {e}")
+        logger.info(f"记忆库已从 JSON 迁移到 SQLite: {inserted} 条记忆 -> {self.db_path}")
 
     # ---------- TTL 过期清理（P3 数据治理） ----------
-    def _note_effective_ttl(self, note) -> int:
-        """按置信度分级 TTL：AI 推断记忆(model)低信任、默认 30 天过期；用户原话/无标记按 ttl_days。"""
-        if isinstance(note, dict) and note.get("confidence") == "model":
-            return self.model_memory_ttl_days
-        return self.ttl_days
-
     def _prune_expired(self) -> None:
         if self.ttl_days <= 0 and self.model_memory_ttl_days <= 0:
             return
         now = time.time()
-        changed = False
-        for key, mem in self.memory.items():
-            notes = mem.get("notes")
-            if not notes or not isinstance(notes, list):
+        rows = self._query_all("SELECT note_id, created_at, confidence FROM memory")
+        expired = []
+        for r in rows:
+            ttl = self.model_memory_ttl_days if r["confidence"] == "model" else self.ttl_days
+            if ttl <= 0:
                 continue
-            kept = []
-            for note in notes:
-                ttl = self._note_effective_ttl(note)
-                if ttl <= 0:
-                    kept.append(note)
-                    continue
-                created = None
-                if isinstance(note, dict):
-                    created = note.get("created_at")
-                # 时间戳必须是数值；旧数据/脏数据里可能是字符串等非数值 → 无法判断年龄 → 保留（不误删、不崩）
-                if not isinstance(created, (int, float)):
-                    created = None
-                if created is None or (now - created) < ttl * 86400:
-                    kept.append(note)
-                else:
-                    changed = True
-            if len(kept) != len(notes):
-                mem["notes"] = kept
-        if changed:
-            logger.info("记忆 TTL 清理完成")
-            self._save_sync()
+            created = r["created_at"]
+            # 无时间戳（NULL/脏数据）无法判断年龄 → 保留，不误删
+            if not isinstance(created, (int, float)):
+                continue
+            if (now - created) >= ttl * 86400:
+                expired.append(r["note_id"])
+        if expired:
+            for nid in expired:
+                self._execute("DELETE FROM memory WHERE note_id=?", (nid,))
+            self._commit()
+            logger.info(f"记忆 TTL 清理完成: 删除 {len(expired)} 条")
 
     # ---------- 审计日志（P3） ----------
     def _audit(self, action: str, user_id: int, group_id: int, text: str) -> None:
@@ -114,64 +216,76 @@ class MemoryManager:
         except Exception as e:
             logger.error(f"审计日志写入失败: {e}")
 
+    # ---------- 查询 ----------
     def get_user_memory(self, user_id: int, group_id: int) -> Dict:
-        key = self._key(user_id, group_id)
-        return self.memory.get(key, {})
+        """返回某用户在群的记忆结构 {"notes": [{text, source_user, ...}]}（兼容旧接口）。"""
+        rows = self._query_all(
+            "SELECT text, source_user, source_group, source_message_id, created_at, confidence"
+            " FROM memory WHERE user_id=? AND group_id=? ORDER BY note_id",
+            (user_id, group_id),
+        )
+        notes = [{
+            "text": r["text"],
+            "source_user": r["source_user"],
+            "source_group": r["source_group"],
+            "source_message_id": r["source_message_id"],
+            "created_at": r["created_at"],
+            "confidence": r["confidence"],
+        } for r in rows]
+        return {"notes": notes}
 
     def get_user_notes(self, user_id: int, group_id: int) -> List[str]:
         """返回某用户在群里的记忆文本列表（供 /memory 命令展示）。"""
-        mem = self.get_user_memory(user_id, group_id)
-        notes = mem.get("notes", [])
-        texts = []
-        for note in notes:
-            if isinstance(note, dict):
-                texts.append(note.get("text", ""))
-            elif isinstance(note, str):
-                texts.append(note)
-        return [t for t in texts if t]
+        rows = self._query_all(
+            "SELECT text FROM memory WHERE user_id=? AND group_id=? ORDER BY note_id",
+            (user_id, group_id),
+        )
+        return [r["text"] for r in rows if r["text"]]
+
+    def iter_user_groups(self) -> List[Tuple[int, int]]:
+        """遍历所有 (user_id, group_id) 组合（供管理员 /memory_clear /memory_dump 使用）。"""
+        rows = self._query_all(
+            "SELECT DISTINCT user_id, group_id FROM memory"
+            " UNION SELECT DISTINCT user_id, group_id FROM memory_kv"
+        )
+        return [(r["user_id"], r["group_id"]) for r in rows]
 
     async def remove_notes_containing(self, user_id: int, group_id: int, keyword: str) -> int:
         """删除包含关键词的记忆，返回删除条数（供 /forget 命令）。"""
         if not keyword:
             return 0
-        key = self._key(user_id, group_id)
-        mem = self.memory.get(key)
-        if not mem:
-            return 0
-        notes = mem.get("notes", [])
-        kept = []
+        # LIKE 通配符转义，保持"子串包含"语义
+        escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = self._query_all(
+            "SELECT note_id, text FROM memory WHERE user_id=? AND group_id=? AND text LIKE ? ESCAPE '\\'",
+            (user_id, group_id, f"%{escaped}%"),
+        )
         removed = 0
-        for note in notes:
-            text = note.get("text", "") if isinstance(note, dict) else note
-            if keyword in text:
-                removed += 1
-                self._audit("FORGET", user_id, group_id, text)
-            else:
-                kept.append(note)
+        for r in rows:
+            self._execute("DELETE FROM memory WHERE note_id=?", (r["note_id"],))
+            removed += 1
+            self._audit("FORGET", user_id, group_id, r["text"])
         if removed:
-            mem["notes"] = kept
             await self.save()
         return removed
 
     async def clear_user_memory(self, user_id: int, group_id: int) -> int:
         """清空某用户在群的记忆，返回清空条数（供 /forget_me /memory_clear）。"""
-        key = self._key(user_id, group_id)
-        mem = self.memory.get(key)
-        if not mem:
-            return 0
-        notes = mem.get("notes", [])
-        count = len(notes)
+        count = len(self._query_all(
+            "SELECT note_id FROM memory WHERE user_id=? AND group_id=?", (user_id, group_id)))
         if count:
-            mem["notes"] = []
+            self._execute("DELETE FROM memory WHERE user_id=? AND group_id=?", (user_id, group_id))
             self._audit("CLEAR", user_id, group_id, f"{count} 条")
             await self.save()
         return count
 
     async def update_memory(self, user_id: int, group_id: int, key: str, value: Any) -> None:
-        uid = self._key(user_id, group_id)
-        if uid not in self.memory:
-            self.memory[uid] = {}
-        self.memory[uid][key] = value
+        """通用键值写入（memory_kv 表）。"""
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO memory_kv (user_id, group_id, key, value) VALUES (?,?,?,?)",
+                (int(user_id), int(group_id), str(key), str(value)),
+            )
         await self.save()
 
     def _note_text(self, note: Any) -> str:
@@ -226,19 +340,19 @@ class MemoryManager:
         if not text or not text.strip():
             return
         text = text.strip()
-        key = self._key(user_id, group_id)
-        if key not in self.memory:
-            self.memory[key] = {}
-        if 'notes' not in self.memory[key]:
-            self.memory[key]['notes'] = []
-        notes = self.memory[key]['notes']
+        rows = self._query_all(
+            "SELECT note_id, text FROM memory WHERE user_id=? AND group_id=? ORDER BY note_id",
+            (user_id, group_id),
+        )
+        notes = [dict(r) for r in rows]  # [{"note_id":.., "text":..}]
 
         # 矛盾替换（治 misinformation）：新记忆是否定/退出、旧记忆是肯定/进行，且核心词重叠 → 旧被新顶掉。
         # 例如「喜欢打三角洲」→「退游了 不打三角洲了」：只留新的，不让过时信息继续污染画像。
         replaced_old = None
         for i, existing in enumerate(notes):
-            if self._is_contradiction(self._note_text(existing), text):
-                replaced_old = self._note_text(existing)
+            if self._is_contradiction(existing["text"], text):
+                replaced_old = existing["text"]
+                self._execute("DELETE FROM memory WHERE note_id=?", (existing["note_id"],))
                 notes.pop(i)
                 break
         if replaced_old is not None:
@@ -255,7 +369,7 @@ class MemoryManager:
 
         text_norm = _norm(text)
         for existing in notes:
-            existing_norm = _norm(self._note_text(existing))
+            existing_norm = _norm(existing["text"])
             if not existing_norm:
                 continue
             if existing_norm == text_norm:
@@ -272,34 +386,39 @@ class MemoryManager:
             if short_chars and sum(1 for ch in short_chars if ch in long_chars) / len(short_chars) >= 0.8:
                 return
 
-        note = {
-            "text": text,
-            "source_user": source_user if source_user is not None else user_id,
-            "source_group": source_group if source_group is not None else group_id,
-            "source_message_id": source_message_id,
-            "created_at": time.time(),
-            "confidence": confidence,
-        }
-        notes.append(note)
-        if len(notes) > 50:
-            self.memory[key]['notes'] = notes[-25:]
+        self._insert_note(
+            user_id, group_id, text,
+            source_user=source_user if source_user is not None else user_id,
+            source_group=source_group if source_group is not None else group_id,
+            source_message_id=source_message_id,
+            created_at=time.time(),
+            confidence=confidence,
+        )
+        # 数量上限：超过 50 条只保留最近 25 条
+        with self._lock:
+            total = self._conn.execute(
+                "SELECT COUNT(*) FROM memory WHERE user_id=? AND group_id=?", (user_id, group_id)).fetchone()[0]
+        if total > 50:
+            self._execute(
+                "DELETE FROM memory WHERE user_id=? AND group_id=? AND note_id NOT IN ("
+                "SELECT note_id FROM memory WHERE user_id=? AND group_id=? ORDER BY note_id DESC LIMIT 25)",
+                (user_id, group_id, user_id, group_id),
+            )
         self._audit("WRITE", user_id, group_id, text)
         await self.save()
 
     def get_memory_context(self, user_id: int, group_id: int, max_notes: int = 20, max_length: int = 500) -> str:
-        mem = self.get_user_memory(user_id, group_id)
-        if not mem:
-            return ""
+        rows = self._query_all(
+            "SELECT text FROM memory WHERE user_id=? AND group_id=? ORDER BY note_id DESC LIMIT ?",
+            (user_id, group_id, max_notes),
+        )
         lines = []
-        for key, value in mem.items():
-            if key == 'notes':
-                if value and isinstance(value, list):
-                    recent_notes = value[-max_notes:]
-                    if recent_notes:
-                        texts = [self._note_text(n) for n in recent_notes]
-                        lines.append("关于该用户的记录: " + "; ".join(texts))
-            else:
-                lines.append(f"{key}: {value}")
+        texts = [r["text"] for r in reversed(rows)]  # 最近 max_notes 条（时间正序展示）
+        if texts:
+            lines.append("关于该用户的记录: " + "; ".join(texts))
+        for r in self._query_all(
+                "SELECT key, value FROM memory_kv WHERE user_id=? AND group_id=?", (user_id, group_id)):
+            lines.append(f"{r['key']}: {r['value']}")
         full_text = "；".join(lines)
         if len(full_text) > max_length:
             full_text = full_text[:max_length] + "...（已截断）"

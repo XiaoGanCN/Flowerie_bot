@@ -87,28 +87,17 @@ class CommandHandler:
 
     async def _cmd_memory_clear(self, group_id: int) -> None:
         group_cleared = 0
-        for key in list(self.memory_manager.memory.keys()):
-            # 防御脏数据：key 不是 "user_group" 格式时跳过（不崩溃）
-            if "_" not in key:
-                continue
-            uid_part, gid_part = key.split("_", 1)
-            if str(gid_part) == str(group_id):
-                try:
-                    group_cleared += await self.memory_manager.clear_user_memory(int(uid_part), group_id)
-                except (ValueError, TypeError):
-                    continue
+        for uid, gid in self.memory_manager.iter_user_groups():
+            if gid == group_id:
+                group_cleared += await self.memory_manager.clear_user_memory(uid, group_id)
         await self.sender.send_group_message(group_id, f"已清空本群 {group_cleared} 条记忆")
 
     async def _cmd_memory_dump(self, group_id: int) -> None:
         lines = []
-        for key, mem in self.memory_manager.memory.items():
-            # 防御脏数据：key 不是 "user_group" 格式时跳过
-            if "_" not in key:
-                continue
-            uid_part, gid_part = key.split("_", 1)
-            if str(gid_part) == str(group_id):
-                notes = self.memory_manager.get_user_notes(int(uid_part), group_id)
+        for uid, gid in self.memory_manager.iter_user_groups():
+            if gid == group_id:
+                notes = self.memory_manager.get_user_notes(uid, group_id)
                 if notes:
-                    lines.append(f"用户{uid_part}: " + "；".join(notes[-5:])[:100])
+                    lines.append(f"用户{uid}: " + "；".join(notes[-5:])[:100])
         dump = "\n".join(lines) if lines else "本群暂无记忆"
         await self.sender.send_group_message(group_id, dump[:400])

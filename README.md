@@ -40,7 +40,7 @@
 | 📎 **文件解析** | 自动识别并读取 txt / pdf / docx / xlsx / csv 内容 |
 | 📦 **转发解析** | 递归提取合并转发消息中的所有文本，**并识别聊天记录里嵌套的每一张图片**（NapCat 转发内 image 段的 url → 视觉模型识图）|
 | 🃏 **卡片解析** | 提取 JSON 卡片（分享链接、小程序等）的文本内容 |
-| 🧠 **记忆库** | 按 `(用户, 群)` 隔离，自动记录群友偏好，持久化 JSON；**高相似度自动去重**，记忆内容只写客观事实不写内心戏 |
+| 🧠 **记忆库** | 按 `(用户, 群)` 隔离，自动记录群友偏好，**SQLite 持久化**（旧版 JSON 自动迁移）；**高相似度自动去重**，记忆内容只写客观事实不写内心戏 |
 | 🔁 **复读检测** | 3 次相同消息触发复读，带冷却 |
 | ⚔️ **引战检测** | 关键词 + AI 双重校验，15 分钟冷却，避免误伤（**检测模型/网址/key 可独立配置**，留空回退 DeepSeek）|
 | 🎯 **冷却系统** | 用户级（5s）+ 机器人级（2s）+ 连续回复惩罚 |
@@ -200,9 +200,9 @@ bash run.sh
 | `VISION_FORWARD_IMAGES` | 是否识别合并转发（聊天记录）里的图片（false 省视觉 token） | `false` |
 | `EVENT_PROCESS_TIMEOUT` | 单条消息处理超时（秒），防一条慢消息堵住全群 | `90` |
 | `MAX_CONCURRENT_AI` | 同时处理消息的并发上限（AI/识图额度） | `3` |
-| `CONTEXT_BACKUP_PATH` | 上下文崩溃备份路径（意外去世后重启自动恢复最近 50 条） | `./data/context_backup.json` |
+| `CONTEXT_BACKUP_PATH` | 上下文崩溃备份库路径（SQLite，意外去世后重启自动恢复最近 50 条） | `./data/context_backup.db` |
 | `CONTEXT_BACKUP_INTERVAL` | 上下文备份间隔（秒） | `60` |
-| `MEMORY_PATH` | 记忆库路径 | `./data/memory.json` |
+| `MEMORY_PATH` | 记忆库路径（SQLite；旧 `memory.json` 首次启动自动迁移到同目录 `.db`） | `./data/memory.db` |
 | `ARCHIVE_ENABLED` | 是否启用消息存档（默认关，隐私优先） | `false` |
 | `ARCHIVE_RETENTION_DAYS` / `ARCHIVE_MAX_SIZE_MB` | 存档保留天数 / 每群大小上限 | `0` / `0` |
 | `ARCHIVE_BASE_DIR` | 消息存档路径 | `./data/archive` |
@@ -243,6 +243,22 @@ bash run.sh
 
 ---
 
+## 🗄️ 数据存储（SQLite）
+
+花璃的全部持久化数据都存放在 `data/` 目录下的 **SQLite 数据库**（Python 标准库 `sqlite3`，零额外依赖）：
+
+| 文件 | 内容 |
+| :--- | :--- |
+| `data/memory.db` | 记忆库：`memory` 表（每条记忆一行，含来源/时间/置信度元数据）+ `memory_kv` 表 |
+| `data/context_backup.db` | 上下文崩溃备份：每群最近 50 条聊天记录 + 最近 200 条已处理消息 id |
+| `data/audit.log` | 记忆写入/删除审计日志（文本） |
+| `data/archive/` | 消息存档（`ARCHIVE_ENABLED=true` 时启用，默认关） |
+
+- **备份/迁移**：直接复制 `.db` 文件即可完整备份（建议先停止机器人再复制）。数据库是事务性写入，崩溃/断电不会损坏已有数据。
+- **旧版 JSON 自动迁移**：从旧版本升级无需任何操作——首次启动时若检测到同目录存在 `memory.json` / `context_backup.json`，会自动导入 SQLite（原文件改名为 `*.json.migrated` 保留备份）。`.env` 里仍写旧的 `.json` 路径也兼容，会自动映射到同目录 `.db`。
+
+---
+
 ## 📁 项目结构
 
 ```
@@ -253,7 +269,7 @@ Flowerie_bot/
 ├── README.md             # 项目文档
 ├── main.py               # 程序入口
 ├── run.sh                # 守护脚本（崩溃自动重启）
-├── data/                 # 运行时数据（记忆库、存档、上下文备份）
+├── data/                 # 运行时数据（memory.db 记忆库、context_backup.db 上下文备份、存档、审计日志）
 ├── logs/                 # 日志文件
 └── src/
     ├── __init__.py
@@ -325,11 +341,13 @@ pip install -r requirements.txt
 pip install --upgrade --force-reinstall -r requirements.txt
 ```
 
-Q: 提示 FileNotFoundError: ./data/memory.json
+Q: 提示 FileNotFoundError: ./data/memory.db
 
 ```bash
 mkdir -p data logs
 ```
+
+> 其实无需手动创建：`data/` 目录会在首次启动时自动生成（记忆库 / 上下文备份库 / 审计日志）。
 
 Q: WebSocket 连接失败
 

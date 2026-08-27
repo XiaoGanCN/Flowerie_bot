@@ -2,7 +2,8 @@ import os
 import json
 import time
 import random
-from typing import Dict, List
+import sqlite3
+from typing import Dict, List, Optional
 from loguru import logger
 
 from src.core.sanitizer import sanitize_untrusted_text
@@ -91,19 +92,52 @@ class ContextManager:
         state = self.get_group_state(group_id)
         state.recent_bot_replies.append(reply)
 
-    # ---------- 上下文崩溃持久化 ----------
-    def load_context_backup(self) -> None:
-        """启动时读取上次保存的上下文备份（每群最多恢复最近 50 条 + 最近 200 条已处理消息 id）。"""
+    # ---------- 上下文崩溃持久化（SQLite） ----------
+    def _backup_db_path(self) -> Optional[str]:
+        """备份库路径：旧 .json 配置自动映射到同目录 .db（兼容旧 .env）。"""
         path = self.config.CONTEXT_BACKUP_PATH
-        if not path or not os.path.exists(path):
-            return
+        if not path:
+            return None
+        if str(path).lower().endswith(".json"):
+            return str(path)[:-5] + ".db"
+        return path
+
+    def _init_backup_db(self, conn) -> None:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS group_context (
+            group_id INTEGER NOT NULL,
+            seq INTEGER NOT NULL,
+            user_id INTEGER,
+            message TEXT,
+            is_bot INTEGER NOT NULL DEFAULT 0,
+            time REAL,
+            PRIMARY KEY (group_id, seq)
+        );
+        CREATE TABLE IF NOT EXISTS processed_ids (
+            group_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            PRIMARY KEY (group_id, message_id)
+        );
+        """)
+        conn.commit()
+
+    def _migrate_backup_from_json(self, legacy_path: str) -> None:
+        """把旧 context_backup.json 导入 SQLite（兼容纯数组与 {"messages":..., "processed_ids":...} 两种格式）。"""
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(legacy_path, "r", encoding="utf-8") as f:
                 backup = json.load(f)
+        except Exception as e:
+            logger.error(f"上下文备份迁移失败：读取旧 JSON 出错: {e}")
+            return
+        if not isinstance(backup, dict):
+            return
+        db_path = self._backup_db_path()
+        conn = sqlite3.connect(db_path)
+        try:
+            self._init_backup_db(conn)
             restored = 0
             restored_ids = 0
             for group_id_str, value in backup.items():
-                # 兼容旧格式（纯消息数组）与新格式（{"messages": [...], "processed_ids": [...]}）
                 if isinstance(value, dict):
                     messages = value.get("messages", [])
                     processed_ids = value.get("processed_ids", [])
@@ -116,46 +150,124 @@ class ContextManager:
                     group_id = int(group_id_str)
                 except (TypeError, ValueError):
                     continue
-                state = self.get_group_state(group_id)
-                for msg in messages[-50:]:
+                for seq, msg in enumerate(messages[-50:]):
                     if isinstance(msg, dict) and "message" in msg:
-                        state.context.append(msg)
+                        conn.execute(
+                            "INSERT OR REPLACE INTO group_context (group_id, seq, user_id, message, is_bot, time)"
+                            " VALUES (?,?,?,?,?,?)",
+                            (group_id, seq,
+                             msg.get("user_id", 0),
+                             str(msg.get("message", "")),
+                             1 if msg.get("is_bot", False) else 0,
+                             msg.get("time", 0.0)),
+                        )
                         restored += 1
                 for mid in processed_ids[-200:]:
-                    state.processed_msg_ids.append(mid)
+                    try:
+                        conn.execute("INSERT OR IGNORE INTO processed_ids (group_id, message_id) VALUES (?,?)",
+                                     (group_id, int(mid)))
+                        restored_ids += 1
+                    except (ValueError, TypeError):
+                        continue
+            conn.commit()
+            try:
+                os.replace(legacy_path, legacy_path + ".migrated")
+                logger.info(f"旧上下文备份 JSON 已备份为: {legacy_path}.migrated")
+            except OSError as e:
+                logger.warning(f"旧上下文备份 JSON 备份改名失败（可手动删除）: {e}")
+            logger.info(f"上下文备份已从 JSON 迁移到 SQLite: {restored} 条消息, {restored_ids} 条消息 id -> {db_path}")
+        except Exception as e:
+            logger.error(f"上下文备份迁移失败: {e}")
+        finally:
+            conn.close()
+
+    def load_context_backup(self) -> None:
+        """启动时从 SQLite 读取上次保存的上下文备份（每群最多恢复最近 50 条 + 最近 200 条已处理消息 id）。"""
+        db_path = self._backup_db_path()
+        if not db_path:
+            return
+        try:
+            dirname = os.path.dirname(db_path)
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
+            conn = sqlite3.connect(db_path)
+            try:
+                self._init_backup_db(conn)
+                cnt = conn.execute("SELECT COUNT(*) FROM group_context").fetchone()[0]
+            finally:
+                conn.close()
+            # 旧 JSON 迁移：db 为空且旧 json 存在时导入一次
+            legacy = self.config.CONTEXT_BACKUP_PATH
+            if cnt == 0 and legacy and str(legacy).lower().endswith(".json") and os.path.exists(legacy):
+                self._migrate_backup_from_json(legacy)
+
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                restored = 0
+                restored_ids = 0
+                for r in conn.execute(
+                        "SELECT group_id, user_id, message, is_bot, time FROM group_context ORDER BY group_id, seq"):
+                    state = self.get_group_state(r["group_id"])
+                    state.context.append({
+                        "user_id": r["user_id"],
+                        "message": r["message"],
+                        "is_bot": bool(r["is_bot"]),
+                        "time": r["time"] or 0.0,
+                    })
+                    restored += 1
+                for r in conn.execute("SELECT group_id, message_id FROM processed_ids"):
+                    self.get_group_state(r["group_id"]).processed_msg_ids.append(r["message_id"])
                     restored_ids += 1
-            if restored or restored_ids:
-                logger.info(f"上下文备份已恢复: {len(backup)} 个群共 {restored} 条消息, {restored_ids} 条已处理消息 id")
+                if restored or restored_ids:
+                    logger.info(f"上下文备份已恢复: {restored} 条消息, {restored_ids} 条已处理消息 id")
+            finally:
+                conn.close()
         except Exception as e:
             logger.error(f"加载上下文备份失败: {e}")
 
     async def save_context_backup(self) -> None:
-        """把每群最近 50 条上下文 + 最近 200 条已处理消息 id 写入备份（原子写入）。
+        """把每群最近 50 条上下文 + 最近 200 条已处理消息 id 写入 SQLite（单事务全量重写）。
 
         已处理消息 id 一起持久化：崩溃重启后 NapCat 重投旧消息时不会重复回复。
         """
-        path = self.config.CONTEXT_BACKUP_PATH
-        if not path:
+        db_path = self._backup_db_path()
+        if not db_path:
             return
         try:
-            backup = {}
-            for group_id, state in self.groups.items():
-                msgs = list(state.context)[-50:]
-                processed_ids = list(state.processed_msg_ids)[-200:]
-                if msgs or processed_ids:
-                    backup[str(group_id)] = {
-                        "messages": msgs,
-                        "processed_ids": processed_ids,
-                    }
-            if not backup:
-                return
-            dirname = os.path.dirname(path)
-            if dirname and not os.path.exists(dirname):
+            dirname = os.path.dirname(db_path)
+            if dirname:
                 os.makedirs(dirname, exist_ok=True)
-            tmp_path = path + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(backup, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, path)
-            logger.debug(f"上下文备份已保存: {len(backup)} 个群")
+            conn = sqlite3.connect(db_path)
+            try:
+                self._init_backup_db(conn)
+                conn.execute("BEGIN")
+                conn.execute("DELETE FROM group_context")
+                conn.execute("DELETE FROM processed_ids")
+                for group_id, state in self.groups.items():
+                    msgs = list(state.context)[-50:]
+                    processed_ids = list(state.processed_msg_ids)[-200:]
+                    if not msgs and not processed_ids:
+                        continue
+                    for seq, m in enumerate(msgs):
+                        conn.execute(
+                            "INSERT INTO group_context (group_id, seq, user_id, message, is_bot, time)"
+                            " VALUES (?,?,?,?,?,?)",
+                            (group_id, seq,
+                             m.get("user_id", 0),
+                             str(m.get("message", "")),
+                             1 if m.get("is_bot", False) else 0,
+                             m.get("time", time.time())),
+                        )
+                    for mid in processed_ids:
+                        conn.execute("INSERT OR IGNORE INTO processed_ids (group_id, message_id) VALUES (?,?)",
+                                     (group_id, mid))
+                conn.commit()
+                logger.debug(f"上下文备份已保存: {len(self.groups)} 个群")
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
         except Exception as e:
             logger.error(f"保存上下文备份失败: {e}")

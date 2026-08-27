@@ -83,16 +83,37 @@ class TestContextManagerBackup(unittest.TestCase):
         self.assertEqual(len(state.processed_msg_ids), 200)
 
     def test_legacy_list_format_compatible(self):
-        self.add_msgs(1, 3)
-        run(self.cm.save_context_backup())
-        with open(self.path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        legacy = {gid: v["messages"] for gid, v in data.items()}
+        """旧版纯数组格式的 context_backup.json 应能自动迁移到 SQLite。"""
+        legacy = {str(1): [{"user_id": 1, "message": f"msg{i}", "is_bot": False, "time": i} for i in range(3)]}
         with open(self.path, "w", encoding="utf-8") as f:
-            json.dump(legacy, f, ensure_ascii=False, indent=2)
+            json.dump(legacy, f, ensure_ascii=False)
         cm2 = ContextManager(self.config, {}, GlobalState())
         cm2.load_context_backup()
         self.assertEqual(len(cm2.get_group_state(1).context), 3)
+        # 迁移后：原 JSON 备份为 .migrated，SQLite 库就位
+        self.assertTrue(os.path.exists(self.path + ".migrated"))
+        self.assertTrue(os.path.exists(self.path[:-5] + ".db"))
+
+    def test_migrate_new_format_json(self):
+        """新版 {"messages": [...], "processed_ids": [...]} 格式的 JSON 同样自动迁移。"""
+        legacy = {str(1): {
+            "messages": [{"user_id": 1, "message": f"m{i}", "is_bot": False, "time": i} for i in range(5)],
+            "processed_ids": [1001, 1002, 1003],
+        }}
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(legacy, f, ensure_ascii=False)
+        cm2 = ContextManager(self.config, {}, GlobalState())
+        cm2.load_context_backup()
+        state = cm2.get_group_state(1)
+        self.assertEqual(len(state.context), 5)
+        self.assertEqual(set(state.processed_msg_ids), {1001, 1002, 1003})
+
+    def test_save_writes_sqlite(self):
+        self.add_msgs(1, 3)
+        run(self.cm.save_context_backup())
+        # 备份落在 SQLite 库（json 路径自动映射 .db），且不产生 json 文件
+        self.assertTrue(os.path.exists(self.path[:-5] + ".db"))
+        self.assertFalse(os.path.exists(self.path))
 
 
 if __name__ == "__main__":

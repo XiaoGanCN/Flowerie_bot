@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     EVENT_PROCESS_TIMEOUT: int = 90
     # 同时处理消息的并发上限（AI/识图都会吃这个额度，防止突发消息打爆 API）
     MAX_CONCURRENT_AI: int = 3
-    # 上下文崩溃持久化：周期备份最近 50 条上下文，意外去世后重启自动恢复
-    CONTEXT_BACKUP_PATH: str = "./data/context_backup.json"
+    # 上下文崩溃持久化：周期备份最近 50 条上下文（SQLite），意外去世后重启自动恢复
+    CONTEXT_BACKUP_PATH: str = "./data/context_backup.db"
     CONTEXT_BACKUP_INTERVAL: int = 60
     
     # Bot
@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     ]
     
     # File paths
-    MEMORY_PATH: str = "./data/memory.json"
+    MEMORY_PATH: str = "./data/memory.db"       # 记忆库（SQLite；旧 memory.json 会自动迁移到同目录 .db）
     ARCHIVE_BASE_DIR: str = "./data/archive"
     ARCHIVE_ENABLED: bool = False          # 是否启用消息存档（默认关，隐私优先；开=true 才写入 archive/）
     ARCHIVE_RETENTION_DAYS: int = 0        # 存档保留天数（0=永久；>0 自动清理过期文件）
