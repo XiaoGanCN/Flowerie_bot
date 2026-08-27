@@ -12,8 +12,7 @@ import threading
 
 import pytest
 
-from src.utils.logging_setup import (TextFormatter, TraceIdFilter,
-                                     init_logging, redact)
+from src.utils.logging_setup import TextFormatter, TraceIdFilter, init_logging, redact
 from src.utils.metrics import registry
 from src.utils.trace import get_trace_id, trace_context
 

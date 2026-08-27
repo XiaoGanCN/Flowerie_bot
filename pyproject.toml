@@ -28,3 +28,7 @@ ignore = [
     "B010",  # setattr 同理
     "B028",  # 日志 stacklevel 提示（回调场景下不适用）
 ]
+
+[tool.isort]
+# 与 ruff 的 line-length 保持一致（默认 79 会导致长 from import 被展开成多行，与 ruff 合并行为冲突）
+line_length = 120
