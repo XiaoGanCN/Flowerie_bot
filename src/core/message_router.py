@@ -1,11 +1,12 @@
 import asyncio
 import time
 import random
-from typing import Dict, Any, Optional, List, Tuple
-from loguru import logger
+from typing import Dict, Any, Optional, Tuple
+from src.utils.metrics import registry
+
 
 from src.config import Settings
-from src.models import GroupMessage, GlobalState
+from src.models import GroupMessage
 from src.services.ai_client import AIClient
 from src.services.memory_manager import MemoryManager
 from src.services.file_parser import FileParser
@@ -15,6 +16,20 @@ from src.core.message_assembler import MessageAssembler
 from src.core.sanitizer import validate_memory_content
 from src.core.command_handler import CommandHandler
 from src.core.budget_manager import BudgetManager
+from src.utils.task_manager import BackgroundTaskManager
+from src.utils.logging_setup import get_logger
+
+logger = get_logger(__name__)
+
+# Metrics（进程内 registry 单例，不引入外部监控设施）
+_M_RECEIVED = registry.counter("received_messages_total", "收到的群消息总数")
+_M_PROCESSED = registry.counter("processed_messages_total", "通过去重、进入处理流程的消息总数")
+_M_REJECTED = registry.counter("rejected_messages_total", "被拒绝的消息总数（按原因）", ["reason"])
+_M_AI_REQ = registry.counter("ai_requests_total", "AI 逻辑请求总数（含重试）")
+_M_AI_RETRY = registry.counter("ai_retry_total", "AI 请求重试次数")
+_M_AI_OK = registry.counter("ai_success_total", "AI 请求成功数")
+_M_AI_FAIL = registry.counter("ai_failure_total", "AI 请求失败数")
+_M_AI_LATENCY = registry.histogram("ai_latency_seconds", "AI 请求耗时（秒）")
 
 
 class MessageRouter:
@@ -35,6 +50,7 @@ class MessageRouter:
         file_parser: FileParser,
         sender: Sender,
         policy_engine: PolicyEngine,
+        task_manager: Optional[BackgroundTaskManager] = None,
     ):
         self.config = config
         self.ai_client = ai_client
@@ -49,33 +65,23 @@ class MessageRouter:
         self.commands = CommandHandler(config, sender, memory_manager)
         # AI 预算/限速 → BudgetManager
         self.budget = BudgetManager(config, self.global_state, sender)
-        self._active_chat_task: Optional[asyncio.Task] = None
-        self._context_backup_task: Optional[asyncio.Task] = None
+        # 后台任务统一管理（TaskManager：注册/跟踪/异常记录/优雅关闭）
+        self.task_manager = task_manager or BackgroundTaskManager()
         # 并发上限：同时处理的消息数（WS 层用它限制 AI/识图并发，防止突发消息打爆 API）
         self.process_semaphore = asyncio.Semaphore(max(1, config.MAX_CONCURRENT_AI))
 
     async def start(self):
-        """启动主动聊天循环（若配置允许）与上下文备份循环"""
+        """启动主动聊天循环（若配置允许）与上下文备份循环（经 TaskManager 注册）"""
         if not self.config.ONLY_REPLY_WHEN_AT:
-            self._active_chat_task = asyncio.create_task(self._active_chat_loop())
+            self.task_manager.register("active_chat", self._active_chat_loop())
             logger.info("Active chat loop started")
         # 周期备份上下文（意外去世后重启可恢复最近 50 条）
-        self._context_backup_task = asyncio.create_task(self._context_backup_loop())
-        logger.info(f"Context backup loop started (every {self.config.CONTEXT_BACKUP_INTERVAL}s)")
+        self.task_manager.register("context_backup", self._context_backup_loop())
+        logger.info("Context backup loop started (every %ss)", self.config.CONTEXT_BACKUP_INTERVAL)
 
     async def stop(self):
-        if self._active_chat_task:
-            self._active_chat_task.cancel()
-            try:
-                await self._active_chat_task
-            except asyncio.CancelledError:
-                pass
-        if self._context_backup_task:
-            self._context_backup_task.cancel()
-            try:
-                await self._context_backup_task
-            except asyncio.CancelledError:
-                pass
+        # 统一取消并等待所有后台任务（TaskManager 负责异常记录与超时强杀）
+        await self.task_manager.shutdown(timeout=5.0)
         # 停前最后保存一次上下文
         await self.policy_engine.save_context_backup()
 
@@ -114,8 +120,17 @@ class MessageRouter:
         if not group_id:
             return
 
+        logger.info(
+            "message_received group=%s user=%s msg_id=%s",
+            group_id, data.get("user_id"), data.get("message_id"),
+            extra={"event": "message_received", "group_id": group_id},
+        )
+        _M_RECEIVED.inc()
+
         if not self._in_whitelist(group_id):
-            logger.debug(f"Group {group_id} not in whitelist, ignoring")
+            logger.debug("Group %s not in whitelist, ignoring", group_id)
+            _M_REJECTED.inc({"reason": "whitelist"})
+            logger.info("message_rejected group=%s reason=whitelist", group_id, extra={"event": "message_rejected"})
             return
 
         message_array = data.get("message", [])
@@ -123,21 +138,24 @@ class MessageRouter:
         if isinstance(message_array, str):
             message_array = [{"type": "text", "data": {"text": message_array}}]
         elif not isinstance(message_array, list):
-            logger.debug(f"Unsupported message format: {type(message_array).__name__}")
+            logger.debug("Unsupported message format: %s", type(message_array).__name__)
             message_array = []
 
         raw_time = data.get("time", int(time.time()))
         user_id = data.get("user_id")
         msg_id = data.get("message_id")
         if not user_id:
+            _M_REJECTED.inc({"reason": "no_user"})
             return
 
         # 消息去重（在指令处理之前：NapCat 重投旧消息时，指令也不会重复执行）
         state = self.policy_engine.get_group_state(group_id)
         if msg_id in state.processed_msg_ids:
-            logger.debug(f"Message {msg_id} already processed")
+            logger.debug("Message %s already processed", msg_id)
+            _M_REJECTED.inc({"reason": "duplicate"})
             return
         state.processed_msg_ids.append(msg_id)
+        _M_PROCESSED.inc()
 
         # 消息组装（文本/识图/转发/卡片/文件/存档）交给 MessageAssembler
         full_text, image_descriptions, is_reply_to_bot, has_reply_to_other, has_at_others = await self.assembler.assemble(
@@ -236,6 +254,7 @@ class MessageRouter:
             f"用户刚刚发了一张图片，图片内容：{'; '.join(image_descriptions)}" if image_descriptions else "用户刚刚@了你，但没有说话。"
         )
         # 输入截断已统一收敛到 AIClient.chat_once（覆盖主动聊天等所有路径）
+        logger.info("policy_pass group=%s user=%s", group_id, user_id, extra={"event": "policy_pass"})
         reply, memory_update, denied = await self.guarded_chat(
             group_id,
             user_id,
@@ -245,7 +264,8 @@ class MessageRouter:
         )
         if denied:
             # 预算/限速拦截：静默跳过（不发送"喵？"兜底）
-            logger.debug(f"AI 调用被预算拦截，跳过消息: group={group_id} user={user_id}")
+            logger.info("budget_rejected group=%s user=%s", group_id, user_id, extra={"event": "budget_rejected"})
+            _M_REJECTED.inc({"reason": "budget"})
             return
 
         # 处理记忆更新（P1 权限边界：target 恒为当前用户；P3 隐私：禁用群不写记忆）
@@ -301,21 +321,60 @@ class MessageRouter:
         """统一 AI 对话入口：每一次真实 API 尝试前都过预算。
 
         返回 (reply, memory_update, denied)。denied=True 表示预算/限速拦截。
-        chat_once() 内部不重试；空回复/失败在这里重试（最多3次），
-        每次重试单独过预算——保证 一次预算 = 一次真实 API 尝试。
+        chat_once() 内部不重试；空回复/失败在这里重试（最多 AI_MAX_RETRIES 次），
+        每次重试单独过预算——保证 retry 永远不绕过 BudgetManager。
         """
+        max_retries = max(0, int(getattr(self.config, "AI_MAX_RETRIES", 3)))
+        attempts = max_retries + 1  # 首次 + 重试
+        started = time.monotonic()
+        model = getattr(self.config, "DEEPSEEK_MODEL", "-")
+        logger.info(
+            "ai_request_started group=%s user=%s model=%s",
+            group_id, user_id, model,
+            extra={"event": "ai_request_started", "model": model},
+        )
+        _M_AI_REQ.inc()
         reply, memory_update = None, None
-        for attempt in range(3):
+        for attempt in range(attempts):
             # 用户聊天限速只在首次尝试检查（重试是同一逻辑调用的延续，
             # 若每次都查，会被自己刚更新的 user_ai_last_call 拦掉）
             if not await self._ai_allowed(group_id, user_id, user_interval=(attempt == 0)):
+                logger.info("budget_rejected group=%s user=%s", group_id, user_id, extra={"event": "budget_rejected"})
+                _M_REJECTED.inc({"reason": "budget"})
                 return None, None, True
             reply, memory_update = await self.ai_client.chat_once(**kwargs)
             if reply and reply.strip():
+                latency = time.monotonic() - started
+                _M_AI_OK.inc()
+                _M_AI_LATENCY.observe(latency)
+                logger.info(
+                    "ai_request_finished group=%s user=%s latency_ms=%.0f attempts=%d",
+                    group_id, user_id, latency * 1000, attempt + 1,
+                    extra={"event": "ai_request_finished", "latency_ms": round(latency * 1000), "attempts": attempt + 1},
+                )
                 return reply, memory_update, False
-            # 等待后重试：429 等场景 chat_once 会设置更长退避
-            backoff = getattr(self.ai_client, "_api_backoff", 0) or (1 + random.random())
+            # 4xx 业务错误（chat_once 标记不可重试）：立即放弃，不再尝试
+            if not getattr(self.ai_client, "_retryable", True):
+                logger.warning(
+                    "ai_request_failed group=%s user=%s attempt=%d/%d retryable=false",
+                    group_id, user_id, attempt + 1, attempts,
+                    extra={"event": "ai_request_failed", "attempt": attempt + 1, "max_attempts": attempts, "retryable": False},
+                )
+                break
+            if attempt + 1 < attempts:
+                _M_AI_RETRY.inc()
+            # 指数退避：429（chat_once 置 _api_backoff=8）→ 8/16/30s 封顶；
+            # 其他失败 → 1/2/4s。加少量抖动避免惊群。
+            base = getattr(self.ai_client, "_api_backoff", 0) or 1.0
+            backoff = min(base * (2 ** attempt) + random.uniform(0, 0.5), 30)
+            logger.warning(
+                "ai_request_failed group=%s user=%s attempt=%d/%d retry_in=%.1fs",
+                group_id, user_id, attempt + 1, attempts, backoff,
+                extra={"event": "ai_request_failed", "attempt": attempt + 1, "max_attempts": attempts},
+            )
             await asyncio.sleep(backoff)
+        _M_AI_FAIL.inc()
+        _M_AI_LATENCY.observe(time.monotonic() - started)
         return reply, memory_update, False
 
     async def guarded_is_toxic(self, group_id: int, user_id: int, text: str) -> bool:

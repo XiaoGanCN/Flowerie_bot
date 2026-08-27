@@ -144,6 +144,8 @@ BOT_QQ=你的机器人QQ号
 
 ```bash
 pip install -r requirements.txt
+# 开发/测试额外依赖（可选）：
+pip install -r requirements-dev.txt
 ```
 
 ### 5. 创建数据目录
@@ -202,6 +204,8 @@ bash run.sh
 | `MAX_CONCURRENT_AI` | 同时处理消息的并发上限（AI/识图额度） | `3` |
 | `CONTEXT_BACKUP_PATH` | 上下文崩溃备份库路径（SQLite，意外去世后重启自动恢复最近 50 条） | `./data/context_backup.db` |
 | `CONTEXT_BACKUP_INTERVAL` | 上下文备份间隔（秒） | `60` |
+| `LOG_FORMAT` | 日志格式：`text`（开发人类可读）/ `json`（生产 JSON lines，含 trace_id/event） | `text` |
+| `AI_MAX_RETRIES` | 单次逻辑 AI 操作最大重试次数（每次尝试都单独过预算闸门） | `3` |
 | `MEMORY_PATH` | 记忆库路径（SQLite；旧 `memory.json` 首次启动自动迁移到同目录 `.db`） | `./data/memory.db` |
 | `ARCHIVE_ENABLED` | 是否启用消息存档（默认关，隐私优先） | `false` |
 | `ARCHIVE_RETENTION_DAYS` / `ARCHIVE_MAX_SIZE_MB` | 存档保留天数 / 每群大小上限 | `0` / `0` |
@@ -276,7 +280,14 @@ Flowerie_bot/
     ├── config.py         # Pydantic 配置管理
     ├── models.py         # 数据模型（GroupState, GlobalState 等）
     ├── utils/
-    │   └── logger.py     # loguru 日志配置
+    │   ├── logging_setup.py # 标准 logging 基础设施（text/JSON 格式、脱敏、trace_id 注入）
+    │   ├── trace.py         # trace_id（contextvars，消息链路唯一标识）
+    │   ├── metrics.py       # 内部 MetricsRegistry（snapshot / Prometheus 文本导出）
+    │   ├── task_manager.py  # 后台任务统一管理（注册/跟踪/优雅关闭）
+    │   └── logger.py        # 兼容入口
+    ├── repositories/
+    │   ├── base.py           # MemoryRepository 抽象 + MemoryNote
+    │   └── sqlite_repository.py # SQLite 实现（业务层不感知 SQL）
     ├── services/
     │   ├── ai_client.py      # DeepSeek API + 视觉识图封装（429 限流退避）
     │   ├── memory_manager.py # 记忆库 CRUD（原子写入 + 相似度去重 + 错别字容忍）
@@ -298,6 +309,12 @@ Flowerie_bot/
         └── websocket_server.py # WebSocket 连接管理（单连接守卫 + 优雅停机 + 超时 + 并发）
 tests/
     ├── test_memory_parser.py    # 记忆指令/强制记忆单元测试
+    ├── test_logging_trace.py    # trace_id 并发隔离 / 日志脱敏 / metrics
+    ├── test_task_manager.py     # 后台任务失败捕获 / 优雅关闭
+    ├── test_repository.py       # 存储仓库 CRUD / 并发访问
+    ├── test_ai_reliability.py   # AI 超时 / 重试 / 预算不绕过
+    ├── test_graceful_shutdown.py # Router 后台任务生命周期
+    └── test_config_validation.py # 启动配置校验
     ├── test_memory_manager.py   # 记忆去重（含错别字容忍）单元测试
     ├── test_cooldown_manager.py # 冷却逻辑单元测试
     ├── test_context_manager.py  # 上下文备份/恢复单元测试
@@ -326,6 +343,25 @@ tests/
 · 粘人但嘴硬：喜欢七君，但绝不承认自己是恋爱脑
 
 详细提示词见 src/services/ai_client.py 中的 system_prompt。
+
+---
+
+## 🔧 工程化能力
+
+- **结构化日志**：基于标准库 `logging`（不再依赖 loguru）。`LOG_FORMAT=json` 时输出 JSON lines（ts/level/logger/trace_id/event/msg + 结构化字段）；`text` 为开发环境人类可读格式。日志自动脱敏（API Key / Bearer token / GitHub token 等），不记录完整 prompt 与完整模型回复，AI 请求只记录 model / latency / retry / token usage。
+- **trace_id**：每条 WS 事件进入时生成唯一 trace_id（contextvars），贯穿 Router→Policy→Budget→Context→Memory→AI→Send 全链路，并发消息互不污染；日志中通过 `trace=` 字段（text 格式）或 `trace_id`（JSON 格式）串联。
+- **Metrics**：内置 `MetricsRegistry`（零外部依赖、线程安全、不抛异常），统计 received/processed/rejected、AI 请求/成功/失败/延迟/重试、记忆读写、WS 重连、发送失败等；`export_text()` 输出 Prometheus 文本格式，可挂到任意采集器。
+- **存储抽象**：`MemoryRepository` 接口 + `SQLiteMemoryRepository` 实现，MemoryManager 只负责业务规则（去重/矛盾替换/TTL/审计），未来可替换 Postgres/Redis 实现而不改业务层。
+- **后台任务管理**：`BackgroundTaskManager` 统一注册/跟踪所有后台任务（主动聊天、上下文备份），任务异常记录 `task_failed` 日志不会静默死亡；`shutdown()` 取消并等待全部任务，超时强杀。
+- **AI 可靠性**：`AI_MAX_RETRIES` 控制重试上限；指数退避（429 时 8/16/30s 封顶，其他 1/2/4s）；4xx 业务错误不重试（避免无效重试与重复扣费）；每次尝试单独过 BudgetManager（retry 永远不绕过额度）。
+- **CI**：GitHub Actions 自动执行 ruff 检查 + pytest（Python 3.9 / 3.12 矩阵）。
+
+本地运行测试：
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
 
 ---
 

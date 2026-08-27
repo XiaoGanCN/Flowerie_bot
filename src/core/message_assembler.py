@@ -1,14 +1,17 @@
 import os
 import time
-from typing import Dict, Any, List, Tuple
+from typing import Dict, List, Tuple
 from datetime import datetime
-from loguru import logger
+
 
 from src.config import Settings
 from src.models import GlobalState
 from src.services.ai_client import AIClient
 from src.services.file_parser import FileParser
 from src.core.sanitizer import sanitize_untrusted_text
+from src.utils.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 class MessageAssembler:

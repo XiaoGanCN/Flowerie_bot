@@ -1,9 +1,12 @@
 import time
 from typing import Dict
-from loguru import logger
+
 
 from src.config import Settings
 from src.models import GroupState, GlobalState
+from src.utils.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 class CooldownManager:

@@ -1,0 +1,202 @@
+# 工程质量审计报告（阶段一）
+
+> 审计对象：Flowerie_bot（NapCat 版，`/storage/emulated/0/Flowerie_bot/`）
+> 审计时间：2026-08-27
+> 审计方式：全量代码阅读（src/ 全部模块 + main.py + tests/ + 配置），未做任何修改。
+
+---
+
+## 1. 当前架构图
+
+模块化单体（单进程、单事件循环），分层如下：
+
+```
+main.py
+ ├─ AIClient (httpx.AsyncClient)      ← DeepSeek API / 引战检测 / 视觉识图
+ ├─ MemoryManager (SQLite, 线程安全)  ← 记忆库
+ ├─ FileParser (httpx, 懒连接)        ← 合并转发 / JSON 卡片 / @提取
+ ├─ Sender (aiohttp.ClientSession)    ← OneBot HTTP API 发送
+ ├─ PolicyEngine（门面）
+ │    ├─ ContextManager   上下文读写/接话概率/重复回复/崩溃备份(SQLite)
+ │    ├─ CooldownManager  用户/机器人冷却、连续回复惩罚
+ │    ├─ RepeatDetector   复读检测（带内存上限）
+ │    ├─ MemoryParser     记忆指令解析/强制记忆触发
+ │    ├─ PokeManager      戳戳回复去重
+ │    └─ ActiveChatManager 主动聊天决策
+ ├─ MessageRouter（流程编排）
+ │    ├─ MessageAssembler  消息组装（文本/识图/转发/卡片/存档）
+ │    ├─ CommandHandler    用户/管理员指令
+ │    └─ BudgetManager     三层 AI 预算（全局/群/用户）
+ └─ WebSocketServer（websockets 反向 WS，单连接守卫）
+```
+
+依赖：aiohttp / httpx / websockets / pydantic(+settings) / python-dotenv / loguru（+ 已移除的文件解析依赖）。
+
+## 2. 核心数据流
+
+```
+NapCat 反向 WS → WebSocketServer._handler
+  → process_event → _handle_message
+      → 白名单 → 消息去重(processed_msg_ids) → 指令?
+      → assembler.assemble（文本/图片识图/转发/卡片/存档）
+      → 复读检测 → 引战检测(TOXIC_GROUP_IDS, 走预算)
+      → 静默记忆(强制记忆) → 回复决策(should_reply)
+      → 冷却检查 → guarded_chat（预算闸门 → chat_once，失败重试）
+      → 记忆写入(MEMORY_JSON) → 重复回复过滤 → Sender 发送
+```
+
+## 3. 后台 asyncio task 的创建与生命周期
+
+| Task | 创建点 | 管理 |
+|---|---|---|
+| `_active_chat_loop` | `MessageRouter.start()` `create_task` | `stop()` 中 cancel+await，**有** |
+| `_context_backup_loop` | `MessageRouter.start()` `create_task` | `stop()` 中 cancel+await，**有** |
+| WS server 主协程 | `main()` await | 随主流程 |
+
+**问题**：
+- 两个后台任务各自 try/except，但**没有统一 TaskManager**；若 `_active_chat_loop` 抛出未捕获异常（如 sender 偶发 bug），任务**静默死亡**（"Task exception was never retrieved"），无重拉、无告警。
+- `_active_chat_loop` 的 while 循环内 `_do_active_chat` 未整体包 try/except（仅内部部分有）。
+- 新增后台任务无统一注册/取消/优雅关闭入口。
+
+## 4. AI 请求的完整生命周期
+
+```
+guarded_chat(group_id, user_id, ...)
+ ├─ 循环 attempt in 0..2（最多 3 次）
+ │   ├─ _ai_allowed → BudgetManager.check（全局计数/群计数/用户限速）
+ │   │     └─ 拒绝 → notify_exhausted（每天每群一次）+ denied=True
+ │   ├─ AIClient.chat_once（单次尝试，内部不重试）
+ │   │     ├─ httpx POST（connect 20s / read 60s / write 20s / pool 20s）
+ │   │     ├─ 非 200 → 记录；429 → _api_backoff=8s
+ │   │     └─ 解析 choices → 剥离 MEMORY_JSON 记忆指令 → 截断 MAX_REPLY_LENGTH
+ │   └─ 空回复 → sleep(backoff) 后重试
+ └─ 返回 (reply, memory_update, denied)
+```
+
+**计费语义**：每次尝试（含重试）都单独过预算闸门——`一次预算 = 一次真实 API 尝试`。这保证 retry **不会绕过** BudgetManager，但代价是 3 次尝试会消耗 3 次额度计数（语义为"尝试次数"）。用户限速只在首次尝试检查（`user_interval=(attempt==0)`），避免重试被自己的限速拦截——设计正确。
+
+## 5. Memory 的读写路径
+
+```
+写入：
+ ① AI 回复中的 MEMORY_JSON / 【记忆】 → validate_memory_content 校验
+    → MemoryManager.append_memory_text（矛盾替换→去重→插入→超50条截25条→审计→commit）
+ ② 静默强制记忆（个人偏好句式，未@）→ 同上（confidence=self_claim）
+ ③ /forget /forget_me /memory_clear 用户指令 → 删除
+读取：
+ chat_once → get_memory_context(user_id, group_id) → 最近 20 条 + kv
+ /memory 指令 → get_user_notes
+```
+
+存储：SQLite（memory 表 + memory_kv 表），`check_same_thread=False` + `threading.RLock`，`save()` 走 `asyncio.to_thread`。**业务逻辑（去重/矛盾替换/TTL/审计）与 SQL 语句耦合在 MemoryManager 一个类里**。
+
+## 6. 当前异常处理策略
+
+| 位置 | 策略 | 评估 |
+|---|---|---|
+| WS handler | 每事件 try/except + `wait_for(EVENT_PROCESS_TIMEOUT)` | ✅ 有兜底，超时取消 |
+| `_context_backup_loop` | 循环内 try/except | ✅ |
+| `_active_chat_loop` | 无整体防护 | ⚠️ 单点异常→任务死亡 |
+| AIClient | 内部 catch 返回 None（记录日志） | ⚠️ 异常信息足够但非结构化；网络错误与业务错误不分 |
+| Sender | catch 记录日志返回 False | ✅ |
+| CommandHandler | 部分 `except (ValueError, TypeError): continue` | ⚠️ 吞异常（无害但无日志） |
+| FileParser | 多处 catch 返回默认值；**1 处 bare `except:`** | ⚠️ bare except |
+| main | KeyboardInterrupt / Exception 出口 | ✅ |
+
+## 7. 当前日志策略
+
+- loguru：stdout（彩色）+ `logs/bot.log`（500MB 轮转 / 保留 10 天）。
+- **问题**：
+  1. 非标准库（用户要求标准 logging）
+  2. 无统一结构化格式、无 JSON 输出模式
+  3. **无 trace_id**：无法关联"一条消息从入到出的完整链路"
+  4. 敏感信息未过滤：debug 级别记录 API 原始响应前 500 字符（含用户消息全文）、系统提示词全量
+  5. 消息正文无截断策略（部分日志记录完整 `raw_message`）
+  6. 日志级别不可运行时调整
+
+## 8. 当前测试策略
+
+- unittest 风格，80 个用例（记忆/冷却/上下文/清洗/转发/路由回归/AI/复读）。
+- 用 `asyncio.run()` 包装协程（无 pytest-asyncio）。
+- **无 pyproject.toml**：pytest 需手工 `PYTHONPATH=.` 才能导入 `src.*`。
+- 无 CI、无 lint、无类型检查。
+- 缺：trace_id 并发隔离 / task 失败捕获 / 优雅关闭 / AI 超时与重试 / repository / 并发访问 / metrics / 敏感日志等测试。
+
+## 9. 已知技术债务
+
+1. `FileParser.file_cache` 声明后从未使用（死代码）。
+2. `file_parser.py:203` bare `except:`。
+3. loguru → 标准 logging 迁移未做。
+4. `Settings` 用 `Field(..., env=...)` 的旧式写法（pydantic v2 推荐直接字段名 + 小写环境变量前缀，当前无 deprecation warning 但可优化）；`model_config` 未设 `case_sensitive` 等。
+5. `models.BotDependencies` 未被使用。
+6. `AIClient.chat()` 兼容入口保留（无调用方）。
+7. `GroupState.user_last_time` / `GlobalState.user_ai_last_call` / `poke_last_time` / `last_toxic_warning` 等 dict 无上限（随用户数增长，当前量级可接受，但无治理）。
+8. MemoryManager 业务与 SQL 耦合（阶段五处理）。
+9. 硬编码重试次数 3、退避策略（429 固定 8s + 其他随机 1~2s）未配置化、非指数退避。
+10. 测试与 pytest 配置缺失（pythonpath 问题）。
+
+## 10. 可能的并发问题
+
+| 位置 | 风险 | 现状 |
+|---|---|---|
+| SQLite 多线程 | 跨线程访问 | ✅ `check_same_thread=False` + RLock + `to_thread` 提交 |
+| 多消息并发 | AI/识图并发打爆 API | ✅ `process_semaphore`（MAX_CONCURRENT_AI） |
+| 单消息超时取消 | `wait_for` 取消时中断记忆写入 | ⚠️ 取消发生在 await 点，写入可能半途中断（SQLite 事务保证不损坏，但该条记忆可能未落库）；可接受但未记录 |
+| 后台任务 vs 消息处理 | 共享 `groups`/`global_state` | ✅ asyncio 单线程内无竞态 |
+| trace_id 污染 | 多消息并发处理 | ⚠️ 当前无 trace_id；引入时必须用 contextvars |
+| 主动聊天并发 | 与 WS 处理共用额度 | ✅ 已并入 process_semaphore |
+
+## 11. 可能的资源泄漏问题
+
+| 资源 | 现状 |
+|---|---|
+| AIClient httpx client | ✅ `async with` 生命周期内关闭 |
+| Sender aiohttp session | ✅ `async with` 关闭 |
+| **FileParser httpx client** | ❌ 懒创建后**从不关闭**（优雅关闭时泄漏一个连接池） |
+| **MemoryManager SQLite 连接** | ❌ 长连接，main.py 退出时未调用 `close()` |
+| 上下文备份 SQLite | ✅ 每次开关连接 |
+| 图片下载 | ✅ 流式 + 上限 + async with |
+| 待解析文件缓存 | ✅ TTL + 上限 |
+| 复读缓存 | ✅ 上限 200 + 长内容不跟踪 |
+
+## 12. 可能的安全问题
+
+| 项 | 状态 |
+|---|---|
+| 提示词注入 | ✅ 多层防线（不可信数据区/清洗/记忆闸门/目标用户恒为当前用户） |
+| SSRF（图片下载） | ✅ scheme 白名单 + 可选主机白名单 + loopback 信任边界 |
+| 文件下载资源耗尽 | ✅ 流式 + 字节上限 + MIME 嗅探 |
+| 转发套娃 DoS | ✅ 四重预算 |
+| WS 未授权连接 | ✅ 可选 WS_TOKEN（默认 loopback） |
+| **日志泄露** | ❌ debug 日志含 API 响应原文/用户消息；无敏感字段脱敏（API Key 不落盘 ✅，但响应内容可能含隐私） |
+| 记忆隐私 | ✅ 按用户隔离 + 代码层校验 + 用户可控删除 |
+| 预算被刷 | ✅ 三层限速 |
+| 指令越权 | ✅ 管理员指令校验 ADMIN_QQ_IDS |
+| 图片 CDN url 直接入日志 | ⚠️ url 可能含签名参数，日志记录 `url[:80]` |
+
+## 专项检查结论
+
+- **create_task 后没人管理**：部分存在（无统一 TaskManager、无任务失败告警）→ 阶段六
+- **WS/HTTP session 未正确关闭**：FileParser._client、MemoryManager 连接 → 阶段六
+- **SQLite 并发访问**：已加锁，正确 → 保持
+- **AI 请求超时**：httpx 分层超时 + EVENT_PROCESS_TIMEOUT 兜底 ✅ → 阶段七补充重试策略细节
+- **retry 重复扣费**：每次尝试过预算（不绕过额度），语义为尝试次数 → 阶段七固化并文档化
+- **exception 被吞**：大部分有日志，1 处 bare except、CommandHandler 个别静默 → 阶段十
+- **无限循环/递归**：active chat 循环有 sleep+冷却 ✅；转发/卡片递归有深度预算 ✅
+- **无界队列**：无 queue；缓存均有上限 ✅
+- **无界缓存**：见 9.7（用户维度 dict，可接受）✅
+- **文件/图片下载资源泄漏**：FileParser 连接不关闭 → 阶段六
+- **shutdown 数据未持久化**：退出时 save_context_backup ✅；MemoryManager 实时 commit ✅；但连接未显式关闭 → 阶段六
+
+## 改造范围（后续阶段）
+
+1. 标准 logging 基础设施（dev 人类可读 / prod JSON、敏感脱敏、trace_id 注入）
+2. contextvars 版 trace_id 贯穿消息处理链路
+3. 内部 MetricsRegistry（snapshot + Prometheus 文本导出）
+4. MemoryRepository 抽象（SQLite 实现，业务层解耦）
+5. BackgroundTaskManager（注册/跟踪/取消/优雅关闭）+ 关闭所有泄漏资源
+6. AIClient 重试/退避配置化、usage 记录
+7. 配置增强（敏感保护、启动校验）
+8. pyproject.toml（pytest/ruff）、补测试
+9. Ruff 修复
+10. GitHub Actions CI

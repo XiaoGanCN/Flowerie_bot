@@ -1,12 +1,14 @@
 import json
-import re
 import base64
 import httpx
 from io import BytesIO, StringIO
-from typing import Tuple, Optional, List, Dict, Any
-from loguru import logger
+from typing import Tuple, Optional, List, Dict
+
 
 from src.config import Settings
+from src.utils.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 # 可选依赖
 try:
@@ -30,7 +32,6 @@ except ImportError:
 class FileParser:
     def __init__(self, config: Settings):
         self.config = config
-        self.file_cache: Dict[str, Tuple[str, float]] = {}  # url -> (content, timestamp)
         self._client: Optional[httpx.AsyncClient] = None  # 复用的 HTTP 客户端（懒创建）
 
     def _get_client(self, timeout: float = 30) -> httpx.AsyncClient:
@@ -38,6 +39,12 @@ class FileParser:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(timeout=timeout)
         return self._client
+
+    async def close(self) -> None:
+        """优雅关闭：释放复用 HTTP 客户端（修复连接池泄漏）。"""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     def _cap(self, text: str) -> str:
         """P1-4 资源上限：提取文本统一截断到 MAX_FILE_TEXT_CHARS，防止超长内容烧 token。"""
@@ -217,7 +224,6 @@ class FileParser:
         返回: (转发文本, 转发内的图片url列表, 是否有转发)
         图片 url 由调用方逐个交给视觉模型识图（让花璃看到转发里的每一张图）。
         """
-        import httpx
 
         def extract_all_text(obj, sender="未知", prefix="", urls=None):
             results = []

@@ -1,7 +1,6 @@
 from typing import List, Optional
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-import os
 
 class Settings(BaseSettings):
     # DeepSeek
@@ -28,14 +27,16 @@ class Settings(BaseSettings):
     EVENT_PROCESS_TIMEOUT: int = 90
     # 同时处理消息的并发上限（AI/识图都会吃这个额度，防止突发消息打爆 API）
     MAX_CONCURRENT_AI: int = 3
+    # 单次逻辑 AI 操作的最大重试次数（首次尝试 + 重试；每次尝试都单独过预算闸门）
+    AI_MAX_RETRIES: int = 3
     # 上下文崩溃持久化：周期备份最近 50 条上下文（SQLite），意外去世后重启自动恢复
     CONTEXT_BACKUP_PATH: str = "./data/context_backup.db"
     CONTEXT_BACKUP_INTERVAL: int = 60
-    
+
     # Bot
     BOT_QQ: int = Field(..., env="BOT_QQ")
     BOT_NICKNAME: str = "花璃"
-    
+
     # Connection
     WS_HOST: str = "127.0.0.1"
     WS_PORT: int = 3001
@@ -43,7 +44,7 @@ class Settings(BaseSettings):
     # 可选：反向 WS 鉴权 token（空=不鉴权，仅建议在 WS_HOST 绑 loopback 时留空；
     # 设置后 NapCat 握手需带 Authorization: Bearer <token> 或 ?access_token=<token>）
     WS_TOKEN: str = ""
-    
+
     # Behavior
     ONLY_REPLY_WHEN_AT: bool = False
     USER_COOLDOWN: int = 5
@@ -52,20 +53,22 @@ class Settings(BaseSettings):
     MAX_CONSECUTIVE_REPLIES: int = 3
     CONTEXT_SIZE: int = 300
     LOG_LEVEL: str = "INFO"
+    # 日志格式：text=开发环境人类可读；json=生产环境 JSON lines（含 trace_id/event 字段）
+    LOG_FORMAT: str = "text"
 
     # Random active chat
     NIGHT_SILENCE_START: int = 0
     NIGHT_SILENCE_END: int = 8
     ACTIVE_CHAT_COOLDOWN: int = 180
     BOT_CONSECUTIVE_REPLY_COOLDOWN: int = 60
-    
+
     # Repeat
     REPEAT_WINDOW: int = 120
     REPEAT_THRESHOLD: int = 3
-    
+
     # Toxic warning
     TOXIC_WARNING_COOLDOWN: int = 900
-    
+
     # Poke
     POKE_REPLY_ENABLED: bool = True
     POKE_REPLIES: List[str] = [
@@ -79,7 +82,7 @@ class Settings(BaseSettings):
         "（摊手）", "你是不是无聊了", "找我玩嘛", "（歪头）",
         "嘤？", "（茫然）", "？", "哈！！！",
     ]
-    
+
     # File paths
     MEMORY_PATH: str = "./data/memory.db"       # 记忆库（SQLite；旧 memory.json 会自动迁移到同目录 .db）
     ARCHIVE_BASE_DIR: str = "./data/archive"
@@ -140,8 +143,39 @@ class Settings(BaseSettings):
                 return []
             return [x.strip().lower() for x in v.split(",") if x.strip()]
         return v
-    
+
+    @field_validator("LOG_FORMAT", mode="before")
+    @classmethod
+    def parse_log_format(cls, v):
+        val = str(v or "text").lower()
+        if val not in ("text", "json"):
+            raise ValueError(f"LOG_FORMAT 必须是 'text' 或 'json'，当前: {v!r}")
+        return val
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
 
 def load_config() -> Settings:
     return Settings()
+
+
+def validate_config(config: Settings) -> None:
+    """启动阶段配置校验：必填项缺失/取值非法时直接抛错（进程不启动）。
+
+    - API Key 只检查"已配置"，不打印任何值（敏感保护）
+    - 取值范围问题在此集中报错，避免运行期才炸
+    """
+    if not config.DEEPSEEK_API_KEY or config.DEEPSEEK_API_KEY.startswith("sk-your"):
+        raise ValueError("DEEPSEEK_API_KEY 未配置或仍为占位值（.env 中设置真实 Key 后再启动）")
+    if config.BOT_QQ <= 0:
+        raise ValueError(f"BOT_QQ 必须为正整数，当前: {config.BOT_QQ}")
+    if not (0 < config.WS_PORT < 65536):
+        raise ValueError(f"WS_PORT 必须在 1~65535 之间，当前: {config.WS_PORT}")
+    if config.MAX_CONCURRENT_AI < 1:
+        raise ValueError(f"MAX_CONCURRENT_AI 必须 >= 1，当前: {config.MAX_CONCURRENT_AI}")
+    if config.AI_MAX_RETRIES < 0:
+        raise ValueError(f"AI_MAX_RETRIES 必须 >= 0，当前: {config.AI_MAX_RETRIES}")
+    if config.USER_COOLDOWN < 0 or config.BOT_COOLDOWN < 0:
+        raise ValueError("USER_COOLDOWN / BOT_COOLDOWN 不能为负")
+    if config.NIGHT_SILENCE_START < 0 or config.NIGHT_SILENCE_END > 24 or config.NIGHT_SILENCE_START >= config.NIGHT_SILENCE_END:
+        raise ValueError(f"夜间静默时段非法: {config.NIGHT_SILENCE_START}~{config.NIGHT_SILENCE_END}（要求 0<=start<end<=24）")

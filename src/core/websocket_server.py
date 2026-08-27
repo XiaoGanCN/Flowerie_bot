@@ -2,10 +2,20 @@ import asyncio
 import json
 import websockets
 from typing import Optional
-from loguru import logger
+
+
+from src.utils.trace import trace_context
+from src.utils.metrics import registry
 
 from src.config import Settings
 from src.core.message_router import MessageRouter
+from src.utils.logging_setup import get_logger
+
+logger = get_logger(__name__)
+
+# Metrics
+_M_RECEIVED = registry.counter("received_messages_total", "收到的事件总数（按 post_type）", ["post_type"])
+_M_RECONNECT = registry.counter("websocket_reconnect_total", "WebSocket 服务重连次数")
 
 
 class WebSocketServer:
@@ -15,6 +25,7 @@ class WebSocketServer:
     - 已有连接时拒绝新连接（1008），避免 self.ws 被覆盖导致状态错乱
     - shutdown() 提供优雅停机：停重连、关连接、释放任务
     - 重连采用逐档递增退避（5→10→20→40→60 封顶，倍增接近指数）
+    - 每条事件进入时建立独立 trace_id（contextvars），贯穿处理链路
     """
 
     def __init__(self, config: Settings, message_router: MessageRouter):
@@ -29,7 +40,7 @@ class WebSocketServer:
         """启动 WebSocket 服务器（带自动重连与逐档递增退避）。"""
         while self._running:
             try:
-                logger.info(f"Starting WebSocket server on {self.config.WS_HOST}:{self.config.WS_PORT}")
+                logger.info("Starting WebSocket server on %s:%s", self.config.WS_HOST, self.config.WS_PORT)
                 self._server = await websockets.serve(
                     self._handler,
                     self.config.WS_HOST,
@@ -47,13 +58,14 @@ class WebSocketServer:
                 logger.info("WebSocket server task cancelled")
                 break
             except Exception as e:
-                logger.exception(f"WebSocket server error: {e}")
+                logger.exception("WebSocket server error: %s", e)
                 await self._close_server()
                 # 逐档递增退避（倍增封顶，接近指数退避）：5→10→20→40→60 秒
                 for delay in [5, 10, 20, 40, 60]:
                     if not self._running:
                         break
-                    logger.info(f"Reconnecting in {delay}s...")
+                    logger.warning("WebSocket 服务异常，%ss 后重连（第 %s 档）", delay, [5, 10, 20, 40, 60].index(delay) + 1)
+                    _M_RECONNECT.inc()
                     await asyncio.sleep(delay)
                     if not self._running:
                         break
@@ -67,17 +79,19 @@ class WebSocketServer:
                 await self.ws.close(code=1000, reason="shutdown")
                 await self.ws.wait_closed()
             except Exception as e:
-                logger.debug(f"关闭连接异常: {e}")
+                logger.debug("关闭连接异常: %s", e)
             self.ws = None
             self.message_router.global_state.ws_connected = False
         if self._server_task is not None and self._server_task is not asyncio.current_task():
             self._server_task.cancel()
             try:
                 await self._server_task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                logger.debug("关闭 server 任务异常: %s", e)
         await self._close_server()
-        logger.info("WebSocket server 已优雅关闭")
+        logger.info("WebSocket server 已优雅关闭", extra={"event": "ws_shutdown_finished"})
 
     async def _close_server(self) -> None:
         if self._server is not None:
@@ -85,7 +99,7 @@ class WebSocketServer:
                 self._server.close()
                 await self._server.wait_closed()
             except Exception as e:
-                logger.debug(f"关闭 server 异常: {e}")
+                logger.debug("关闭 server 异常: %s", e)
             self._server = None
 
     async def _handler(self, ws: websockets.WebSocketServerProtocol):
@@ -124,12 +138,12 @@ class WebSocketServer:
             except Exception:
                 pass
             return
-        logger.info("NapCat WebSocket connected")
+        logger.info("OneBot WebSocket connected")
         self.ws = ws
         self.message_router.global_state.ws_connected = True
         try:
             async for message in ws:
-                logger.debug(f"WS raw: {message[:200]}")
+                logger.debug("WS raw: %s", message[:200])
                 try:
                     if isinstance(message, bytes):
                         message = message.decode('utf-8')
@@ -137,20 +151,29 @@ class WebSocketServer:
                         data = json.loads(message)
                     else:
                         data = message
-                    # 并发上限 + 单条超时：防止一条慢消息卡死整个群 / 突发消息打爆 API
-                    async with self.message_router.process_semaphore:
-                        await asyncio.wait_for(
-                            self.message_router.process_event(data),
-                            timeout=self.config.EVENT_PROCESS_TIMEOUT,
+                    # 每条事件独立 trace_id：并发处理多条消息时互不污染
+                    with trace_context() as tid:
+                        logger.info(
+                            "ws_event post_type=%s type=%s",
+                            data.get("post_type"), data.get("message_type") or data.get("notice_type") or "-",
+                            extra={"event": "ws_event_received"},
                         )
+                        _M_RECEIVED.inc({"post_type": str(data.get("post_type", "unknown"))})
+                        # 并发上限 + 单条超时：防止一条慢消息卡死整个群 / 突发消息打爆 API
+                        async with self.message_router.process_semaphore:
+                            await asyncio.wait_for(
+                                self.message_router.process_event(data),
+                                timeout=self.config.EVENT_PROCESS_TIMEOUT,
+                            )
+                        logger.debug("ws_event processed trace=%s", tid)
                 except asyncio.TimeoutError:
-                    logger.error(f"Event processing timeout (>={self.config.EVENT_PROCESS_TIMEOUT}s), skipped: {str(message)[:100]}")
+                    logger.error("Event processing timeout (>=%ss), skipped: %s", self.config.EVENT_PROCESS_TIMEOUT, str(message)[:100])
                 except json.JSONDecodeError as e:
-                    logger.error(f"JSON decode error: {e}")
+                    logger.error("JSON decode error: %s", e)
                 except Exception as e:
-                    logger.exception(f"Event processing error: {e}")
+                    logger.exception("Event processing error: %s", e)
         except websockets.ConnectionClosed:
-            logger.warning("NapCat WebSocket disconnected")
+            logger.warning("OneBot WebSocket disconnected")
         finally:
             # 只有当前连接自己断开才清状态（避免把新连接的状态误清）
             if self.ws is ws:

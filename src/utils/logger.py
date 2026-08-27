@@ -1,25 +1,15 @@
-import sys
-from loguru import logger
+"""兼容入口：旧 setup_logger 接口 -> 标准 logging 基础设施。"""
 from typing import Optional
 
-def setup_logger(level: str = "INFO"):
-    logger.remove()
-    logger.add(
-        sys.stdout,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-        level=level,
-        colorize=True,
-    )
-    # 可选：写入文件
-    logger.add(
-        "logs/bot.log",
-        rotation="500 MB",
-        retention="10 days",
-        level=level,
-        format="{time} | {level} | {name}:{function}:{line} - {message}",
-    )
-    return logger
+from src.utils.logging_setup import get_logger as _get_logger
+from src.utils.logging_setup import init_logging
 
-# 全局便捷函数
-def get_logger() -> logger:
-    return logger
+
+def setup_logger(level: str = "INFO", fmt: str = "text"):
+    """兼容旧调用（main.py 曾调用 setup_logger(config.LOG_LEVEL)）。"""
+    init_logging(level=level, fmt=fmt)
+    return _get_logger()
+
+
+def get_logger(name: Optional[str] = None):
+    return _get_logger(name)

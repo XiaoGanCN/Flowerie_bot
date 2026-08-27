@@ -1,7 +1,14 @@
 import asyncio
 import aiohttp
-from loguru import logger
+from src.utils.metrics import registry
+
 from src.config import Settings
+from src.utils.logging_setup import get_logger
+
+logger = get_logger(__name__)
+
+_M_SEND_FAIL = registry.counter("message_send_failure_total", "消息发送失败次数（按目标类型）", ["target"])
+
 
 class Sender:
     def __init__(self, config: Settings):
@@ -27,24 +34,28 @@ class Sender:
             message = message[:self.config.MAX_REPLY_LENGTH] + "..."
         url = f"{self.config.HTTP_API_BASE}/send_group_msg"
         payload = {"group_id": group_id, "message": message}
-        logger.info(f"Send to group {group_id}: {message[:30]}...")
+        logger.info("message_send_started group=%s", group_id, extra={"event": "message_send_started"})
         for attempt in range(max(1, retries + 1)):
             try:
                 async with self.session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
-                        text = await resp.text()
-                        logger.error(f"Send failed HTTP {resp.status}: {text}")
+                        logger.error("message_send_failed group=%s http=%s", group_id, resp.status,
+                                     extra={"event": "message_send_failed"})
                     else:
                         data = await resp.json()
                         if data.get("retcode") == 0:
-                            logger.info("Send success")
+                            logger.info("message_send_finished group=%s", group_id,
+                                        extra={"event": "message_send_finished"})
                             return True
                         else:
-                            logger.error(f"Send failed retcode {data.get('retcode')}: {data}")
+                            logger.error("message_send_failed group=%s retcode=%s", group_id, data.get("retcode"),
+                                         extra={"event": "message_send_failed"})
             except Exception as e:
-                logger.error(f"Send exception (attempt {attempt + 1}): {e}")
+                logger.error("message_send_failed group=%s err=%s", group_id, e,
+                             extra={"event": "message_send_failed"})
+            _M_SEND_FAIL.inc({"target": "group"})
             if attempt < retries:
-                logger.info(f"Send retry in 2s... ({attempt + 1}/{retries})")
+                logger.info("Send retry in 2s... (%s/%s)", attempt + 1, retries)
                 await asyncio.sleep(2)
         return False
 
@@ -56,8 +67,13 @@ class Sender:
         try:
             async with self.session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status != 200:
+                    _M_SEND_FAIL.inc({"target": "private"})
                     return False
                 data = await resp.json()
-                return data.get("retcode") == 0
+                ok = data.get("retcode") == 0
+                if not ok:
+                    _M_SEND_FAIL.inc({"target": "private"})
+                return ok
         except Exception:
+            _M_SEND_FAIL.inc({"target": "private"})
             return False

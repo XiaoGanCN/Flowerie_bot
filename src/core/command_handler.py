@@ -1,9 +1,11 @@
-from typing import Any, Optional
-from loguru import logger
+
 
 from src.config import Settings
 from src.services.sender import Sender
 from src.services.memory_manager import MemoryManager
+from src.utils.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 class CommandHandler:

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List, Deque
+from typing import Dict, Any, List, Deque
 from collections import deque
 import time
 

@@ -1,0 +1,30 @@
+[project]
+name = "flowerie-bot"
+version = "1.0.0"
+description = "花璃 · QQ 群聊机器人（DeepSeek 驱动 + NapCat OneBot11）"
+requires-python = ">=3.9"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+extend-exclude = ["data", "logs", ".git"]
+
+# 规则集说明：
+# E/F/W = pycodestyle/pyflakes 基础错误；I = import 排序；B = bugbear 易错点。
+# 刻意不启用 UP/SIM/PERF 等激进规则，避免为消告警做大规模无关重写。
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = [
+    "E501",  # 行宽由 line-length=120 控制，不单独告警
+    "B008",  # pydantic Field() 调用作为类属性默认值（框架标准用法）
+    "B009",  # getattr(x, "name") 形式在 duck-typing 配置下是有意的
+    "B010",  # setattr 同理
+    "B028",  # 日志 stacklevel 提示（回调场景下不适用）
+]

@@ -1,15 +1,17 @@
 import asyncio
 import json
 import re
-import random  # ✅ 新增：修复重试时 random.random() 未定义的问题
 import base64
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple
 import httpx
-from loguru import logger
+
 
 from src.config import Settings
 from src.services.memory_manager import MemoryManager
 from src.core.sanitizer import check_image_url, sanitize_untrusted_text
+from src.utils.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 def _looks_like_image(data: bytes) -> bool:
@@ -70,6 +72,7 @@ class AIClient:
         过预算闸门——保证 一次预算 = 一次真实 API 尝试。
         """
         self._api_backoff = 0.0  # 429 时置为更长退避，供准入层重试等待
+        self._retryable = True  # 本次失败是否值得重试（4xx 业务错误置 False）
         if not context or len(context.strip()) < 5:
             context = "（暂无历史聊天记录）"
 
@@ -206,14 +209,24 @@ class AIClient:
                 json=payload,
             )
             if r.status_code != 200:
-                logger.error(f"DeepSeek API HTTP {r.status_code}: {r.text[:200]}")
+                logger.error("DeepSeek API HTTP %s: %s", r.status_code, r.text[:200])
                 # 429 限流：告知准入层用更长退避重试（重试在准入层，每次过预算）
                 if r.status_code == 429:
                     self._api_backoff = 8.0
+                # 4xx 业务错误（401/400/404 等）重试无意义：标记不可重试，避免无效重试和重复扣费
+                elif 400 <= r.status_code < 500:
+                    self._retryable = False
                 return None, None
 
             data = r.json()
-            logger.debug(f"API raw response: {json.dumps(data, ensure_ascii=False)[:500]}")
+            # 只记录 usage 计数，不记录完整响应正文（隐私）
+            usage = (data or {}).get("usage") or {}
+            if isinstance(usage, dict):
+                logger.info(
+                    "ai_tokens prompt=%s completion=%s total=%s",
+                    usage.get("prompt_tokens", "-"), usage.get("completion_tokens", "-"), usage.get("total_tokens", "-"),
+                    extra={"event": "ai_tokens"},
+                )
             if "choices" in data and len(data["choices"]) > 0:
                 content = (data["choices"][0].get("message") or {}).get("content")
                 content = (content or "").strip()
@@ -380,7 +393,7 @@ class AIClient:
                     else:
                         return False
             else:
-                logger.warning(f"Toxic AI request failed, fallback to keyword result")
+                logger.warning("Toxic AI request failed, fallback to keyword result")
                 return keyword_hit
         except Exception as e:
             logger.error(f"Toxic AI detection error: {e}, fallback to keyword")
