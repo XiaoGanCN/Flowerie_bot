@@ -126,7 +126,7 @@ class MetricsRegistry:
             for h in self._histograms.values():
                 lines.append(f"# HELP {h.name} {h.help}")
                 lines.append(f"# TYPE {h.name} histogram")
-                for key, counts, total_sum in h.series():
+                for _key, counts, total_sum in h.series():
                     cumulative = 0.0
                     for i, b in enumerate(h.buckets):
                         cumulative += counts[i]
