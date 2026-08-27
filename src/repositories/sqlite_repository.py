@@ -43,6 +43,16 @@ class SQLiteMemoryRepository(MemoryRepository):
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
+        self._pragma()
+
+    def _pragma(self) -> None:
+        # WAL：读写不互斥；busy_timeout：并发写等待而非立刻报 database locked
+        with self._lock:
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA busy_timeout=5000")
+            except sqlite3.Error:
+                pass  # 只读介质/权限不足时静默降级（不影响功能）
 
     def _init_schema(self) -> None:
         with self._lock:

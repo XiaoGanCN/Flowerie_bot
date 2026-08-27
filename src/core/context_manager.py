@@ -104,6 +104,17 @@ class ContextManager:
             return str(path)[:-5] + ".db"
         return path
 
+    def _open_backup_conn(self, path: str, row_factory: bool = False) -> sqlite3.Connection:
+        conn = sqlite3.connect(path)
+        if row_factory:
+            conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+        except sqlite3.Error:
+            pass  # 只读介质时静默降级
+        return conn
+
     def _init_backup_db(self, conn) -> None:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS group_context (
@@ -192,7 +203,7 @@ class ContextManager:
             dirname = os.path.dirname(db_path)
             if dirname:
                 os.makedirs(dirname, exist_ok=True)
-            conn = sqlite3.connect(db_path)
+            conn = self._open_backup_conn(db_path)
             try:
                 self._init_backup_db(conn)
                 cnt = conn.execute("SELECT COUNT(*) FROM group_context").fetchone()[0]
@@ -203,8 +214,7 @@ class ContextManager:
             if cnt == 0 and legacy and str(legacy).lower().endswith(".json") and os.path.exists(legacy):
                 self._migrate_backup_from_json(legacy)
 
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
+            conn = self._open_backup_conn(db_path, row_factory=True)
             try:
                 restored = 0
                 restored_ids = 0
@@ -240,7 +250,7 @@ class ContextManager:
             dirname = os.path.dirname(db_path)
             if dirname:
                 os.makedirs(dirname, exist_ok=True)
-            conn = sqlite3.connect(db_path)
+            conn = self._open_backup_conn(db_path)
             try:
                 self._init_backup_db(conn)
                 conn.execute("BEGIN")

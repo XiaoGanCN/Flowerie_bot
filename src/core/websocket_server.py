@@ -32,7 +32,10 @@ class WebSocketServer:
         self.message_router = message_router
         self.ws: Optional[websockets.WebSocketServerProtocol] = None
         self._running = True
+        self._draining = False  # shutdown 已开始：不再接收新事件
+        self._drain_timeout = 15.0  # 等待 in-flight 事件处理的上限（秒）
         self._server_task: Optional[asyncio.Task] = None
+        self._handler_task: Optional[asyncio.Task] = None  # 当前连接的处理任务（shutdown 时等待/取消）
         self._server: Optional[websockets.Server] = None
 
     async def run(self):
@@ -71,8 +74,9 @@ class WebSocketServer:
         await self._close_server()
 
     async def shutdown(self) -> None:
-        """优雅停机：停止重连循环、关闭当前 NapCat 连接并释放服务。"""
+        """优雅停机：停止接收新事件（draining）→ 关闭连接 → 等待/取消 in-flight 处理 → 释放服务。"""
         self._running = False
+        self._draining = True
         if self.ws is not None:
             try:
                 await self.ws.close(code=1000, reason="shutdown")
@@ -89,6 +93,19 @@ class WebSocketServer:
                 pass
             except Exception as e:
                 logger.debug("关闭 server 任务异常: %s", e)
+        # 等待进行中的事件处理（如 AI 请求）完成；超过上限则取消（shutdown 优先级更高）
+        if self._handler_task is not None and self._handler_task is not asyncio.current_task():
+            try:
+                await asyncio.wait_for(asyncio.shield(self._handler_task), timeout=self._drain_timeout)
+                logger.debug("in-flight 事件处理已结束")
+            except asyncio.TimeoutError:
+                logger.warning("in-flight 事件处理超过 %ss，取消", self._drain_timeout)
+                self._handler_task.cancel()
+                try:
+                    await self._handler_task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001 - 关闭路径
+                    pass
+            self._handler_task = None
         await self._close_server()
         logger.info("WebSocket server 已优雅关闭", extra={"event": "ws_shutdown_finished"})
 
@@ -140,8 +157,13 @@ class WebSocketServer:
         logger.info("OneBot WebSocket connected")
         self.ws = ws
         self.message_router.global_state.ws_connected = True
+        self._handler_task = asyncio.current_task()
         try:
             async for message in ws:
+                # draining：shutdown 已开始，不再接收新事件（进行中的处理仍会跑完/被超时取消）
+                if self._draining:
+                    logger.info("draining：忽略新事件")
+                    break
                 logger.debug("WS raw: %s", message[:200])
                 try:
                     if isinstance(message, bytes):
@@ -178,3 +200,5 @@ class WebSocketServer:
             if self.ws is ws:
                 self.ws = None
                 self.message_router.global_state.ws_connected = False
+                if self._handler_task is asyncio.current_task():
+                    self._handler_task = None

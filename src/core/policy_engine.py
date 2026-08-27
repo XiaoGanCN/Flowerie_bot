@@ -8,6 +8,9 @@ from src.core.memory_parser import MemoryParser
 from src.core.poke_manager import PokeManager
 from src.core.repeat_detector import RepeatDetector
 from src.models import GlobalState, GroupState
+from src.utils.logging_setup import get_logger
+
+logger = get_logger(__name__)
 from src.services.memory_manager import MemoryManager
 
 
@@ -94,3 +97,28 @@ class PolicyEngine:
 
     def record_active_chat(self) -> None:
         return self.active_chat.record_active_chat()
+
+    # ---------- 内存治理：清理陈旧用户维度状态 ----------
+    def prune_stale_state(self, max_age_seconds: float = 86400.0) -> int:
+        """清理超过 max_age 未活动的用户级状态条目（防用户维度 dict 无限增长）。
+
+        清理对象：用户冷却 / 用户 AI 限速 / 戳戳冷却 / 引战警告。
+        返回清理的条目总数。
+        """
+        import time
+        now = time.time()
+        removed = 0
+        gs = self.global_state
+        for table in (gs.user_ai_last_call, gs.poke_last_time, gs.last_toxic_warning):
+            stale = [k for k, v in table.items() if now - float(v or 0) > max_age_seconds]
+            for k in stale:
+                table.pop(k, None)
+                removed += 1
+        for state in self.groups.values():
+            stale = [k for k, v in state.user_last_time.items() if now - float(v or 0) > max_age_seconds]
+            for k in stale:
+                state.user_last_time.pop(k, None)
+                removed += 1
+        if removed:
+            logger.info("已清理 %d 条陈旧用户状态", removed)
+        return removed

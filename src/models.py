@@ -49,6 +49,9 @@ class GlobalState:
     group_ai_budget_count: Dict[int, int] = field(default_factory=dict)  # 每群每日 AI 调用次数
     user_ai_last_call: Dict[int, float] = field(default_factory=dict)    # 每用户最近一次 AI 调用时间
     budget_notified_groups: Dict[int, str] = field(default_factory=dict)  # 群 -> 已提示额度的日期
+    # AI 全局熔断（防失败风暴）：连续失败计数 + 熔断开启截止时间
+    ai_consecutive_failures: int = 0
+    ai_circuit_open_until: float = 0.0
 
 # ---------- 消息结构 ----------
 @dataclass

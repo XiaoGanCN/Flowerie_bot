@@ -200,3 +200,30 @@ guarded_chat(group_id, user_id, ...)
 8. pyproject.toml（pytest/ruff）、补测试
 9. Ruff 修复
 10. GitHub Actions CI
+
+---
+
+# 第二轮：生产事故模拟式审计（故障模式表）
+
+> 审计时间：2026-08-28。结论先行：**未发现会导致 Bot 崩溃或数据损坏的 P0 缺陷**；
+> 发现 3 个 P1 与 4 个 P2 问题，修复如下。
+
+| # | 场景 | 当前行为 | 风险 | 严重程度 | 处理 |
+|---|---|---|---|---|---|
+| 1 | 100 条消息并发 | trace_id 用 contextvars 隔离；全部共享状态在 asyncio 单线程内同步访问 | 无竞态 | P2 | 补并发测试 |
+| 2 | 同用户 20 条并发 | cooldown 的 check+update 无 await 间隔，原子；被@消息绕过用户冷却但预算 per-user 限速兜底 | 无竞态 | P2 | 补并发测试 |
+| 3 | 同群预算并发 | budget.check() check+increment 同同步块，无 TOCTOU | 无竞态 | — | 补并发测试验证 |
+| 4 | AI 连续失败 | 指数退避 + 4xx 不重试 + 每次尝试过预算；**无全局熔断**：失败风暴时多消息并发重试可能打爆 API | 中 | **P1** | 新增简单熔断 |
+| 5 | AI 永久卡住 | httpx 分层超时 + EVENT_PROCESS_TIMEOUT 兜底；**shutdown 不等待进行中的事件处理** | 中 | **P1** | draining + 等待/取消 in-flight |
+| 6 | WS 突然断开 | 单连接守卫；serve 失败按 5→10→20→40→60s 退避重连；连接断开靠宿主重连 | 低 | P2 | 补测试 |
+| 7 | shutdown 时收消息 | **无 draining 状态，WS handler 任务未追踪**，shutdown 后 in-flight 可能继续跑满超时 | 中 | **P1** | 追踪 handler task + draining |
+| 8 | 后台任务崩溃 | TaskManager 记录 task_failed（含堆栈）；context_backup 循环自带 try/except 不会死；不自动无限重启 | 低（可接受） | P3 | 文档化 |
+| 9 | SQLite 并发 | 单连接 + RLock + to_thread 提交；未开 WAL/busy_timeout（单连接下无 locked 风险） | 低 | P2 | 加固 WAL + busy_timeout |
+| 10 | Memory 一致性 | check-duplicate + insert 在同一连接同步完成（无 await 间隔），同连接可见未提交行 → 去重原子 | 无竞态 | P2 | 补 dedup race 测试 |
+| 11 | 资源泄漏 | 全部 session/client/连接有 close；CancelledError 不被 except Exception 吞 | 低 | — | 补 AI cancellation 测试 |
+| 12 | 取消传播 | asyncio.CancelledError 是 BaseException，`except Exception` 不吞；无 except BaseException | 正确 | — | grep 确认 |
+| 13 | 无界资源 | 缓存/队列均有上限；**用户维度 dict（user_last_time/user_ai_last_call/poke_last_time/last_toxic_warning）无治理** | 低-中 | **P2** | 定期清理陈旧条目 |
+| 14 | SSRF | scheme 白名单 + 可选主机白名单 + loopback(127/8, ::1)；0.0.0.0/私有 IPv4 无白名单时放行（设计决策）；redirect ≤3；MIME 嗅探；DNS rebinding 无法完全防御（本地部署可接受） | 低 | P2 | 补边界测试 |
+| 15 | Prompt Injection | 不可信数据区 + 清洗 + 记忆闸门 + 目标用户锁定，多层防护 | 低 | — | 补记忆污染测试 |
+| 16 | 日志安全 | 不记录 prompt/响应全文；redact 保底；**图片 URL（含签名 query）进入错误日志** | 低 | **P2** | URL 日志只记 host+path |
+| 17 | Metrics | Counter/Histogram 有锁；**export_text 的 label 输出不符合 Prometheus 规范**（`{"a","b"}` 而非 `{name="value"}`） | 中 | **P1** | 修复 label 输出 |

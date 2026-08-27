@@ -93,16 +93,18 @@ class MessageRouter:
         await self.policy_engine.save_context_backup()
 
     async def _context_backup_loop(self):
-        """周期性保存每群最近 50 条上下文。"""
+        """周期性保存每群最近 50 条上下文 + 清理陈旧用户状态。"""
         interval = max(10, self.config.CONTEXT_BACKUP_INTERVAL)
         while True:
             try:
                 await asyncio.sleep(interval)
                 await self.policy_engine.save_context_backup()
+                # 内存治理：顺带清理超过 24h 未活动的用户级状态条目
+                self.policy_engine.prune_stale_state()
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Context backup loop error: {e}")
+                logger.error("Context backup loop error: %s", e)
 
     async def process_event(self, data: Dict[str, Any]) -> None:
         post_type = data.get("post_type")
@@ -335,6 +337,15 @@ class MessageRouter:
         attempts = max_retries + 1  # 首次 + 重试
         started = time.monotonic()
         model = getattr(self.config, "DEEPSEEK_MODEL", "-")
+        # AI 全局熔断：连续失败达到阈值后暂停调用，防失败风暴下多消息并发重试打爆 API
+        circuit_until = getattr(self.global_state, "ai_circuit_open_until", 0.0)
+        if time.time() < circuit_until:
+            logger.warning(
+                "ai_circuit_open group=%s user=%s 熔断中，跳过 AI 调用",
+                group_id, user_id,
+                extra={"event": "budget_rejected"},
+            )
+            return None, None, True
         logger.info(
             "ai_request_started group=%s user=%s model=%s",
             group_id, user_id, model,
@@ -342,6 +353,7 @@ class MessageRouter:
         )
         _M_AI_REQ.inc()
         reply, memory_update = None, None
+        retryable_failure = False  # 是否发生了可重试的瞬时失败（用于熔断计数）
         for attempt in range(attempts):
             # 用户聊天限速只在首次尝试检查（重试是同一逻辑调用的延续，
             # 若每次都查，会被自己刚更新的 user_ai_last_call 拦掉）
@@ -354,6 +366,8 @@ class MessageRouter:
                 latency = time.monotonic() - started
                 _M_AI_OK.inc()
                 _M_AI_LATENCY.observe(latency)
+                # 成功：清零连续失败计数，关闭熔断
+                self.global_state.ai_consecutive_failures = 0
                 logger.info(
                     "ai_request_finished group=%s user=%s latency_ms=%.0f attempts=%d",
                     group_id, user_id, latency * 1000, attempt + 1,
@@ -368,6 +382,7 @@ class MessageRouter:
                     extra={"event": "ai_request_failed", "attempt": attempt + 1, "max_attempts": attempts, "retryable": False},
                 )
                 break
+            retryable_failure = True  # 走到这里说明是超时/网络/5xx/空回复等可重试失败
             if attempt + 1 < attempts:
                 _M_AI_RETRY.inc()
             # 指数退避：429（chat_once 置 _api_backoff=8）→ 8/16/30s 封顶；
@@ -382,6 +397,19 @@ class MessageRouter:
             await asyncio.sleep(backoff)
         _M_AI_FAIL.inc()
         _M_AI_LATENCY.observe(time.monotonic() - started)
+        # 熔断计数：只统计可重试的瞬时失败（超时/网络/5xx/空回复），
+        # 4xx 业务错误（retryable=False）是永久性错误，不计入熔断
+        if retryable_failure:
+            self.global_state.ai_consecutive_failures += 1
+            threshold = max(1, int(getattr(self.config, "AI_CIRCUIT_BREAKER_FAILURES", 10)))
+            if self.global_state.ai_consecutive_failures >= threshold:
+                pause = max(5, int(getattr(self.config, "AI_CIRCUIT_BREAKER_PAUSE_SECONDS", 60)))
+                self.global_state.ai_circuit_open_until = time.time() + pause
+                self.global_state.ai_consecutive_failures = 0
+                logger.warning(
+                    "ai_circuit_opened failures=%d pause=%ss", threshold, pause,
+                    extra={"event": "ai_circuit_opened"},
+                )
         return reply, memory_update, False
 
     async def guarded_is_toxic(self, group_id: int, user_id: int, text: str) -> bool:
