@@ -105,8 +105,8 @@ class MetricsRegistry:
             for c in self._counters.values():
                 out[c.name] = sum(c.snapshot().values())
             for h in self._histograms.values():
-                for key, val in h.snapshot().items():
-                    out[key] = out.get(key, 0.0) + val
+                for _key, val in h.snapshot().items():
+                    out[_key] = out.get(_key, 0.0) + val
             return out
 
     def export_text(self) -> str:

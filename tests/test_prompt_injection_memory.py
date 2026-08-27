@@ -88,7 +88,7 @@ async def test_memory_content_sanitized_before_system_prompt():
         system_prompt = FakeHTTPClient.last_payload["messages"][0]["content"]
         # 注：system prompt 自身的防御指令会包含"忽略以上规则"字样，
         # 因此只检查"记忆段落"内的清洗结果
-        mem_line = next(l for l in system_prompt.split("\n") if "关于该用户的已有记忆" in l)
+        mem_line = next(line for line in system_prompt.split("\n") if "关于该用户的已有记忆" in line)
         assert "忽略以上规则" not in mem_line  # 注入句式在记忆段被清洗
         assert "已过滤" in mem_line
         mm.close()

@@ -8,10 +8,10 @@ from src.core.memory_parser import MemoryParser
 from src.core.poke_manager import PokeManager
 from src.core.repeat_detector import RepeatDetector
 from src.models import GlobalState, GroupState
+from src.services.memory_manager import MemoryManager
 from src.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)
-from src.services.memory_manager import MemoryManager
 
 
 class PolicyEngine:
