@@ -16,7 +16,8 @@ import logging.handlers
 import re
 import sys
 import time
-from typing import Optional
+from collections import deque
+from typing import List, Optional
 
 from src.utils.trace import get_trace_id
 
@@ -112,6 +113,30 @@ class TraceIdFilter(logging.Filter):
         return True
 
 
+# 内存环形缓冲：保留最近日志，供 Web UI 日志页读取
+_RECENT_LOG_BUFFER: deque = deque(maxlen=500)
+
+
+class MemoryLogHandler(logging.Handler):
+    """把格式化后的日志行写入内存环形缓冲（Web UI 实时日志用）。"""
+
+    def __init__(self, buffer: deque):
+        super().__init__()
+        self._buffer = buffer
+        self._formatter = TextFormatter()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._buffer.append(self._formatter.format(record))
+        except Exception:  # noqa: BLE001 - 日志绝不能成为故障源
+            pass
+
+
+def get_recent_logs(limit: int = 100) -> List[str]:
+    """返回最近 N 条日志行（Web UI /api/logs 用）。"""
+    return list(_RECENT_LOG_BUFFER)[-limit:]
+
+
 # ---------- 初始化 ----------
 def init_logging(level: str = "INFO", fmt: str = "text", log_file: Optional[str] = "logs/bot.log") -> None:
     """初始化全局日志。
@@ -146,6 +171,10 @@ def init_logging(level: str = "INFO", fmt: str = "text", log_file: Optional[str]
             root.addHandler(file_handler)
         except OSError:
             pass  # 日志目录不可写时不影响主流程
+
+    # 内存环形缓冲（Web UI 日志页）
+    mem_handler = MemoryLogHandler(_RECENT_LOG_BUFFER)
+    root.addHandler(mem_handler)
 
     for h in root.handlers:
         h.addFilter(TraceIdFilter())

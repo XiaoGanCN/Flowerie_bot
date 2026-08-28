@@ -114,9 +114,10 @@ def test_restart_required_flag(cs):
 class FakeRequest:
     """最小 request 桩：headers / remote / json()。"""
 
-    def __init__(self, headers=None, remote="127.0.0.1", body=None):
+    def __init__(self, headers=None, remote="127.0.0.1", body=None, query=None):
         self.headers = headers or {}
         self.remote = remote
+        self.query = query or {}
         self._body = body or {}
 
     async def json(self):
@@ -190,3 +191,44 @@ async def test_login_rate_limit(webapp):
         await server._handle_login(FakeRequest(body={"username": "admin", "password": "wrong"}))
     resp = await server._handle_login(FakeRequest(body={"username": "admin", "password": "secret123"}))
     assert resp.status == 429  # 锁住
+
+
+# ---------- 新增：状态页 / 日志页 API ----------
+async def test_status_api(webapp):
+    server = webapp
+    token = await _login(server)
+    resp = await server._handle_status(FakeRequest(headers={"Authorization": f"Bearer {token}"}))
+    assert resp.status == 200
+    data = await _resp_data(resp)
+    assert "uptime_seconds" in data
+    assert "metrics" in data
+    assert "version" in data
+
+
+async def test_status_unauthorized(webapp):
+    server = webapp
+    resp = await server._handle_status(FakeRequest())
+    assert resp.status == 401
+
+
+async def test_logs_api(webapp):
+    server = webapp
+    token = await _login(server)
+    resp = await server._handle_logs(FakeRequest(headers={"Authorization": f"Bearer {token}"}))
+    assert resp.status == 200
+    data = await _resp_data(resp)
+    assert isinstance(data.get("logs"), list)
+
+
+async def test_status_provider_ws_connected(cs):
+    """status_provider 注入的状态（如 WS 连接）出现在 /api/status。"""
+    config, repo, service, tmp = cs
+    config.WEB_UI_USERNAME = "admin"
+    config.WEB_UI_PASSWORD = "secret123"
+    server = WebUIServer(config, service, status_provider=lambda: {"ws_connected": True})
+    token = (await _resp_data(await server._handle_login(
+        FakeRequest(body={"username": "admin", "password": "secret123"}))))["token"]
+    resp = await server._handle_status(FakeRequest(headers={"Authorization": f"Bearer {token}"}))
+    data = await _resp_data(resp)
+    assert data["ws_connected"] is True
+    server._tokens.clear()

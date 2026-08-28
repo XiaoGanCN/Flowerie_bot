@@ -47,7 +47,14 @@ async def main():
         sticker_manager = StickerManager(config, sticker_repo, ai_client)
         tool_manager = McpToolManager(config)
         config_service = ConfigService(config, settings_repo)
-        web_ui = WebUIServer(config, config_service) if config.WEB_UI_ENABLED else None
+        web_ui = None
+        if config.WEB_UI_ENABLED:
+            def _status_provider():
+                return {
+                    "ws_connected": message_router.global_state.ws_connected,
+                    "groups": len(message_router.policy_engine.groups),
+                }
+            web_ui = WebUIServer(config, config_service, status_provider=_status_provider)
         file_parser = FileParser(config)
         policy_engine = PolicyEngine(config, memory_manager)
         message_router = MessageRouter(
