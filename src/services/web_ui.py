@@ -149,6 +149,7 @@ class WebUIServer:
     def build_app(self) -> web.Application:
         app = web.Application()
         app.router.add_get("/", self._handle_index)
+        app.router.add_get("/webui", self._handle_index)  # NapCat 风格路径别名
         app.router.add_post("/api/login", self._handle_login)
         app.router.add_post("/api/logout", self._handle_logout)
         app.router.add_get("/api/config", self._handle_get_config)
@@ -187,10 +188,22 @@ _INDEX_HTML = """<!DOCTYPE html>
 :root{--bg:#1e2229;--panel:#262b33;--panel2:#2d333d;--border:#363d48;--text:#d7dde6;--dim:#8b96a5;--accent:#5b8def;--ok:#3fb950;--err:#f85149}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh;font-size:14px}
+/* JS 状态条（恒显示，用于定位浏览器 JS 问题） */
+#jsOk{position:fixed;top:0;left:0;right:0;z-index:99;text-align:center;font-size:12px;padding:3px;background:rgba(248,81,73,.2);color:var(--err)}
+#jsOk.ok{background:rgba(63,185,80,.2);color:var(--ok)}
+/* 登录视图（静态 HTML，未登录必显） */
+#loginView{width:100%;display:flex;align-items:center;justify-content:center;padding:24px}
+.login-box{max-width:360px;width:100%;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:28px;margin-top:10vh}
+.login-box h2{font-size:17px;margin-bottom:4px}
+.login-box .sub{font-size:12px;color:var(--dim);margin-bottom:20px}
+.login-box input{width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:10px 12px;margin-bottom:12px;font-size:14px}
+.login-box button{width:100%;background:var(--accent);border:none;color:#fff;padding:10px;border-radius:7px;cursor:pointer;font-size:14px}
+.login-box button:hover{opacity:.88}
+.login-box .hint{font-size:12px;color:var(--dim);margin-top:14px;line-height:1.6}
 /* 侧边栏 */
 .sidebar{width:200px;background:var(--panel);border-right:1px solid var(--border);padding:16px 0;flex-shrink:0}
 .logo{display:flex;align-items:center;gap:10px;padding:4px 20px 16px;border-bottom:1px solid var(--border);margin-bottom:8px}
-.logo .dot{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#5b8def,#b05bef);display:flex;align-items:center;justify-content:center;font-size:18px}
+.logo .dot{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#5b8def,#b05bef);display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff}
 .logo b{font-size:15px}.logo span{display:block;font-size:11px;color:var(--dim);font-weight:normal}
 .nav{padding:0 8px}
 .nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;color:var(--dim);margin-bottom:2px;user-select:none}
@@ -204,12 +217,10 @@ body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;backgr
 .badge.online{background:rgba(63,185,80,.15);color:var(--ok)}
 .badge.offline{background:rgba(248,81,73,.15);color:var(--err)}
 .page{display:none}.page.active{display:block}
-/* 总览卡片 */
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px}
 .card .num{font-size:22px;font-weight:600;margin-top:6px}
 .card .lbl{font-size:12px;color:var(--dim)}
-/* 设置表格 */
 .set-item{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:8px}
 .set-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .set-info{width:300px;flex-shrink:0}
@@ -221,15 +232,9 @@ button.ghost{background:transparent;border:1px solid var(--border);color:var(--d
 .msg{font-size:12px;color:var(--accent);min-width:120px}
 .msg.err{color:var(--err)}
 .tag{font-size:11px;background:var(--panel2);border-radius:4px;padding:2px 6px;color:var(--dim)}
-/* 日志 */
 .logbox{background:#171a1f;border:1px solid var(--border);border-radius:10px;padding:12px;height:calc(100vh - 220px);overflow-y:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-all}
-/* 登录 */
-#login{max-width:340px;margin:20vh auto;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:28px}
-#login h2{margin-bottom:20px;font-size:17px}
-#login input{width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:9px 12px;margin-bottom:12px}
 .hidden{display:none!important}
 h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
-/* 移动端：窄屏时侧边栏变顶部横向导航 */
 @media (max-width:720px){
   body{flex-direction:column}
   .sidebar{width:100%;padding:8px 0;border-right:none;border-bottom:1px solid var(--border)}
@@ -238,78 +243,81 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
   .nav-item{flex-shrink:0}
   .main{padding:14px}
   .set-info{width:100%}
+  #loginView{margin-top:20px}
 }
 </style>
 </head>
 <body>
-<div class="sidebar" id="sidebar">
-  <div class="logo"><div class="dot">花</div><b>花璃<span>Flowerie · 管理后台</span></b></div>
-  <div class="nav">
-    <div class="nav-item active" data-page="overview">总览</div>
-    <div class="nav-item" data-page="ai">AI 设置</div>
-    <div class="nav-item" data-page="bot">Bot 设置</div>
-    <div class="nav-item" data-page="memory">记忆</div>
-    <div class="nav-item" data-page="sticker">表情包</div>
-    <div class="nav-item" data-page="mcp">MCP</div>
-    <div class="nav-item" data-page="policy">预算与策略</div>
-    <div class="nav-item" data-page="advanced">高级</div>
-    <div class="nav-item" data-page="logging">日志</div>
-    <div class="nav-item" data-page="about">关于</div>
+<div id="jsOk">JS 未运行</div>
+<!-- 登录视图：静态 HTML，未登录时始终可见 -->
+<div id="loginView">
+  <div class="login-box">
+    <h2>花璃 · 管理后台</h2>
+    <div class="sub">Flowerie · 配置管理</div>
+    <form id="loginForm" onsubmit="event.preventDefault(); login();">
+      <input id="u" placeholder="用户名" autocomplete="username">
+      <input id="p" type="password" placeholder="密码" autocomplete="current-password">
+      <button type="submit">登录</button>
+    </form>
+    <div class="msg err" id="loginMsg"></div>
+    <div class="hint">账号/密码在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD），本后台无注册功能 · UI v8</div>
+    <noscript><div class="hint" style="color:var(--err)">⚠️ 此页面需要启用 JavaScript 才能登录和操作</div></noscript>
   </div>
 </div>
-<div class="main">
-  <div class="topbar">
-    <h1 id="pageTitle">总览</h1>
-    <div style="display:flex;gap:8px;align-items:center">
-      <span class="badge" id="uiVer">UI v7</span>
-      <span class="badge" id="jsOk" style="background:rgba(248,81,73,.15);color:var(--err)">JS 未运行</span>
-      <span class="badge offline" id="wsBadge">未连接</span>
-      <button class="ghost" onclick="logout()">退出</button>
+<!-- 管理面板：登录后显示 -->
+<div id="dashboard" class="hidden">
+  <div class="sidebar">
+    <div class="logo"><div class="dot">花</div><b>花璃<span>Flowerie · 管理后台</span></b></div>
+    <div class="nav">
+      <div class="nav-item active" data-page="overview">总览</div>
+      <div class="nav-item" data-page="ai">AI 设置</div>
+      <div class="nav-item" data-page="bot">Bot 设置</div>
+      <div class="nav-item" data-page="memory">记忆</div>
+      <div class="nav-item" data-page="sticker">表情包</div>
+      <div class="nav-item" data-page="mcp">MCP</div>
+      <div class="nav-item" data-page="policy">预算与策略</div>
+      <div class="nav-item" data-page="advanced">高级</div>
+      <div class="nav-item" data-page="logging">日志</div>
+      <div class="nav-item" data-page="about">关于</div>
     </div>
   </div>
-  <div id="app">
-    <div class="page active" id="page-overview">
-      <!-- 登录卡片：静态 HTML，不依赖 JS 渲染；未登录时始终可见 -->
-      <div id="loginCard" class="set-item" style="margin-bottom:16px">
-        <form id="loginForm" onsubmit="event.preventDefault(); login();" style="display:contents">
-        <div class="set-row">
-          <div class="set-info"><div class="name">登录管理后台</div><div class="desc">账号/密码在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD），无注册功能 · UI v7</div></div>
-          <input class="set-input" id="u" placeholder="用户名" style="max-width:150px;flex:none">
-          <input class="set-input" id="p" type="password" placeholder="密码" style="max-width:150px;flex:none">
-          <button type="submit">登录</button>
-          <span class="msg err" id="loginMsg"></span>
-        </div>
-        </form>
+  <div class="main">
+    <div class="topbar">
+      <h1 id="pageTitle">总览</h1>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span class="badge" id="uiVer">UI v8</span>
+        <span class="badge offline" id="wsBadge">未连接</span>
+        <button class="ghost" onclick="logout()">退出</button>
       </div>
-      <div class="card" id="overviewPlaceholder"><span class="lbl">登录后可查看统计与全部配置</span></div>
-      <noscript><div class="card" style="border-color:var(--err)"><span class="lbl">⚠️ 此页面需要启用 JavaScript 才能登录和操作（当前未检测到 JS，或浏览器禁用了脚本）</span></div></noscript>
     </div>
-    <div class="page" id="page-ai"></div>
-    <div class="page" id="page-bot"></div>
-    <div class="page" id="page-memory"></div>
-    <div class="page" id="page-sticker"></div>
-    <div class="page" id="page-mcp"></div>
-    <div class="page" id="page-policy"></div>
-    <div class="page" id="page-advanced"></div>
-    <div class="page" id="page-logging">
-      <div id="logSettings"></div>
-      <div style="margin-bottom:8px"><button class="ghost" onclick="loadLogs()">刷新日志</button></div>
-      <div class="logbox" id="logbox"></div>
-    </div>
-    <div class="page" id="page-about">
-      <div class="card">
-        <p><b>花璃 Flowerie</b> v0.0.1</p>
-        <p class="lbl" style="margin-top:8px">DeepSeek 驱动 · NapCat OneBot11 · SQLite 存储</p>
-        <p class="lbl">架构审计与完整文档见仓库 docs/</p>
+    <div id="app">
+      <div class="page active" id="page-overview"></div>
+      <div class="page" id="page-ai"></div>
+      <div class="page" id="page-bot"></div>
+      <div class="page" id="page-memory"></div>
+      <div class="page" id="page-sticker"></div>
+      <div class="page" id="page-mcp"></div>
+      <div class="page" id="page-policy"></div>
+      <div class="page" id="page-advanced"></div>
+      <div class="page" id="page-logging">
+        <div id="logSettings"></div>
+        <div style="margin-bottom:8px"><button class="ghost" onclick="loadLogs()">刷新日志</button></div>
+        <div class="logbox" id="logbox"></div>
+      </div>
+      <div class="page" id="page-about">
+        <div class="card">
+          <p><b>花璃 Flowerie</b> v0.0.1</p>
+          <p class="lbl" style="margin-top:8px">DeepSeek 驱动 · NapCat OneBot11 · SQLite 存储 · UI v8</p>
+          <p class="lbl">架构审计与完整文档见仓库 docs/</p>
+        </div>
       </div>
     </div>
   </div>
 </div>
 <script>
-// JS 存活标记：脚本能执行到这里说明 JS 正常运行
-(function(){var b=document.getElementById("jsOk");if(b){b.textContent="JS 运行中";b.style.background="rgba(63,185,80,.15)";b.style.color="var(--ok)";}})();
-// token 仅保存在内存（不写 localStorage）：每次打开页面都需要重新登录；
-// 登录条内嵌在配置页顶部，不再使用独立弹窗/登录页
+// JS 存活标记：脚本能执行到此处 → JS 正常运行
+(function(){var b=document.getElementById("jsOk");if(b){b.textContent="JS 运行中";b.classList.add("ok");}})();
+// token 仅保存在内存（不写 localStorage）：每次打开都需登录；登录视图为静态 HTML 必显
 let token = null;
 const CATS = {ai:"AI 设置",bot:"Bot 设置",memory:"记忆",sticker:"表情包",mcp:"MCP",logging:"日志设置",policy:"预算与策略",advanced:"高级（需重启）"};
 const PAGES = {ai:"AI",bot:"Bot",memory:"Memory",sticker:"Sticker",mcp:"MCP",policy:"Policy",logging:"Logging",advanced:"Advanced"};
@@ -318,7 +326,6 @@ async function api(url, method, body){
   if (token) opt.headers["Authorization"] = "Bearer " + token;
   if (body) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const r = await fetch(url, opt);
-  // token 过期/失效：清掉并回到登录态（顶部登录条重新出现）
   if (r.status === 401 && token) { token = null; renderAuthState(); }
   try { return {status:r.status, data:await r.json()}; } catch(e) { return {status:r.status, data:{}}; }
 }
@@ -328,20 +335,19 @@ async function login(){
   else loginMsg.textContent = r.data.error || "登录失败";
 }
 function logout(){ token = null; renderAuthState(); }
-// 登录态渲染：切换总览页静态登录卡片的显隐；登录后加载全部配置
 function renderAuthState(){
-  const card = document.getElementById("loginCard");
-  const placeholder = document.getElementById("overviewPlaceholder");
+  const lv = document.getElementById("loginView");
+  const db = document.getElementById("dashboard");
   if (token) {
-    if (card) card.style.display = "none";
-    if (placeholder) placeholder.style.display = "none";
+    if (lv) lv.style.display = "none";
+    if (db) db.classList.remove("hidden");
     loadStatus(); loadConfigs(); loadLogs();
   } else {
-    if (card) card.style.display = "";
-    if (placeholder) placeholder.style.display = "";
+    if (lv) lv.style.display = "";
+    if (db) db.classList.add("hidden");
     ["ai","bot","memory","sticker","mcp","policy","advanced"].forEach(p => {
       const el = document.getElementById("page-" + p);
-      if (el) el.innerHTML = `<div class="card"><span class="lbl">请先登录：点击左侧「总览」页，在登录卡片中输入账号密码</span></div>`;
+      if (el) el.innerHTML = `<div class="card"><span class="lbl">请先登录：输入上方账号密码</span></div>`;
     });
     document.getElementById("pageTitle").textContent = "总览";
   }
@@ -374,14 +380,13 @@ async function loadConfigs(){
   if (r.status !== 200) return;
   for (const p of Object.keys(PAGES)) {
     const el = document.getElementById("page-" + p.toLowerCase());
-    if (el) el.innerHTML = "";   // 缺页面元素时跳过，不再抛错导致整个渲染中断
+    if (el) el.innerHTML = "";
   }
   const logSettings = document.getElementById("logSettings");
   if (logSettings) logSettings.innerHTML = "";
   const byCat = {};
   r.data.configs.forEach(c => { (byCat[c.category] = byCat[c.category] || []).push(c); });
   for (const [cat, items] of Object.entries(byCat)) {
-    // 日志设置渲染在日志页上方，不覆盖日志查看器
     const page = cat === "Logging" ? logSettings
                                    : document.getElementById("page-" + PAGES[cat].toLowerCase());
     if (!page) continue;
@@ -410,7 +415,6 @@ async function loadLogs(){
   }
 }
 function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;"); }
-// 导航
 document.querySelectorAll(".nav-item").forEach(el => el.onclick = () => {
   document.querySelectorAll(".nav-item").forEach(x => x.classList.remove("active"));
   document.querySelectorAll(".page").forEach(x => x.classList.remove("active"));
@@ -420,10 +424,8 @@ document.querySelectorAll(".nav-item").forEach(el => el.onclick = () => {
   if (el.dataset.page === "logging") loadLogs();
   if (el.dataset.page === "overview") loadStatus();
 });
-// 启动
 renderAuthState();
 setInterval(loadStatus, 5000);
 </script>
 </body>
-</html>
-"""
+</html>"""
