@@ -102,7 +102,7 @@ OneBot WebSocket connected
 
 ## Web UI
 
-默认关闭。启用后访问 http://127.0.0.1:8080
+默认关闭。启用后访问 http://127.0.0.1:8080/panel（无 JS 兼容面板，手机浏览器也能用）
 用 WEB_UI_USERNAME / WEB_UI_PASSWORD 登录
 可管理 AI / Bot / 记忆 / 表情包 / MCP 配置（API Key 只显示掩码）。详见 [docs/configuration.md](docs/configuration.md)。
 
@@ -116,9 +116,9 @@ OneBot WebSocket connected
    WEB_UI_PASSWORD=你的密码      # 必填，留空会拒绝启动
    ```
 2. 重启机器人：`python main.py`（或守护脚本 `bash run.sh`）
-3. 浏览器打开 http://127.0.0.1:8080，用上面的账号密码登录
+3. 浏览器打开 http://127.0.0.1:8080/panel（无 JS 兼容面板，手机浏览器也能用），用上面的账号密码登录
 
-> 同一局域网内的电脑访问：在 `.env` 加 `WEB_UI_ALLOW_LAN=true`（显式开关，绑定 0.0.0.0 并输出安全警告），然后浏览器打开 `http://局域网IP:8080`（请设置强密码，勿直接暴露公网）。
+> 同一局域网内的电脑访问：在 `.env` 加 `WEB_UI_ALLOW_LAN=true`（显式开关，绑定 0.0.0.0 并输出安全警告），然后浏览器打开 `http://局域网IP:8080/panel`（请设置强密码，勿直接暴露公网）。
 
 ## MCP
 
