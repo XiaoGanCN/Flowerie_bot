@@ -140,7 +140,10 @@ class WebUIServer:
 
     async def _handle_index(self, request: web.Request) -> web.Response:
         html = _INDEX_HTML
-        return web.Response(text=html, content_type="text/html", charset="utf-8")
+        resp = web.Response(text=html, content_type="text/html", charset="utf-8")
+        # 禁止缓存：保证页面更新后浏览器立即拿到新版（避免旧版 JS 造成"点不动/不跳转"）
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        return resp
 
     # ---------- 生命周期 ----------
     def build_app(self) -> web.Application:
