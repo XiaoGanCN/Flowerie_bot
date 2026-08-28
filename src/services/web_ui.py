@@ -261,13 +261,26 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
   <div class="topbar">
     <h1 id="pageTitle">总览</h1>
     <div style="display:flex;gap:8px;align-items:center">
-      <span class="badge" id="uiVer">UI v5</span>
+      <span class="badge" id="uiVer">UI v6</span>
       <span class="badge offline" id="wsBadge">未连接</span>
       <button class="ghost" onclick="logout()">退出</button>
     </div>
   </div>
   <div id="app">
-    <div class="page active" id="page-overview"></div>
+    <div class="page active" id="page-overview">
+      <!-- 登录卡片：静态 HTML，不依赖 JS 渲染；未登录时始终可见 -->
+      <div id="loginCard" class="set-item" style="margin-bottom:16px">
+        <div class="set-row">
+          <div class="set-info"><div class="name">登录管理后台</div><div class="desc">账号/密码在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD），无注册功能 · UI v6</div></div>
+          <input class="set-input" id="u" placeholder="用户名" style="max-width:150px;flex:none">
+          <input class="set-input" id="p" type="password" placeholder="密码" style="max-width:150px;flex:none">
+          <button onclick="login()">登录</button>
+          <span class="msg err" id="loginMsg"></span>
+        </div>
+      </div>
+      <div class="card" id="overviewPlaceholder"><span class="lbl">登录后可查看统计与全部配置</span></div>
+      <noscript><div class="card" style="border-color:var(--err)"><span class="lbl">⚠️ 此页面需要启用 JavaScript 才能登录和操作（当前未检测到 JS，或浏览器禁用了脚本）</span></div></noscript>
+    </div>
     <div class="page" id="page-ai"></div>
     <div class="page" id="page-bot"></div>
     <div class="page" id="page-memory"></div>
@@ -310,28 +323,21 @@ async function login(){
   else loginMsg.textContent = r.data.error || "登录失败";
 }
 function logout(){ token = null; renderAuthState(); }
-// 登录卡片（渲染在总览页内）
-function loginCard(){
-  return `<div class="set-item" style="margin-bottom:16px">
-    <div class="set-row">
-      <div class="set-info"><div class="name">登录管理后台</div><div class="desc">账号/密码在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD），无注册功能 · UI v5</div></div>
-      <input class="set-input" id="u" placeholder="用户名" style="max-width:150px;flex:none">
-      <input class="set-input" id="p" type="password" placeholder="密码" style="max-width:150px;flex:none">
-      <button onclick="login()">登录</button>
-      <span class="msg err" id="loginMsg"></span>
-    </div></div>`;
-}
-// 登录态渲染：未登录时总览页显示登录卡片，其余页提示先登录；登录后加载全部配置
+// 登录态渲染：切换总览页静态登录卡片的显隐；登录后加载全部配置
 function renderAuthState(){
+  const card = document.getElementById("loginCard");
+  const placeholder = document.getElementById("overviewPlaceholder");
   if (token) {
+    if (card) card.style.display = "none";
+    if (placeholder) placeholder.style.display = "none";
     loadStatus(); loadConfigs(); loadLogs();
   } else {
+    if (card) card.style.display = "";
+    if (placeholder) placeholder.style.display = "";
     ["ai","bot","memory","sticker","mcp","policy","advanced"].forEach(p => {
       const el = document.getElementById("page-" + p);
       if (el) el.innerHTML = `<div class="card"><span class="lbl">请先登录：点击左侧「总览」页，在登录卡片中输入账号密码</span></div>`;
     });
-    document.getElementById("page-overview").innerHTML =
-      loginCard() + `<div class="card"><span class="lbl">登录后可查看统计与全部配置</span></div>`;
     document.getElementById("pageTitle").textContent = "总览";
   }
 }
