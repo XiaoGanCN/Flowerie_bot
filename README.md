@@ -128,7 +128,7 @@ OneBot WebSocket connected
 
 ```bash
 pip install -r requirements-dev.txt
-pytest              # 297 个测试
+pytest              # 326 个测试
 ruff check .        # 代码检查
 ```
 

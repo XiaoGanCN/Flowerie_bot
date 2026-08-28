@@ -14,7 +14,7 @@ pytest              # 全部测试
 pytest tests/xxx    # 单文件
 ```
 
-当前 297 个测试：并发安全、故障隔离、熔断、状态治理、Prompt/Sticker/MCP/Web UI、SSRF/注入回归、MCP 额度/安全、配置持久化/校验。
+当前 326 个测试：并发安全、故障隔离、熔断、状态治理、Prompt/Sticker/MCP/Web UI、SSRF/注入回归、MCP 额度/安全、配置持久化/校验、Web UI 注册/无 JS 面板。
 
 ## 代码检查
 
@@ -37,7 +37,7 @@ src/
 ├── services/       # AI 客户端/记忆/文件解析/发送/表情包/MCP/配置服务/Web UI
 ├── repositories/   # SQLite 存储层（记忆/设置/表情包索引）
 └── utils/          # 日志/trace/指标/熔断/过期容器/任务管理
-tests/              # 297 个测试
+tests/              # 326 个测试
 docs/               # 文档
 ```
 
