@@ -87,7 +87,7 @@ OneBot WebSocket connected
 | `WEB_UI_ENABLED` / `WEB_UI_PORT` / `WEB_UI_USERNAME` / `WEB_UI_PASSWORD` | Web UI 开关 / 端口 / 登录账号 / 密码 | `false` / `8080` / `admin` / 空 |
 | `LOG_FORMAT` | 日志格式 `text`/`json` | `text` |
 
-> ⚠️ WEB_UI_PORT 不能与 WS_PORT 相同（端口冲突时启动会报错）。
+> ⚠️ `WEB_UI_PORT` 不能与 `WS_PORT` 相同（端口冲突时启动会报错）。
 
 ## 指令
 
@@ -102,29 +102,27 @@ OneBot WebSocket connected
 
 ## Web UI
 
-默认关闭。启用后访问 http://127.0.0.1:8080/panel（无 JS 兼容面板，手机浏览器也能用）
-用 WEB_UI_USERNAME / WEB_UI_PASSWORD 登录
+默认关闭。启用后访问 `http://127.0.0.1:8080/panel`（无 JS 兼容面板，手机浏览器也能用）
+用 `WEB_UI_USERNAME` / `WEB_UI_PASSWORD` 登录
 可管理 AI / Bot / 记忆 / 表情包 / MCP 配置（API Key 只显示掩码）。详见 [docs/configuration.md](docs/configuration.md)。
 
 ### 如何开启
 
-1. 编辑项目根目录的 .env，追加：
+1. 编辑项目根目录的 `.env`，追加：
    ```ini
    WEB_UI_ENABLED=true
    WEB_UI_PORT=8080            # 不能与 WS_PORT(3001) 相同
    WEB_UI_USERNAME=admin
    WEB_UI_PASSWORD=你的密码      # 必填，留空会拒绝启动
    ```
-2. 重启机器人：python main.py（或守护脚本 bash run.sh）
-3. 浏览器打开 http://127.0.0.1:8080/panel
-4. （无 JS 兼容面板，手机浏览器也能用），用上面的账号密码登录
+2. 重启机器人：`python main.py`（或守护脚本 `bash run.sh`）
+3. 浏览器打开 `http://127.0.0.1:8080/panel`（无 JS 兼容面板，手机浏览器也能用），用上面的账号密码登录
 
-> 同一局域网内的电脑访问：在 .env 加 WEB_UI_ALLOW_LAN=true（显式开关，绑定 0.0.0.0 并输出安全警告），然后浏览器打开 http://局域网IP:8080/panel
-> （请设置强密码，勿直接暴露公网）。
+> 同一局域网内的电脑访问：在 `.env` 加 `WEB_UI_ALLOW_LAN=true`（显式开关，绑定 0.0.0.0 并输出安全警告），然后浏览器打开 `http://局域网IP:8080/panel`（请设置强密码，勿直接暴露公网）。
 
 ## MCP
 
-默认关闭。配置 MCP_ENABLED=true + MCP_SERVER_URL（或插件式多 server：MCP_SERVERS JSON，可自行添加任意数量的 MCP 服务，支持本地/内网地址）后，模型可调用白名单内的工具获取实时信息。详见 [docs/mcp.md](docs/mcp.md)。
+默认关闭。配置 `MCP_ENABLED=true` + `MCP_SERVER_URL`（或插件式多 server：`MCP_SERVERS` JSON，可自行添加任意数量的 MCP 服务，支持本地/内网地址）后，模型可调用白名单内的工具获取实时信息。详见 [docs/mcp.md](docs/mcp.md)。
 
 ## 开发
 
