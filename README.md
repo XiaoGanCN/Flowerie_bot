@@ -102,7 +102,9 @@ OneBot WebSocket connected
 
 ## Web UI
 
-默认关闭。启用后访问 http://127.0.0.1:8080，用 WEB_UI_USERNAME / WEB_UI_PASSWORD 登录，可管理 AI / Bot / 记忆 / 表情包 / MCP 配置（API Key 只显示掩码）。详见 [docs/configuration.md](docs/configuration.md)。
+默认关闭。启用后访问 http://127.0.0.1:8080
+用 WEB_UI_USERNAME / WEB_UI_PASSWORD 登录
+可管理 AI / Bot / 记忆 / 表情包 / MCP 配置（API Key 只显示掩码）。详见 [docs/configuration.md](docs/configuration.md)。
 
 ## MCP
 
