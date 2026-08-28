@@ -88,6 +88,7 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 | :--- | :--- | :--- |
 | `WEB_UI_ENABLED` | 管理后台开关 | `false` |
 | `WEB_UI_HOST` / `WEB_UI_PORT` | 监听地址/端口 | `127.0.0.1` / `8080` |
+| `WEB_UI_ALLOW_LAN` | 显式开关：true 时绑定 `0.0.0.0`（局域网/公网可访问；默认仅本机，开启后启动日志输出安全警告） | `false` |
 | `WEB_UI_USERNAME` / `WEB_UI_PASSWORD` | 登录账号/密码（启用时必须设置） | `admin` / 空 |
 | `WEB_UI_TOKEN_TTL_SECONDS` | 登录 token 有效期 | `3600` |
 
@@ -105,7 +106,7 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 2. 重启机器人：`python main.py`（或守护脚本 `bash run.sh`）
 3. 浏览器打开 http://127.0.0.1:8080，用上面的账号密码登录
 
-> 同一局域网内的电脑访问：在 `.env` 加 `WEB_UI_HOST=0.0.0.0`，然后浏览器打开 `http://局域网IP:8080`（请设置强密码，勿暴露公网）。
+> 同一局域网内的电脑访问：在 `.env` 加 `WEB_UI_ALLOW_LAN=true`（显式开关），然后浏览器打开 `http://局域网IP:8080`（请设置强密码，勿直接暴露公网）。
 
 ## 日志
 

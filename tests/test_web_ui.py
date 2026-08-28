@@ -40,6 +40,22 @@ def test_web_ui_disabled_skips_checks():
     validate_config(cfg)  # 未启用不校验
 
 
+# ---------- 0.0.0.0 显式开关（WEB_UI_ALLOW_LAN） ----------
+def test_effective_host_default_loopback():
+    cfg = make_config(WEB_UI_HOST="127.0.0.1", WEB_UI_ALLOW_LAN=False)
+    assert WebUIServer.effective_host(cfg) == "127.0.0.1"
+
+
+def test_effective_host_allow_lan_forces_public():
+    cfg = make_config(WEB_UI_HOST="127.0.0.1", WEB_UI_ALLOW_LAN=True)
+    assert WebUIServer.effective_host(cfg) == "0.0.0.0"
+
+
+def test_effective_host_custom_host_when_switch_off():
+    cfg = make_config(WEB_UI_HOST="192.168.1.5", WEB_UI_ALLOW_LAN=False)
+    assert WebUIServer.effective_host(cfg) == "192.168.1.5"
+
+
 # ---------- Config Service ----------
 @pytest.fixture()
 def cs():

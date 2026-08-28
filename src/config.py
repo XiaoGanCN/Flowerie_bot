@@ -131,6 +131,9 @@ class Settings(BaseSettings):
     # Web UI（管理后台）：默认关闭；必须认证；端口与反向 WS 端口（WS_PORT）错开
     WEB_UI_ENABLED: bool = False
     WEB_UI_HOST: str = "127.0.0.1"
+    # 显式开关：true 时强制绑定 0.0.0.0（局域网/公网可访问）。默认 false=仅本机，
+    # 请勿把管理后台直接暴露公网；开启后启动日志会输出安全警告。
+    WEB_UI_ALLOW_LAN: bool = False
     WEB_UI_PORT: int = 8080
     WEB_UI_USERNAME: str = "admin"
     WEB_UI_PASSWORD: str = ""

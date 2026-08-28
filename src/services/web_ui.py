@@ -158,18 +158,29 @@ class WebUIServer:
         app.router.add_get("/api/logs", self._handle_logs)
         return app
 
+    @staticmethod
+    def effective_host(config) -> str:
+        """实际监听地址：WEB_UI_ALLOW_LAN=true 时强制 0.0.0.0（局域网/公网可访问），否则用 WEB_UI_HOST。
+
+        显式开关设计：默认只监听本机回环；想从其他设备访问必须显式开 WEB_UI_ALLOW_LAN，
+        避免误配 WEB_UI_HOST 导致后台意外暴露。
+        """
+        if getattr(config, "WEB_UI_ALLOW_LAN", False):
+            return "0.0.0.0"
+        return str(getattr(config, "WEB_UI_HOST", "127.0.0.1") or "127.0.0.1")
+
     async def start(self) -> None:
         app = self.build_app()
         self._runner = web.AppRunner(app)
         await self._runner.setup()
-        self._site = web.TCPSite(self._runner, self.config.WEB_UI_HOST, self.config.WEB_UI_PORT)
+        host = self.effective_host(self.config)
+        self._site = web.TCPSite(self._runner, host, self.config.WEB_UI_PORT)
         await self._site.start()
-        host = str(getattr(self.config, "WEB_UI_HOST", "127.0.0.1"))
         if host in ("0.0.0.0", "::"):
             logger.warning(
-                "web_ui bound to %s：管理后台对网络内所有设备可见。请确认 WEB_UI_PASSWORD 已设置强密码，"
-                "且仅通过可信渠道（内网穿透/防火墙白名单）暴露公网", host,
-                extra={"event": "config_reload"})
+                "web_ui bound to %s（WEB_UI_ALLOW_LAN=true）：管理后台对网络内所有设备可见。"
+                "请确认 WEB_UI_PASSWORD 已设置强密码，且仅通过可信渠道（内网穿透/防火墙白名单）暴露公网",
+                host, extra={"event": "config_reload"})
         logger.info("Web UI started on %s:%s", host, self.config.WEB_UI_PORT,
                     extra={"event": "config_reload"})
 
