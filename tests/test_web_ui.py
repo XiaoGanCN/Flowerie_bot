@@ -223,6 +223,26 @@ async def test_register_requires_current_password(webapp):
     assert resp.status == 403
 
 
+async def test_register_rate_limited_after_failures(webapp):
+    """注册接口共享登录限流：连续猜错当前密码 5 次后锁 IP（防暴力破解 admin_password）。"""
+    server = webapp
+    for _ in range(5):
+        resp = await server._handle_register(FakeRequest(
+            remote="10.0.0.9",
+            body={"username": "hacker", "password": "newpass123", "admin_password": "wrong"}))
+        assert resp.status == 403
+    # 第 6 次即使密码正确也被限流
+    resp = await server._handle_register(FakeRequest(
+        remote="10.0.0.9",
+        body={"username": "boss", "password": "newpass123", "admin_password": "secret123"}))
+    assert resp.status == 429
+    # 其他 IP 不受影响
+    resp = await server._handle_register(FakeRequest(
+        remote="10.0.0.10",
+        body={"username": "boss", "password": "newpass123", "admin_password": "secret123"}))
+    assert resp.status == 200
+
+
 async def test_register_validates_username_password(webapp):
     server = webapp
     resp = await server._handle_register(FakeRequest(

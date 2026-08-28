@@ -97,9 +97,14 @@ class WebUIServer:
     async def _handle_register(self, request: web.Request) -> web.Response:
         """注册/修改管理账号：账号密码持久化到 settings.db，之后登录不再依赖 .env。
 
-        安全护栏：若当前已有生效密码（.env 或已注册），必须提供当前管理员密码验证；
-        仅当完全未配置密码（首次搭建）时才允许免验证注册。
+        安全护栏：
+        - 若当前已有生效密码（.env 或已注册），必须提供当前管理员密码验证；
+          仅当完全未配置密码（首次搭建）时才允许免验证注册
+        - 与登录共享限流：当前密码猜错也计入失败，连续 5 次锁 IP 1 分钟（防暴力破解）
         """
+        ip = request.remote or "unknown"
+        if self._login_blocked(ip):
+            return web.json_response({"error": "尝试过多，请稍后再试"}, status=429)
         try:
             body = await request.json()
         except json.JSONDecodeError:
@@ -109,6 +114,7 @@ class WebUIServer:
         admin_password = str(body.get("admin_password", ""))
         eff_user, eff_pass = self._effective_credentials()
         if eff_pass and not secrets.compare_digest(admin_password, eff_pass):
+            self._record_login_fail(ip)
             return web.json_response({"error": "当前管理员密码不正确，无法注册"}, status=403)
         ok, message = self.config_service.register_user(username, password)
         if not ok:
@@ -228,12 +234,17 @@ class WebUIServer:
         return web.Response(text=self._panel_register_page(), content_type="text/html", charset="utf-8")
 
     async def _handle_panel_register(self, request: web.Request) -> web.Response:
+        ip = request.remote or "unknown"
+        if self._login_blocked(ip):
+            return web.Response(text=self._panel_register_page("尝试过多，请稍后再试"),
+                                content_type="text/html", charset="utf-8")
         form = await request.post()
         username = str(form.get("username", ""))
         password = str(form.get("password", ""))
         admin_password = str(form.get("admin_password", ""))
         eff_user, eff_pass = self._effective_credentials()
         if eff_pass and not secrets.compare_digest(admin_password, eff_pass):
+            self._record_login_fail(ip)
             return web.Response(text=self._panel_register_page("当前管理员密码不正确"),
                                 content_type="text/html", charset="utf-8")
         ok, message = self.config_service.register_user(username, password)
