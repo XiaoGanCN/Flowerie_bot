@@ -14,12 +14,14 @@ from src.core.websocket_server import WebSocketServer
 from src.repositories.settings_repository import SettingsRepository
 from src.repositories.sticker_repository import StickerRepository
 from src.services.ai_client import AIClient
+from src.services.config_service import ConfigService
 from src.services.file_parser import FileParser
 from src.services.mcp_tool_manager import McpToolManager
 from src.services.memory_manager import MemoryManager
 from src.services.prompt_manager import PromptManager
 from src.services.sender import Sender
 from src.services.sticker_manager import StickerManager
+from src.services.web_ui import WebUIServer
 from src.utils.logging_setup import get_logger, init_logging
 from src.utils.metrics import registry
 
@@ -44,6 +46,8 @@ async def main():
         sticker_repo = StickerRepository(config.STICKER_DB_PATH)
         sticker_manager = StickerManager(config, sticker_repo, ai_client)
         tool_manager = McpToolManager(config)
+        config_service = ConfigService(config, settings_repo)
+        web_ui = WebUIServer(config, config_service) if config.WEB_UI_ENABLED else None
         file_parser = FileParser(config)
         policy_engine = PolicyEngine(config, memory_manager)
         message_router = MessageRouter(
@@ -61,6 +65,9 @@ async def main():
 
         # 启动后台任务（主动聊天 / 上下文备份，经 TaskManager 统一管理）
         await message_router.start()
+        # Web UI（默认关闭；启用时需认证，端口已与 WS_PORT 错开校验）
+        if web_ui is not None:
+            await web_ui.start()
 
         # 启动 WebSocket 服务（会自动阻塞直到中断）
         try:
@@ -72,6 +79,9 @@ async def main():
             await message_router.stop()
             # 2) 关闭 WebSocket 服务
             await ws_server.shutdown()
+            # 2.5) 关闭 Web UI（如有）
+            if web_ui is not None:
+                await web_ui.stop()
             # 3) 关闭 HTTP 客户端 / 数据库连接
             await file_parser.close()
             memory_manager.close()

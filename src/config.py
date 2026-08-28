@@ -121,6 +121,13 @@ class Settings(BaseSettings):
     MCP_ALLOWED_TOOLS: str = ""         # 逗号分隔的工具 allowlist（空=不允许任何工具）
     MCP_CIRCUIT_FAILURES: int = 5       # MCP 独立熔断：连续失败阈值
     MCP_CIRCUIT_PAUSE_SECONDS: int = 60 # MCP 熔断冷却
+    # Web UI（管理后台）：默认关闭；必须认证；端口与反向 WS 端口（WS_PORT）错开
+    WEB_UI_ENABLED: bool = False
+    WEB_UI_HOST: str = "127.0.0.1"
+    WEB_UI_PORT: int = 8080
+    WEB_UI_USERNAME: str = "admin"
+    WEB_UI_PASSWORD: str = ""
+    WEB_UI_TOKEN_TTL_SECONDS: int = 3600  # 登录 token 有效期
 
     # White list
     ALLOWED_GROUP_IDS: Optional[List[int]] = None
@@ -185,10 +192,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-
 def load_config() -> Settings:
     return Settings()
-
 
 def validate_config(config: Settings) -> None:
     """启动阶段配置校验：必填项缺失/取值非法时直接抛错（进程不启动）。
@@ -196,17 +201,30 @@ def validate_config(config: Settings) -> None:
     - API Key 只检查"已配置"，不打印任何值（敏感保护）
     - 取值范围问题在此集中报错，避免运行期才炸
     """
-    if not config.DEEPSEEK_API_KEY or config.DEEPSEEK_API_KEY.startswith("sk-your"):
+    if not getattr(config, "DEEPSEEK_API_KEY", "") or getattr(config, "DEEPSEEK_API_KEY", "").startswith("sk-your"):
         raise ValueError("DEEPSEEK_API_KEY 未配置或仍为占位值（.env 中设置真实 Key 后再启动）")
-    if config.BOT_QQ <= 0:
-        raise ValueError(f"BOT_QQ 必须为正整数，当前: {config.BOT_QQ}")
-    if not (0 < config.WS_PORT < 65536):
-        raise ValueError(f"WS_PORT 必须在 1~65535 之间，当前: {config.WS_PORT}")
-    if config.MAX_CONCURRENT_AI < 1:
-        raise ValueError(f"MAX_CONCURRENT_AI 必须 >= 1，当前: {config.MAX_CONCURRENT_AI}")
-    if config.AI_MAX_RETRIES < 0:
-        raise ValueError(f"AI_MAX_RETRIES 必须 >= 0，当前: {config.AI_MAX_RETRIES}")
-    if config.USER_COOLDOWN < 0 or config.BOT_COOLDOWN < 0:
+    if getattr(config, "BOT_QQ", 0) <= 0:
+        raise ValueError(f"BOT_QQ 必须为正整数，当前: {getattr(config, 'BOT_QQ', 0)}")
+    if not (0 < getattr(config, "WS_PORT", 0) < 65536):
+        raise ValueError(f"WS_PORT 必须在 1~65535 之间，当前: {getattr(config, 'WS_PORT', 0)}")
+    if getattr(config, "MAX_CONCURRENT_AI", 1) < 1:
+        raise ValueError(f"MAX_CONCURRENT_AI 必须 >= 1，当前: {getattr(config, 'MAX_CONCURRENT_AI', 1)}")
+    if getattr(config, "AI_MAX_RETRIES", 0) < 0:
+        raise ValueError(f"AI_MAX_RETRIES 必须 >= 0，当前: {getattr(config, 'AI_MAX_RETRIES', 0)}")
+    if getattr(config, "USER_COOLDOWN", 0) < 0 or getattr(config, "BOT_COOLDOWN", 0) < 0:
         raise ValueError("USER_COOLDOWN / BOT_COOLDOWN 不能为负")
-    if config.NIGHT_SILENCE_START < 0 or config.NIGHT_SILENCE_END > 24 or config.NIGHT_SILENCE_START >= config.NIGHT_SILENCE_END:
-        raise ValueError(f"夜间静默时段非法: {config.NIGHT_SILENCE_START}~{config.NIGHT_SILENCE_END}（要求 0<=start<end<=24）")
+    if (getattr(config, "NIGHT_SILENCE_START", 0) < 0 or getattr(config, "NIGHT_SILENCE_END", 24) > 24
+            or getattr(config, "NIGHT_SILENCE_START", 0) >= getattr(config, "NIGHT_SILENCE_END", 24)):
+        raise ValueError(
+            f"夜间静默时段非法: {getattr(config, 'NIGHT_SILENCE_START', 0)}~{getattr(config, 'NIGHT_SILENCE_END', 24)}"
+            "（要求 0<=start<end<=24）")
+    if getattr(config, "WEB_UI_ENABLED", False):
+        if not (0 < getattr(config, "WEB_UI_PORT", 0) < 65536):
+            raise ValueError(f"WEB_UI_PORT 必须在 1~65535 之间，当前: {getattr(config, 'WEB_UI_PORT', 0)}")
+        # ⚠️ Web UI 的本地回环端口不能与 NapCat 反向 WS 端口一致（端口冲突）
+        if getattr(config, "WEB_UI_PORT", 0) == getattr(config, "WS_PORT", 0):
+            raise ValueError(
+                f"WEB_UI_PORT ({getattr(config, 'WEB_UI_PORT', 0)}) 与反向 WS 端口 WS_PORT 冲突："
+                "Web UI 的本地回环端口不能与 NapCat 反向 WS 端口一致，请修改 WEB_UI_PORT")
+        if not getattr(config, "WEB_UI_PASSWORD", ""):
+            raise ValueError("WEB_UI_ENABLED=true 时必须设置 WEB_UI_PASSWORD（不允许无认证裸奔）")
