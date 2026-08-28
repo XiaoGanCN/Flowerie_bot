@@ -261,6 +261,7 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
   <div class="topbar">
     <h1 id="pageTitle">总览</h1>
     <div style="display:flex;gap:8px;align-items:center">
+      <span class="badge" id="uiVer">UI v3</span>
       <span class="badge offline" id="wsBadge">未连接</span>
       <button class="ghost" onclick="logout()">退出</button>
     </div>
@@ -391,6 +392,7 @@ function showLogin(){
       <button style="width:100%" onclick="login()">登录</button>
       <div class="msg err" id="loginMsg"></div>
       <div class="lbl" style="text-align:center;margin-top:12px">本后台无注册功能，账号/密码请在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD）</div>
+      <div class="lbl" style="text-align:center;margin-top:6px;font-size:11px">UI v3 · 无登录框=旧版页面，请在 Termux 执行 git pull 并重启</div>
     </div>`;
 }
 // 导航
