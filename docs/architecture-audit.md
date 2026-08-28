@@ -1,5 +1,20 @@
 # 工程质量审计报告（阶段一）
 
+> ## 📌 文档状态（2026-08-29 更新）
+>
+> 本报告为 2026-08-27/28 的**历史审计快照**，所列问题已在后续轮次全部处理完毕：
+>
+> - **阶段一「改造范围」10 项**：标准 logging + trace_id（`utils/logging_setup.py` + `utils/trace.py`）、
+>   Metrics（`utils/metrics.py`）、Repository 抽象（`repositories/`）、TaskManager（`utils/task_manager.py`）、
+>   AIClient 重试/退避配置化、配置启动校验（`validate_config`）、pyproject.toml、Ruff、GitHub Actions CI —— ✅ 全部完成
+> - **阶段二 P1/P2**：AI 熔断（`utils/circuit_breaker.py`）、优雅关闭 draining、Metrics label 修复、
+>   SQLite WAL/busy_timeout、图片 URL 日志脱敏 —— ✅ 全部完成
+> - **阶段三**：ExpiringMap 状态自治、inactive 群清理、双层熔断（provider + 群级）、Metrics 低基数 —— ✅ 全部完成
+> - **第四轮收尾**：MCP 工具额度按次硬上限、持久化配置启动合并、MCP SSRF 加固 + 工具结果不可信处理、
+>   MCP 插件式多 server（`MCP_SERVERS`）、Web UI 改为无 JS 服务端渲染面板（`/panel`，支持注册，账号持久化 `settings.db`）—— ✅ 完成
+>
+> **当前基线**：测试 **326** 个（pytest + ruff 全过，CI Python 3.9 / 3.12 全绿）。
+
 > 审计对象：Flowerie_bot（NapCat 版，`/storage/emulated/0/Flowerie_bot/`）
 > 审计时间：2026-08-27
 > 审计方式：全量代码阅读（src/ 全部模块 + main.py + tests/ + 配置），未做任何修改。
@@ -188,7 +203,7 @@ guarded_chat(group_id, user_id, ...)
 - **文件/图片下载资源泄漏**：FileParser 连接不关闭 → 阶段六
 - **shutdown 数据未持久化**：退出时 save_context_backup ✅；MemoryManager 实时 commit ✅；但连接未显式关闭 → 阶段六
 
-## 改造范围（后续阶段）
+## 改造范围（已完成 ✅，见顶部文档状态）
 
 1. 标准 logging 基础设施（dev 人类可读 / prod JSON、敏感脱敏、trace_id 注入）
 2. contextvars 版 trace_id 贯穿消息处理链路
