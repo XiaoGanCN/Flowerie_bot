@@ -230,16 +230,18 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
 </head>
 <body>
 <div class="sidebar" id="sidebar">
-  <div class="logo"><div class="dot">🌸</div><b>花璃<span>Flowerie · 管理后台</span></b></div>
+  <div class="logo"><div class="dot">花</div><b>花璃<span>Flowerie · 管理后台</span></b></div>
   <div class="nav">
-    <div class="nav-item active" data-page="overview">📊 总览</div>
-    <div class="nav-item" data-page="ai">🤖 AI 设置</div>
-    <div class="nav-item" data-page="bot">🎛️ Bot 设置</div>
-    <div class="nav-item" data-page="memory">🧠 记忆</div>
-    <div class="nav-item" data-page="sticker">🖼️ 表情包</div>
-    <div class="nav-item" data-page="mcp">🔧 MCP</div>
-    <div class="nav-item" data-page="logging">📜 日志</div>
-    <div class="nav-item" data-page="about">ℹ️ 关于</div>
+    <div class="nav-item active" data-page="overview">总览</div>
+    <div class="nav-item" data-page="ai">AI 设置</div>
+    <div class="nav-item" data-page="bot">Bot 设置</div>
+    <div class="nav-item" data-page="memory">记忆</div>
+    <div class="nav-item" data-page="sticker">表情包</div>
+    <div class="nav-item" data-page="mcp">MCP</div>
+    <div class="nav-item" data-page="policy">预算与策略</div>
+    <div class="nav-item" data-page="advanced">高级</div>
+    <div class="nav-item" data-page="logging">日志</div>
+    <div class="nav-item" data-page="about">关于</div>
   </div>
 </div>
 <div class="main">
@@ -258,7 +260,10 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
     <div class="page" id="page-memory"></div>
     <div class="page" id="page-sticker"></div>
     <div class="page" id="page-mcp"></div>
+    <div class="page" id="page-policy"></div>
+    <div class="page" id="page-advanced"></div>
     <div class="page" id="page-logging">
+      <div id="logSettings"></div>
       <div style="margin-bottom:8px"><button class="ghost" onclick="loadLogs()">刷新日志</button></div>
       <div class="logbox" id="logbox"></div>
     </div>
@@ -280,6 +285,8 @@ async function api(url, method, body){
   if (token) opt.headers["Authorization"] = "Bearer " + token;
   if (body) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const r = await fetch(url, opt);
+  // token 过期/失效：清掉并回到登录页（否则所有设置页会是空的"点不动"）
+  if (r.status === 401 && token) { token = null; localStorage.removeItem("fb_token"); showLogin(); }
   try { return {status:r.status, data:await r.json()}; } catch(e) { return {status:r.status, data:{}}; }
 }
 async function login(){
@@ -321,11 +328,18 @@ function fmtUptime(s){ const h=Math.floor(s/3600), m=Math.floor(s%3600/60); retu
 async function loadConfigs(){
   const r = await api("/api/config", "GET");
   if (r.status !== 200) return;
-  for (const p of Object.keys(PAGES)) document.getElementById("page-"+p.toLowerCase()).innerHTML = "";
+  for (const p of Object.keys(PAGES)) {
+    const el = document.getElementById("page-" + p.toLowerCase());
+    if (el) el.innerHTML = "";   // 缺页面元素时跳过，不再抛错导致整个渲染中断
+  }
+  const logSettings = document.getElementById("logSettings");
+  if (logSettings) logSettings.innerHTML = "";
   const byCat = {};
   r.data.configs.forEach(c => { (byCat[c.category] = byCat[c.category] || []).push(c); });
   for (const [cat, items] of Object.entries(byCat)) {
-    const page = document.getElementById("page-" + PAGES[cat].toLowerCase());
+    // 日志设置渲染在日志页上方，不覆盖日志查看器
+    const page = cat === "Logging" ? logSettings
+                                   : document.getElementById("page-" + PAGES[cat].toLowerCase());
     if (!page) continue;
     page.innerHTML = `<h2 class="sec">${CATS[cat] || cat} · ${items.length} 项</h2>` + items.map(c => `
       <div class="set-item"><div class="set-row">
@@ -346,9 +360,23 @@ async function save(key){
 }
 async function loadLogs(){
   const r = await api("/api/logs?limit=200", "GET");
-  if (r.status === 200) document.getElementById("logbox").textContent = (r.data.logs || []).join("\n");
+  if (r.status === 200) {
+    const box = document.getElementById("logbox");
+    if (box) box.textContent = (r.data.logs || []).join("\n");
+  }
 }
 function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;"); }
+function showLogin(){
+  document.getElementById("app").classList.add("hidden");
+  document.getElementById("loginWrap").innerHTML = `
+    <div id="login">
+      <h2>花璃 · 管理后台</h2>
+      <input id="u" placeholder="用户名">
+      <input id="p" type="password" placeholder="密码">
+      <button style="width:100%" onclick="login()">登录</button>
+      <div class="msg err" id="loginMsg"></div>
+    </div>`;
+}
 // 导航
 document.querySelectorAll(".nav-item").forEach(el => el.onclick = () => {
   document.querySelectorAll(".nav-item").forEach(x => x.classList.remove("active"));
@@ -360,14 +388,7 @@ document.querySelectorAll(".nav-item").forEach(el => el.onclick = () => {
   if (el.dataset.page === "overview") loadStatus();
 });
 // 登录页
-document.getElementById("loginWrap").innerHTML = `
-  <div id="login">
-    <h2>🌸 花璃 · 管理后台</h2>
-    <input id="u" placeholder="用户名">
-    <input id="p" type="password" placeholder="密码">
-    <button style="width:100%" onclick="login()">登录</button>
-    <div class="msg err" id="loginMsg"></div>
-  </div>`;
+showLogin();
 boot();
 </script>
 </body>
