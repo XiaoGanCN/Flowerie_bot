@@ -87,7 +87,7 @@ OneBot WebSocket connected
 | `WEB_UI_ENABLED` / `WEB_UI_PORT` / `WEB_UI_PASSWORD` | Web UI 开关 / 端口 / 密码 | `false` / `8080` |
 | `LOG_FORMAT` | 日志格式 `text`/`json` | `text` |
 
-> ⚠️ `WEB_UI_PORT` 不能与 `WS_PORT` 相同（端口冲突时启动会报错）。
+> ⚠️ WEB_UI_PORT 不能与 WS_PORT 相同（端口冲突时启动会报错）。
 
 ## 指令
 
