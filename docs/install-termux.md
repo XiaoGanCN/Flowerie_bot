@@ -70,10 +70,16 @@ pip install -r requirements.txt \
 >   --only-binary pydantic-core,pydantic
 > ```
 
-> **💡 说明**：`aiohttp` 等包在 Termux 没有预编译包（Termux 专用源只预编译了 `pydantic-core` 等少数几个），pip 会**自动下载源码用 clang 编译**，耗时几分钟属正常现象。建议**提前装好编译工具**，避免编译中途失败：
+> **💡 说明**：`aiohttp`、`lxml` 等包在 Termux 没有预编译包（Termux 专用源只预编译了 `pydantic-core` 等少数几个），pip 会**自动下载源码用 clang 编译**，耗时几分钟属正常现象。建议**提前装好编译工具与 C 库**，避免编译中途失败：
 > ```bash
-> pkg install python-yaml clang binutils rust -y
+> pkg install python-yaml clang binutils rust libxml2 libxslt -y
 > ```
+>
+> **⚠️ 若编译报错 `Please make sure the libxml2 and libxslt development packages are installed`**（这是 `lxml`——`python-docx` 的依赖——需要 C 库），执行：
+> ```bash
+> pkg install libxml2 libxslt -y
+> ```
+> 装完重新运行上面的 pip install 命令即可。
 
 > **⚠️ 如果仍因网络问题下载失败**（提示 `github.com` 超时），请尝试：
 > 1. 先安装系统自带的 yaml：`pkg install python-yaml -y`
