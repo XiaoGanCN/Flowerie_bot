@@ -261,7 +261,8 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
   <div class="topbar">
     <h1 id="pageTitle">总览</h1>
     <div style="display:flex;gap:8px;align-items:center">
-      <span class="badge" id="uiVer">UI v6</span>
+      <span class="badge" id="uiVer">UI v7</span>
+      <span class="badge" id="jsOk" style="background:rgba(248,81,73,.15);color:var(--err)">JS 未运行</span>
       <span class="badge offline" id="wsBadge">未连接</span>
       <button class="ghost" onclick="logout()">退出</button>
     </div>
@@ -270,13 +271,15 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
     <div class="page active" id="page-overview">
       <!-- 登录卡片：静态 HTML，不依赖 JS 渲染；未登录时始终可见 -->
       <div id="loginCard" class="set-item" style="margin-bottom:16px">
+        <form id="loginForm" onsubmit="event.preventDefault(); login();" style="display:contents">
         <div class="set-row">
-          <div class="set-info"><div class="name">登录管理后台</div><div class="desc">账号/密码在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD），无注册功能 · UI v6</div></div>
+          <div class="set-info"><div class="name">登录管理后台</div><div class="desc">账号/密码在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD），无注册功能 · UI v7</div></div>
           <input class="set-input" id="u" placeholder="用户名" style="max-width:150px;flex:none">
           <input class="set-input" id="p" type="password" placeholder="密码" style="max-width:150px;flex:none">
-          <button onclick="login()">登录</button>
+          <button type="submit">登录</button>
           <span class="msg err" id="loginMsg"></span>
         </div>
+        </form>
       </div>
       <div class="card" id="overviewPlaceholder"><span class="lbl">登录后可查看统计与全部配置</span></div>
       <noscript><div class="card" style="border-color:var(--err)"><span class="lbl">⚠️ 此页面需要启用 JavaScript 才能登录和操作（当前未检测到 JS，或浏览器禁用了脚本）</span></div></noscript>
@@ -303,6 +306,8 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
   </div>
 </div>
 <script>
+// JS 存活标记：脚本能执行到这里说明 JS 正常运行
+(function(){var b=document.getElementById("jsOk");if(b){b.textContent="JS 运行中";b.style.background="rgba(63,185,80,.15)";b.style.color="var(--ok)";}})();
 // token 仅保存在内存（不写 localStorage）：每次打开页面都需要重新登录；
 // 登录条内嵌在配置页顶部，不再使用独立弹窗/登录页
 let token = null;
