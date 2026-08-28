@@ -164,7 +164,13 @@ class WebUIServer:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, self.config.WEB_UI_HOST, self.config.WEB_UI_PORT)
         await self._site.start()
-        logger.info("Web UI started on %s:%s", self.config.WEB_UI_HOST, self.config.WEB_UI_PORT,
+        host = str(getattr(self.config, "WEB_UI_HOST", "127.0.0.1"))
+        if host in ("0.0.0.0", "::"):
+            logger.warning(
+                "web_ui bound to %s：管理后台对网络内所有设备可见。请确认 WEB_UI_PASSWORD 已设置强密码，"
+                "且仅通过可信渠道（内网穿透/防火墙白名单）暴露公网", host,
+                extra={"event": "config_reload"})
+        logger.info("Web UI started on %s:%s", host, self.config.WEB_UI_PORT,
                     extra={"event": "config_reload"})
 
     async def stop(self) -> None:
