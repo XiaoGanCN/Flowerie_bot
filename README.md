@@ -108,17 +108,17 @@ OneBot WebSocket connected
 
 ### 如何开启
 
-1. 编辑项目根目录的 `.env`，追加：
+1. 编辑项目根目录的 .env，追加：
    ```ini
    WEB_UI_ENABLED=true
    WEB_UI_PORT=8080            # 不能与 WS_PORT(3001) 相同
    WEB_UI_USERNAME=admin
    WEB_UI_PASSWORD=你的密码      # 必填，留空会拒绝启动
    ```
-2. 重启机器人：`python main.py`（或守护脚本 `bash run.sh`）
+2. 重启机器人：python main.py（或守护脚本 bash run.sh）
 3. 浏览器打开 http://127.0.0.1:8080/panel（无 JS 兼容面板，手机浏览器也能用），用上面的账号密码登录
 
-> 同一局域网内的电脑访问：在 `.env` 加 `WEB_UI_ALLOW_LAN=true`（显式开关，绑定 0.0.0.0 并输出安全警告），然后浏览器打开 `http://局域网IP:8080/panel`（请设置强密码，勿直接暴露公网）。
+> 同一局域网内的电脑访问：在 .env 加 WEB_UI_ALLOW_LAN=true（显式开关，绑定 0.0.0.0 并输出安全警告），然后浏览器打开 http://局域网IP:8080/panel（请设置强密码，勿直接暴露公网）。
 
 ## MCP
 
