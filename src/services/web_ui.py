@@ -147,7 +147,7 @@ class WebUIServer:
             return web.json_response({"error": "未认证"}, status=401)
         import time
         status = {
-            "version": "0.0.1",
+            "version": "1.0.0",
             "uptime_seconds": int(time.time() - self._started_at),
             "config_count": len(self.config_service.list_configs()),
         }
