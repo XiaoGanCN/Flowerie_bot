@@ -261,20 +261,9 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
   <div class="topbar">
     <h1 id="pageTitle">总览</h1>
     <div style="display:flex;gap:8px;align-items:center">
-      <span class="badge" id="uiVer">UI v4</span>
+      <span class="badge" id="uiVer">UI v5</span>
       <span class="badge offline" id="wsBadge">未连接</span>
       <button class="ghost" onclick="logout()">退出</button>
-    </div>
-  </div>
-  <div id="loginPanel" class="hidden" style="max-width:720px;margin-bottom:16px">
-    <div class="set-item">
-      <div class="set-row">
-        <div class="set-info"><div class="name">登录管理后台</div><div class="desc">账号/密码在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD），无注册功能 · UI v4</div></div>
-        <input class="set-input" id="u" placeholder="用户名" style="max-width:150px;flex:none">
-        <input class="set-input" id="p" type="password" placeholder="密码" style="max-width:150px;flex:none">
-        <button onclick="login()">登录</button>
-        <span class="msg err" id="loginMsg"></span>
-      </div>
     </div>
   </div>
   <div id="app">
@@ -321,19 +310,28 @@ async function login(){
   else loginMsg.textContent = r.data.error || "登录失败";
 }
 function logout(){ token = null; renderAuthState(); }
-// 登录态渲染：未登录时显示内嵌登录条，设置页提示先登录；登录后加载配置
+// 登录卡片（渲染在总览页内）
+function loginCard(){
+  return `<div class="set-item" style="margin-bottom:16px">
+    <div class="set-row">
+      <div class="set-info"><div class="name">登录管理后台</div><div class="desc">账号/密码在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD），无注册功能 · UI v5</div></div>
+      <input class="set-input" id="u" placeholder="用户名" style="max-width:150px;flex:none">
+      <input class="set-input" id="p" type="password" placeholder="密码" style="max-width:150px;flex:none">
+      <button onclick="login()">登录</button>
+      <span class="msg err" id="loginMsg"></span>
+    </div></div>`;
+}
+// 登录态渲染：未登录时总览页显示登录卡片，其余页提示先登录；登录后加载全部配置
 function renderAuthState(){
-  const panel = document.getElementById("loginPanel");
-  if (!panel) return;
   if (token) {
-    panel.classList.add("hidden");
     loadStatus(); loadConfigs(); loadLogs();
   } else {
-    panel.classList.remove("hidden");
-    ["overview","ai","bot","memory","sticker","mcp","policy","advanced"].forEach(p => {
+    ["ai","bot","memory","sticker","mcp","policy","advanced"].forEach(p => {
       const el = document.getElementById("page-" + p);
-      if (el) el.innerHTML = `<div class="card"><span class="lbl">请先在上方登录后查看和修改配置</span></div>`;
+      if (el) el.innerHTML = `<div class="card"><span class="lbl">请先登录：点击左侧「总览」页，在登录卡片中输入账号密码</span></div>`;
     });
+    document.getElementById("page-overview").innerHTML =
+      loginCard() + `<div class="card"><span class="lbl">登录后可查看统计与全部配置</span></div>`;
     document.getElementById("pageTitle").textContent = "总览";
   }
 }
