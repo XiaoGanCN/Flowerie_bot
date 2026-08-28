@@ -229,6 +229,16 @@ button.ghost{background:transparent;border:1px solid var(--border);color:var(--d
 #login input{width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:9px 12px;margin-bottom:12px}
 .hidden{display:none!important}
 h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
+/* 移动端：窄屏时侧边栏变顶部横向导航 */
+@media (max-width:720px){
+  body{flex-direction:column}
+  .sidebar{width:100%;padding:8px 0;border-right:none;border-bottom:1px solid var(--border)}
+  .logo{padding:4px 16px 10px}
+  .nav{display:flex;overflow-x:auto;padding:0 8px}
+  .nav-item{flex-shrink:0}
+  .main{padding:14px}
+  .set-info{width:100%}
+}
 </style>
 </head>
 <body>
@@ -280,7 +290,9 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
   </div>
 </div>
 <script>
-let token = localStorage.getItem("fb_token") || null;
+// token 仅保存在内存（不写 localStorage）：每次打开页面都需要重新登录，
+// 服务端重启后 token 失效也会自动回到登录页，不会有"没要密码"的困惑
+let token = null;
 const CATS = {ai:"AI 设置",bot:"Bot 设置",memory:"记忆",sticker:"表情包",mcp:"MCP",logging:"日志设置",policy:"预算与策略",advanced:"高级（需重启）"};
 const PAGES = {ai:"AI",bot:"Bot",memory:"Memory",sticker:"Sticker",mcp:"MCP",policy:"Policy",logging:"Logging",advanced:"Advanced"};
 async function api(url, method, body){
@@ -289,15 +301,15 @@ async function api(url, method, body){
   if (body) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const r = await fetch(url, opt);
   // token 过期/失效：清掉并回到登录页（否则所有设置页会是空的"点不动"）
-  if (r.status === 401 && token) { token = null; localStorage.removeItem("fb_token"); showLogin(); }
+  if (r.status === 401 && token) { token = null; showLogin(); }
   try { return {status:r.status, data:await r.json()}; } catch(e) { return {status:r.status, data:{}}; }
 }
 async function login(){
   const r = await api("/api/login", "POST", {username:u.value, password:p.value});
-  if (r.data.token){ token = r.data.token; localStorage.setItem("fb_token", token); boot(); }
+  if (r.data.token){ token = r.data.token; boot(); }
   else loginMsg.textContent = r.data.error || "登录失败";
 }
-function logout(){ token = null; localStorage.removeItem("fb_token"); location.reload(); }
+function logout(){ token = null; location.reload(); }
 async function boot(){
   if (!token) return;
   document.getElementById("loginWrap").innerHTML = "";
@@ -378,6 +390,7 @@ function showLogin(){
       <input id="p" type="password" placeholder="密码">
       <button style="width:100%" onclick="login()">登录</button>
       <div class="msg err" id="loginMsg"></div>
+      <div class="lbl" style="text-align:center;margin-top:12px">本后台无注册功能，账号/密码请在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD）</div>
     </div>`;
 }
 // 导航
