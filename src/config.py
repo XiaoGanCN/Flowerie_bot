@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_AI: int = 3
     # 单次逻辑 AI 操作的最大重试次数（首次尝试 + 重试；每次尝试都单独过预算闸门）
     AI_MAX_RETRIES: int = 3
+    # 自定义 Prompt（全局/群聊）最大长度
+    MAX_CUSTOM_PROMPT_LENGTH: int = 2000
     # AI 熔断（防失败风暴打爆 API）：
     # - Provider 级（全局）：计可重试瞬时失败（超时/网络/429/5xx），4xx 不计
     # - 群级：该群逻辑请求连续失败即熔断该群，防止单群故障拖垮其他群
@@ -101,6 +103,8 @@ class Settings(BaseSettings):
     ARCHIVE_RETENTION_DAYS: int = 0        # 存档保留天数（0=永久；>0 自动清理过期文件）
     ARCHIVE_MAX_SIZE_MB: int = 0           # 每群存档目录总大小上限 MB（0=不限；超出删最旧）
     AUDIT_LOG_PATH: str = "./data/audit.log"
+    # 应用设置库（自定义 Prompt / Web UI 可编辑配置），SQLite
+    SETTINGS_DB_PATH: str = "./data/settings.db"
 
     # White list
     ALLOWED_GROUP_IDS: Optional[List[int]] = None

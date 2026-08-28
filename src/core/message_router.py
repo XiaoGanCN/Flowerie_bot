@@ -13,6 +13,7 @@ from src.models import GroupMessage
 from src.services.ai_client import AIClient
 from src.services.file_parser import FileParser
 from src.services.memory_manager import MemoryManager
+from src.services.prompt_manager import PromptManager
 from src.services.sender import Sender
 from src.utils.circuit_breaker import CircuitBreaker
 from src.utils.expiring_map import ExpiringMap
@@ -54,6 +55,7 @@ class MessageRouter:
         sender: Sender,
         policy_engine: PolicyEngine,
         task_manager: Optional[BackgroundTaskManager] = None,
+        prompt_manager: Optional["PromptManager"] = None,
     ):
         self.config = config
         self.ai_client = ai_client
@@ -62,10 +64,12 @@ class MessageRouter:
         self.sender = sender
         self.policy_engine = policy_engine
         self.global_state = self.policy_engine.global_state
+        # 自定义 Prompt（全局/群聊）：None 时跳过（不影响现有行为）
+        self.prompt_manager = prompt_manager
         # 消息组装（文本/识图/转发/卡片/文件/存档）→ MessageAssembler
         self.assembler = MessageAssembler(config, ai_client, file_parser, self.global_state)
         # 指令处理 → CommandHandler
-        self.commands = CommandHandler(config, sender, memory_manager)
+        self.commands = CommandHandler(config, sender, memory_manager, prompt_manager)
         # AI 预算/限速 → BudgetManager
         self.budget = BudgetManager(config, self.global_state, sender)
         # 后台任务统一管理（TaskManager：注册/跟踪/异常记录/优雅关闭）
@@ -395,6 +399,8 @@ class MessageRouter:
                 _M_REJECTED.inc({"reason": "budget"})
                 return None, None, True
             _M_AI_ATTEMPTS.inc()  # 实际 HTTP attempt 计数
+            if self.prompt_manager is not None and group_id:
+                kwargs = {**kwargs, "custom_prompt": self.prompt_manager.get_effective_prompt(group_id)}
             reply, memory_update = await self.ai_client.chat_once(**kwargs)
             if reply and reply.strip():
                 latency = time.monotonic() - started

@@ -11,9 +11,11 @@ from src.config import load_config, validate_config
 from src.core.message_router import MessageRouter
 from src.core.policy_engine import PolicyEngine
 from src.core.websocket_server import WebSocketServer
+from src.repositories.settings_repository import SettingsRepository
 from src.services.ai_client import AIClient
 from src.services.file_parser import FileParser
 from src.services.memory_manager import MemoryManager
+from src.services.prompt_manager import PromptManager
 from src.services.sender import Sender
 from src.utils.logging_setup import get_logger, init_logging
 from src.utils.metrics import registry
@@ -31,6 +33,8 @@ async def main():
     logger.info("花璃启动中...", extra={"event": "startup"})
 
     memory_manager = MemoryManager(config.MEMORY_PATH, config.MEMORY_TTL_DAYS, config.AUDIT_LOG_PATH, config.MODEL_MEMORY_TTL_DAYS)
+    settings_repo = SettingsRepository(config.SETTINGS_DB_PATH)
+    prompt_manager = PromptManager(settings_repo, max_length=config.MAX_CUSTOM_PROMPT_LENGTH)
 
     # 优雅管理异步资源（HTTP session / AI 客户端）
     async with AIClient(config, memory_manager) as ai_client, Sender(config) as sender:
@@ -43,6 +47,7 @@ async def main():
             file_parser=file_parser,
             sender=sender,
             policy_engine=policy_engine,
+            prompt_manager=prompt_manager,
         )
         ws_server = WebSocketServer(config, message_router)
 
@@ -62,6 +67,7 @@ async def main():
             # 3) 关闭 HTTP 客户端 / 数据库连接
             await file_parser.close()
             memory_manager.close()
+            settings_repo.close()
             # 4) 输出进程内 metrics 摘要
             logger.info(
                 "shutdown metrics=%s", registry.export_text().replace("\n", " | ")[:800],

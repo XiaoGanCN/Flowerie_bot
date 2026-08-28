@@ -2,6 +2,7 @@
 
 from src.config import Settings
 from src.services.memory_manager import MemoryManager
+from src.services.prompt_manager import PromptManager
 from src.services.sender import Sender
 from src.utils.logging_setup import get_logger
 
@@ -9,16 +10,18 @@ logger = get_logger(__name__)
 
 
 class CommandHandler:
-    """指令处理：用户指令（/help /memory /forget /forget_me）+ 管理员指令（/memory_clear /memory_dump）。
+    """指令处理：用户指令（/help /memory /forget /forget_me）+ 管理员指令（/memory_clear /memory_dump /prompt）。
 
     从 MessageRouter 拆分（上帝类第二拆）：指令与流程控制解耦，新增指令只需改这里。
     所有指令都只操作调用者自己的记忆（或管理员清群），不经过 LLM，无注入面。
     """
 
-    def __init__(self, config: Settings, sender: Sender, memory_manager: MemoryManager):
+    def __init__(self, config: Settings, sender: Sender, memory_manager: MemoryManager,
+                 prompt_manager: PromptManager = None):
         self.config = config
         self.sender = sender
         self.memory_manager = memory_manager
+        self.prompt_manager = prompt_manager
 
     async def handle(self, text: str, user_id: int, group_id: int) -> bool:
         """处理指令，返回 True 表示已处理（不再走正常聊天流程）。"""
@@ -45,7 +48,77 @@ class CommandHandler:
         if is_admin and cmd == "/memory_dump":
             await self._cmd_memory_dump(group_id)
             return True
+        if cmd == "/prompt":
+            await self._cmd_prompt(arg, user_id, group_id, is_admin)
+            return True
         return False
+
+    # ---------- 自定义 Prompt ----------
+    async def _cmd_prompt(self, arg: str, user_id: int, group_id: int, is_admin: bool) -> None:
+        """/prompt 命令族：查看/设置/重置全局与群聊 Prompt（管理员才能修改）。"""
+        if self.prompt_manager is None:
+            await self.sender.send_group_message(group_id, "本实例未启用自定义 Prompt 功能")
+            return
+        parts = arg.split(maxsplit=1)
+        sub = parts[0] if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if sub in ("", "show"):
+            # 查看当前生效 Prompt
+            effective = self.prompt_manager.get_effective_prompt(group_id)
+            if not effective:
+                await self.sender.send_group_message(group_id, "当前没有自定义 Prompt（使用内置人设）")
+            else:
+                await self.sender.send_group_message(group_id, f"当前生效 Prompt：{effective[:200]}")
+            return
+        if sub == "group" and not rest:
+            # /prompt group show
+            gp = self.prompt_manager.get_group_prompt(group_id)
+            if not gp:
+                await self.sender.send_group_message(group_id, "本群未设置 Prompt（使用全局/内置）")
+            else:
+                await self.sender.send_group_message(group_id, f"本群 Prompt：{gp[:200]}")
+            return
+        if not is_admin:
+            await self.sender.send_group_message(group_id, "只有管理员能修改 Prompt 哦")
+            return
+        if sub == "set":
+            if not rest:
+                await self.sender.send_group_message(group_id, "用法：/prompt set <内容>（设置全局 Prompt）")
+                return
+            try:
+                self.prompt_manager.set_global_prompt(rest)
+                await self.sender.send_group_message(group_id, "全局 Prompt 已更新，立即生效")
+            except ValueError as e:
+                await self.sender.send_group_message(group_id, str(e))
+            return
+        if sub == "reset":
+            self.prompt_manager.reset_global_prompt()
+            await self.sender.send_group_message(group_id, "全局 Prompt 已重置（回退到内置人设）")
+            return
+        if sub == "group":
+            gsub = rest.split(maxsplit=1)[0] if rest else ""
+            grest = rest.split(maxsplit=1)[1].strip() if " " in rest else ""
+            if gsub == "set":
+                if not grest:
+                    await self.sender.send_group_message(group_id, "用法：/prompt group set <内容>（设置本群 Prompt）")
+                    return
+                try:
+                    self.prompt_manager.set_group_prompt(group_id, grest)
+                    await self.sender.send_group_message(group_id, "本群 Prompt 已更新，立即生效")
+                except ValueError as e:
+                    await self.sender.send_group_message(group_id, str(e))
+                return
+            if gsub == "reset":
+                self.prompt_manager.reset_group_prompt(group_id)
+                await self.sender.send_group_message(group_id, "本群 Prompt 已重置（回退到全局/内置）")
+                return
+            await self.sender.send_group_message(group_id, "用法：/prompt group set <内容> | /prompt group reset")
+            return
+        await self.sender.send_group_message(
+            group_id,
+            "用法：/prompt show | /prompt set <内容> | /prompt reset | /prompt group set <内容> | /prompt group reset",
+        )
 
     # ---------- 各指令实现 ----------
     async def _cmd_help(self, group_id: int, is_admin: bool) -> None:
