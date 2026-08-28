@@ -61,8 +61,10 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 | 变量 | 说明 | 默认 |
 | :--- | :--- | :--- |
 | `MCP_ENABLED` | 总开关 | `false` |
-| `MCP_SERVER_URL` | MCP server 地址（HTTP/SSE） | 空 |
+| `MCP_SERVER_URL` | MCP server 地址（HTTP/SSE，单 server） | 空 |
 | `MCP_SERVER_NAME` | server 名称 | `mcp` |
+| `MCP_SERVERS` | 多 server 列表（JSON 数组，插件式；为空时用 `MCP_SERVER_URL`） | 空 |
+| `MCP_ALLOWED_HOSTS` | 显式放行的本地/内网主机白名单（逗号分隔；仅这些地址可绕过回环/私网拒绝） | 空 |
 | `MCP_TIMEOUT` | 单次工具调用超时（秒） | `15` |
 | `MCP_MAX_TOOL_CALLS` | 单轮对话工具调用上限 | `5` |
 | `MCP_ALLOWED_TOOLS` | 工具白名单（逗号分隔，空=不允许任何工具） | 空 |
