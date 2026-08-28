@@ -105,6 +105,13 @@ class Settings(BaseSettings):
     AUDIT_LOG_PATH: str = "./data/audit.log"
     # 应用设置库（自定义 Prompt / Web UI 可编辑配置），SQLite
     SETTINGS_DB_PATH: str = "./data/settings.db"
+    # 表情包（Sticker）：目录由环境变量指定，空=禁用；Vision 索引缓存于 SQLite
+    STICKER_DIR: str = ""
+    STICKER_DB_PATH: str = "./data/stickers.db"
+    STICKER_ENABLED: bool = False
+    STICKER_COOLDOWN: int = 60          # 同一群两次表情包的最小间隔（秒）
+    MAX_STICKERS_PER_MESSAGE: int = 1   # 每次回复最多附带表情包数
+    STICKER_MAX_LIST: int = 30          # 提供给模型的可用表情包描述上限（防 token 膨胀）
 
     # White list
     ALLOWED_GROUP_IDS: Optional[List[int]] = None

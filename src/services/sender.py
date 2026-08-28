@@ -28,6 +28,42 @@ class Sender:
         if self.session:
             await self.session.close()
 
+    async def send_group_message_with_image(self, group_id: int, text: str, image_path: str,
+                                            retries: int = 2) -> bool:
+        """发送文字 + 本地图片（段数组消息，OneBot11 image 段用 file:// 绝对路径）。"""
+        if not image_path:
+            return False
+        segments = []
+        if text and text.strip():
+            segments.append({"type": "text", "data": {"text": text[: self.config.MAX_REPLY_LENGTH]}})
+        segments.append({"type": "image", "data": {"file": f"file://{image_path}"}})
+        url = f"{self.config.HTTP_API_BASE}/send_group_msg"
+        payload = {"group_id": group_id, "message": segments}
+        logger.info("message_send_started group=%s image=%s", group_id, image_path,
+                    extra={"event": "message_send_started"})
+        for attempt in range(max(1, retries + 1)):
+            try:
+                async with self.session.post(url, json=payload, headers=self._headers(),
+                                             timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        logger.error("message_send_failed group=%s http=%s", group_id, resp.status,
+                                     extra={"event": "message_send_failed"})
+                    else:
+                        data = await resp.json()
+                        if data.get("retcode") == 0:
+                            logger.info("message_send_finished group=%s image=%s", group_id, image_path,
+                                        extra={"event": "message_send_finished"})
+                            return True
+                        logger.error("message_send_failed group=%s retcode=%s", group_id, data.get("retcode"),
+                                     extra={"event": "message_send_failed"})
+            except Exception as e:
+                logger.error("message_send_failed group=%s err=%s", group_id, e,
+                             extra={"event": "message_send_failed"})
+            _M_SEND_FAIL.inc({"target": "group"})
+            if attempt < retries:
+                await asyncio.sleep(2)
+        return False
+
     async def send_group_message(self, group_id: int, message: str, retries: int = 2) -> bool:
         if not message:
             return False

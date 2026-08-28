@@ -15,6 +15,7 @@ from src.services.file_parser import FileParser
 from src.services.memory_manager import MemoryManager
 from src.services.prompt_manager import PromptManager
 from src.services.sender import Sender
+from src.services.sticker_manager import StickerManager
 from src.utils.circuit_breaker import CircuitBreaker
 from src.utils.expiring_map import ExpiringMap
 from src.utils.logging_setup import get_logger
@@ -56,6 +57,7 @@ class MessageRouter:
         policy_engine: PolicyEngine,
         task_manager: Optional[BackgroundTaskManager] = None,
         prompt_manager: Optional["PromptManager"] = None,
+        sticker_manager: Optional["StickerManager"] = None,
     ):
         self.config = config
         self.ai_client = ai_client
@@ -66,6 +68,8 @@ class MessageRouter:
         self.global_state = self.policy_engine.global_state
         # 自定义 Prompt（全局/群聊）：None 时跳过（不影响现有行为）
         self.prompt_manager = prompt_manager
+        # 表情包（Sticker）：None 时跳过（不影响现有行为）
+        self.sticker_manager = sticker_manager
         # 消息组装（文本/识图/转发/卡片/文件/存档）→ MessageAssembler
         self.assembler = MessageAssembler(config, ai_client, file_parser, self.global_state)
         # 指令处理 → CommandHandler
@@ -106,6 +110,9 @@ class MessageRouter:
         # 周期备份上下文（意外去世后重启可恢复最近 50 条）
         self.task_manager.register("context_backup", self._context_backup_loop())
         logger.info("Context backup loop started (every %ss)", self.config.CONTEXT_BACKUP_INTERVAL)
+        # 表情包 Vision 索引（一次性后台任务；失败不影响启动，单文件失败跳过）
+        if self.sticker_manager and self.sticker_manager.is_enabled():
+            self.task_manager.register("sticker_index", self.sticker_manager.scan_and_index())
 
     async def stop(self):
         # 统一取消并等待所有后台任务（TaskManager 负责异常记录与超时强杀）
@@ -284,6 +291,11 @@ class MessageRouter:
         user_prompt = full_text if full_text.strip() else (
             f"用户刚刚发了一张图片，图片内容：{'; '.join(image_descriptions)}" if image_descriptions else "用户刚刚@了你，但没有说话。"
         )
+        # 表情包上下文：可用表情包的"文字描述"（不传图片本体，防 token 与隐私浪费）
+        if self.sticker_manager and self.sticker_manager.is_enabled():
+            sticker_ctx = self.sticker_manager.build_sticker_context()
+            if sticker_ctx:
+                user_prompt = f"{user_prompt}\n\n{sticker_ctx}" 
         # 输入截断已统一收敛到 AIClient.chat_once（覆盖主动聊天等所有路径）
         logger.info("policy_pass group=%s user=%s", group_id, user_id, extra={"event": "policy_pass"})
         reply, memory_update, denied = await self.guarded_chat(
@@ -325,6 +337,27 @@ class MessageRouter:
             if self.policy_engine.is_duplicate_reply(group_id, reply):
                 logger.debug("Duplicate reply, skip")
                 return
+
+            # 表情包：解析模型回复中的 [STICKER:filename] 标记并发送
+            sticker_path = None
+            if self.sticker_manager and self.sticker_manager.is_enabled():
+                sticker_path = self.sticker_manager.extract_sticker(reply)
+                if sticker_path:
+                    reply = self.sticker_manager.strip_sticker_marker(reply)
+            if sticker_path:
+                if not self.sticker_manager.can_send(group_id):
+                    logger.debug("Sticker cooldown, skip image (text only)")
+                    sticker_path = None
+                else:
+                    self.sticker_manager.mark_sent(group_id)
+                    success = await self.sender.send_group_message_with_image(
+                        group_id, reply or None, sticker_path)
+                    if success:
+                        self.policy_engine.record_bot_reply(group_id)
+                        self.policy_engine.add_context(group_id, 0, reply or "[表情包]", is_bot=True)
+                        self.policy_engine.add_recent_reply(group_id, reply or "[表情包]")
+                        logger.info("Sticker sent: %s", sticker_path, extra={"event": "sticker_selected"})
+                    return
 
             success = await self.sender.send_group_message(group_id, reply)
             if success:

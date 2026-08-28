@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import os
 import re
 from typing import Optional, Tuple
 
@@ -515,6 +516,13 @@ class AIClient:
 
         if not image_bytes:
             return None
+        return await self._describe_image_bytes(image_bytes, model, api_url, api_key, timeout)
+
+    async def _describe_image_bytes(self, image_bytes: bytes, model: str, api_url: str,
+                                    api_key: str, timeout: float) -> Optional[str]:
+        """把图片字节交给视觉模型，返回一句话描述（describe_image 与本地文件共用）。"""
+        if not image_bytes:
+            return None
         b64 = base64.b64encode(image_bytes).decode("ascii")
 
         payload = {
@@ -537,9 +545,32 @@ class AIClient:
                 return None
             data = r.json()
             if "choices" in data and len(data["choices"]) > 0:
-                content = data["choices"][0]["message"]["content"].strip()
+                content = (data["choices"][0].get("message") or {}).get("content")
+                content = (content or "").strip()
                 return content or None
             logger.error(f"Vision API unexpected response: {str(data)[:200]}")
         except Exception as e:
             logger.error(f"Vision API error: {e}")
         return None
+
+    async def describe_image_file(self, file_path: str) -> Optional[str]:
+        """描述本地图片文件（表情包索引用），失败返回 None。"""
+        try:
+            size = os.path.getsize(file_path)
+            cap = self.config.MAX_IMAGE_DOWNLOAD_BYTES
+            if size <= 0 or size > cap:
+                logger.error("Sticker file size out of range: %s (%s bytes)", file_path, size)
+                return None
+            with open(file_path, "rb") as f:
+                data = f.read()
+            if not _looks_like_image(data):
+                logger.error("Sticker file is not an image: %s", file_path)
+                return None
+        except OSError as e:
+            logger.error("Sticker file read error: %s err=%s", file_path, e)
+            return None
+        model = self.config.VISION_MODEL or "deepseek-v4-flash-vision-exp"
+        api_url = self.config.VISION_API_URL or self.config.DEEPSEEK_API_URL
+        api_key = self.config.VISION_API_KEY or self.config.DEEPSEEK_API_KEY
+        timeout = self.config.VISION_TIMEOUT or 30
+        return await self._describe_image_bytes(data, model, api_url, api_key, timeout)

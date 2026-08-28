@@ -12,11 +12,13 @@ from src.core.message_router import MessageRouter
 from src.core.policy_engine import PolicyEngine
 from src.core.websocket_server import WebSocketServer
 from src.repositories.settings_repository import SettingsRepository
+from src.repositories.sticker_repository import StickerRepository
 from src.services.ai_client import AIClient
 from src.services.file_parser import FileParser
 from src.services.memory_manager import MemoryManager
 from src.services.prompt_manager import PromptManager
 from src.services.sender import Sender
+from src.services.sticker_manager import StickerManager
 from src.utils.logging_setup import get_logger, init_logging
 from src.utils.metrics import registry
 
@@ -38,6 +40,8 @@ async def main():
 
     # 优雅管理异步资源（HTTP session / AI 客户端）
     async with AIClient(config, memory_manager) as ai_client, Sender(config) as sender:
+        sticker_repo = StickerRepository(config.STICKER_DB_PATH)
+        sticker_manager = StickerManager(config, sticker_repo, ai_client)
         file_parser = FileParser(config)
         policy_engine = PolicyEngine(config, memory_manager)
         message_router = MessageRouter(
@@ -48,6 +52,7 @@ async def main():
             sender=sender,
             policy_engine=policy_engine,
             prompt_manager=prompt_manager,
+            sticker_manager=sticker_manager,
         )
         ws_server = WebSocketServer(config, message_router)
 
@@ -68,6 +73,7 @@ async def main():
             await file_parser.close()
             memory_manager.close()
             settings_repo.close()
+            sticker_manager.close()
             # 4) 输出进程内 metrics 摘要
             logger.info(
                 "shutdown metrics=%s", registry.export_text().replace("\n", " | ")[:800],
