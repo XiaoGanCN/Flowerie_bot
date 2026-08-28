@@ -218,7 +218,7 @@ def parse_mcp_servers(raw: str, default_timeout: int = 15, default_tools: str = 
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            raise ValueError("MCP_SERVERS 必须是合法 JSON 数组")
+            raise ValueError("MCP_SERVERS 必须是合法 JSON 数组") from None
         if not isinstance(data, list):
             raise ValueError("MCP_SERVERS 必须是 JSON 数组")
         for item in data:
