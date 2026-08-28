@@ -19,9 +19,15 @@ pkg update && pkg upgrade -y
 pkg install python python-pip git -y
 # 如需读取手机存储（/sdcard），执行下方命令并授权：
 termux-setup-storage
+
+# 获取项目代码（克隆后已进入项目目录，后续 pip/运行命令都在项目内执行）
+git clone https://github.com/lingcat521/Flowerie_bot.git
+cd Flowerie_bot
 ```
 
 ## 步骤三：安装项目依赖（关键步骤）
+
+> 以下命令需在**项目目录内**执行（步骤二末尾已 `cd Flowerie_bot` 进入）。
 
 **请直接复制整条命令**，它强制从安卓专用源获取预编译包，**避免耗时 10 分钟以上的源码编译**：
 ```bash
@@ -44,7 +50,7 @@ pip install -r requirements.txt
 ## 步骤四：运行项目
 
 ```bash
-cd Flowerie_bot          # 进入项目目录（若克隆到其他路径请相应调整）
+cd Flowerie_bot 2>/dev/null || true  # 确保在项目目录（步骤二已进入且未离开时，此行自动跳过）
 cp .env_example .env     # 复制示例配置生成 .env
 # 然后编辑 .env，填入 DEEPSEEK_API_KEY（DeepSeek 密钥）与 BOT_QQ（机器人 QQ 号）
 python main.py           # 启动机器人
