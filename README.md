@@ -106,6 +106,20 @@ OneBot WebSocket connected
 用 WEB_UI_USERNAME / WEB_UI_PASSWORD 登录
 可管理 AI / Bot / 记忆 / 表情包 / MCP 配置（API Key 只显示掩码）。详见 [docs/configuration.md](docs/configuration.md)。
 
+### 如何开启
+
+1. 编辑项目根目录的 `.env`，追加：
+   ```ini
+   WEB_UI_ENABLED=true
+   WEB_UI_PORT=8080            # 不能与 WS_PORT(3001) 相同
+   WEB_UI_USERNAME=admin
+   WEB_UI_PASSWORD=你的密码      # 必填，留空会拒绝启动
+   ```
+2. 重启机器人：`python main.py`（或守护脚本 `bash run.sh`）
+3. 手机浏览器打开 http://127.0.0.1:8080，用上面的账号密码登录
+
+> 同一局域网内的电脑访问：在 `.env` 加 `WEB_UI_HOST=0.0.0.0`，然后浏览器打开 `http://手机局域网IP:8080`（请设置强密码，勿暴露公网）。
+
 ## MCP
 
 默认关闭。配置 MCP_ENABLED=true + MCP_SERVER_URL 后，模型可调用白名单内的工具获取实时信息。详见 [docs/mcp.md](docs/mcp.md)。

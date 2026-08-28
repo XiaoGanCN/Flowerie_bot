@@ -93,6 +93,20 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 
 > ⚠️ `WEB_UI_PORT` 与 `WS_PORT` 冲突时启动直接报错——Web UI 的本地回环端口不能与 NapCat 反向 WS 端口一致。
 
+### 如何开启
+
+1. 编辑项目根目录的 `.env`，追加：
+   ```ini
+   WEB_UI_ENABLED=true
+   WEB_UI_PORT=8080            # 不能与 WS_PORT(3001) 相同
+   WEB_UI_USERNAME=admin
+   WEB_UI_PASSWORD=你的密码      # 必填，留空会拒绝启动
+   ```
+2. 重启机器人：`python main.py`（或守护脚本 `bash run.sh`）
+3. 手机浏览器打开 http://127.0.0.1:8080，用上面的账号密码登录
+
+> 同一局域网内的电脑访问：在 `.env` 加 `WEB_UI_HOST=0.0.0.0`，然后浏览器打开 `http://手机局域网IP:8080`（请设置强密码，勿暴露公网）。
+
 ## 日志
 
 | 变量 | 说明 | 默认 |
