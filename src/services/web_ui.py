@@ -9,6 +9,7 @@
 - 端口：与反向 WS 端口（WS_PORT）错开由启动校验保证
 - 所有管理接口必须管理员 token
 """
+import html as _html
 import json
 import secrets
 import time
@@ -48,6 +49,9 @@ class WebUIServer:
     def _check_token(self, request: web.Request) -> bool:
         auth = request.headers.get("Authorization", "")
         token = auth[7:] if auth.startswith("Bearer ") else ""
+        if not token:
+            # 无 JS 面板走 Cookie 会话
+            token = request.cookies.get("fb_token", "")
         expire = self._tokens.get(token, 0)
         if expire > time.time():
             return True
@@ -181,6 +185,13 @@ class WebUIServer:
         app = web.Application()
         app.router.add_get("/", self._handle_index)
         app.router.add_get("/webui", self._handle_index)  # NapCat 风格路径别名
+        # 无 JS 兼容面板（服务端渲染，任何浏览器可用，含禁用 JS 的手机浏览器）
+        app.router.add_get("/panel", self._handle_panel)
+        app.router.add_post("/panel/login", self._handle_panel_login)
+        app.router.add_get("/panel/register", self._handle_panel_register_page)
+        app.router.add_post("/panel/register", self._handle_panel_register)
+        app.router.add_post("/panel/save", self._handle_panel_save)
+        app.router.add_get("/panel/logout", self._handle_panel_logout)
         app.router.add_post("/api/login", self._handle_login)
         app.router.add_post("/api/register", self._handle_register)
         app.router.add_post("/api/logout", self._handle_logout)
@@ -189,6 +200,107 @@ class WebUIServer:
         app.router.add_get("/api/status", self._handle_status)
         app.router.add_get("/api/logs", self._handle_logs)
         return app
+
+    # ---------- 无 JS 兼容面板（纯服务端渲染，表单提交即可用） ----------
+    async def _handle_panel(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.Response(text=self._panel_login_page(), content_type="text/html", charset="utf-8")
+        msg = request.query.get("msg", "")
+        err = request.query.get("err", "") == "1"
+        tab = request.query.get("tab", "")
+        return web.Response(text=self._panel_page(msg, err, tab),
+                            content_type="text/html", charset="utf-8")
+
+    async def _handle_panel_login(self, request: web.Request) -> web.Response:
+        form = await request.post()
+        username = str(form.get("username", ""))
+        password = str(form.get("password", ""))
+        eff_user, eff_pass = self._effective_credentials()
+        if username == eff_user and secrets.compare_digest(password, eff_pass):
+            token = self._issue_token()
+            resp = web.HTTPFound("/panel")
+            resp.set_cookie("fb_token", token, httponly=True, samesite="Strict",
+                            max_age=max(60, getattr(self.config, "WEB_UI_TOKEN_TTL_SECONDS", 3600)))
+            logger.info("web_ui panel login success", extra={"event": "config_reload"})
+            return resp
+        self._record_login_fail(request.remote or "unknown")
+        return web.Response(text=self._panel_login_page("用户名或密码错误"),
+                            content_type="text/html", charset="utf-8")
+
+    async def _handle_panel_register_page(self, request: web.Request) -> web.Response:
+        return web.Response(text=self._panel_register_page(), content_type="text/html", charset="utf-8")
+
+    async def _handle_panel_register(self, request: web.Request) -> web.Response:
+        form = await request.post()
+        username = str(form.get("username", ""))
+        password = str(form.get("password", ""))
+        admin_password = str(form.get("admin_password", ""))
+        eff_user, eff_pass = self._effective_credentials()
+        if eff_pass and not secrets.compare_digest(admin_password, eff_pass):
+            return web.Response(text=self._panel_register_page("当前管理员密码不正确"),
+                                content_type="text/html", charset="utf-8")
+        ok, message = self.config_service.register_user(username, password)
+        return web.Response(text=self._panel_register_page(message, ok=ok),
+                            content_type="text/html", charset="utf-8")
+
+    async def _handle_panel_save(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        key = str(form.get("key", ""))
+        value = str(form.get("value", ""))
+        ok, message = self.config_service.update(key, value)
+        from urllib.parse import quote
+        return web.HTTPFound(f"/panel?msg={quote(message)}&err={'1' if not ok else ''}")
+
+    async def _handle_panel_logout(self, request: web.Request) -> web.Response:
+        token = request.cookies.get("fb_token", "")
+        self._tokens.pop(token, None)
+        resp = web.HTTPFound("/panel")
+        resp.del_cookie("fb_token")
+        return resp
+
+    def _panel_login_page(self, msg: str = "") -> str:
+        return (_PANEL_LOGIN_HTML.replace("@CSS@", _PANEL_CSS)
+                .replace("@MSG@", _html.escape(msg)))
+
+    def _panel_register_page(self, msg: str = "", ok: bool = True) -> str:
+        return (_PANEL_REGISTER_HTML.replace("@CSS@", _PANEL_CSS)
+                .replace("@MSG@", _html.escape(msg))
+                .replace("@MSGCLASS@", "ok" if ok else "err"))
+
+    def _panel_page(self, msg: str = "", err: bool = False, tab: str = "") -> str:
+        by_cat: Dict[str, list] = {}
+        for c in self.config_service.list_configs():
+            by_cat.setdefault(c["category"], []).append(c)
+        sections = []
+        for cat in ("AI", "Bot", "Memory", "Sticker", "MCP", "Policy", "Logging", "Advanced"):
+            items = by_cat.get(cat)
+            if not items:
+                continue
+            rows = []
+            for c in items:
+                rows.append(
+                    f'<form method="post" action="/panel/save" class="row">'
+                    f'<input type="hidden" name="key" value="{_html.escape(c["key"])}">'
+                    f'<span class="info"><b>{_html.escape(c["description"])}</b>'
+                    f'<small>{_html.escape(c["key"])}{" · 密钥" if c.get("secret") else ""}'
+                    f'{" · 需重启" if not c.get("hot_reload") else ""}</small></span>'
+                    f'<input name="value" value="{_html.escape(str(c.get("current") or ""))}">'
+                    f'<button type="submit">保存</button></form>'
+                )
+            sections.append(f'<h3>{_html.escape(cat)}</h3>' + "".join(rows))
+        msg_html = ""
+        if msg:
+            msg_html = f'<div class="{ "ok" if not err else "err" }">{_html.escape(msg)}</div>'
+        logs_html = ""
+        if tab == "logs":
+            logs = "<br>".join(_html.escape(x) for x in get_recent_logs(200))
+            logs_html = f'<h3>日志</h3><pre class="log">{logs}</pre>'
+        return (_PANEL_HTML.replace("@CSS@", _PANEL_CSS)
+                .replace("@MSG@", msg_html)
+                .replace("@SECTIONS@", "".join(sections))
+                .replace("@LOGS@", logs_html))
 
     @staticmethod
     def effective_host(config) -> str:
@@ -226,6 +338,55 @@ class WebUIServer:
         self._tokens.clear()
         logger.info("Web UI stopped", extra={"event": "config_reload"})
 
+
+_PANEL_CSS = """body{font-family:sans-serif;background:#1e2229;color:#d7dde6;margin:0;padding:20px}
+.box{max-width:520px;margin:8vh auto;background:#262b33;border:1px solid #363d48;border-radius:12px;padding:28px}
+h2{margin-top:0;font-size:17px}h3{font-size:14px;color:#8b96a5;margin:20px 0 8px}
+input{background:#2d333d;border:1px solid #363d48;color:#d7dde6;border-radius:7px;padding:9px 12px;margin-bottom:10px;box-sizing:border-box}
+button{background:#5b8def;border:none;color:#fff;padding:9px 16px;border-radius:7px;cursor:pointer}
+a{color:#5b8def;font-size:13px;text-decoration:none}
+.err{color:#f85149;font-size:13px;margin-bottom:10px}.ok{color:#3fb950;font-size:13px;margin-bottom:10px}
+.row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;background:#262b33;border:1px solid #363d48;border-radius:8px;padding:10px 14px}
+.row .info{width:240px;flex-shrink:0}.row .info small{display:block;color:#8b96a5;font-size:11px}
+.row input{width:180px;margin:0}.row button{width:auto}
+.log{background:#171a1f;border:1px solid #363d48;border-radius:8px;padding:12px;font-size:12px;overflow-x:auto;line-height:1.7}
+"""
+_PANEL_LOGIN_HTML = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>花璃 · 管理后台</title>
+<style>@CSS@</style></head><body>
+<div class="box"><h2>花璃 · 管理后台</h2>
+<div class="err">@MSG@</div>
+<form method="post" action="/panel/login">
+<input name="username" placeholder="用户名" required style="width:100%">
+<input name="password" type="password" placeholder="密码" required style="width:100%">
+<button type="submit" style="width:100%">登录</button></form>
+<p><a href="/panel/register">没有账号？注册管理员账号</a></p>
+<p style="color:#8b96a5;font-size:12px">无 JS 兼容面板（服务端渲染）· 任意浏览器可用</p>
+</div></body></html>"""
+_PANEL_REGISTER_HTML = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>花璃 · 注册</title>
+<style>@CSS@</style></head><body>
+<div class="box"><h2>注册管理员账号</h2>
+<div class="@MSGCLASS@">@MSG@</div>
+<form method="post" action="/panel/register">
+<input name="username" placeholder="新用户名（3~32 字符）" required style="width:100%">
+<input name="password" type="password" placeholder="新密码（至少 6 位）" required style="width:100%">
+<input name="admin_password" type="password" placeholder="当前管理员密码" style="width:100%">
+<button type="submit" style="width:100%">注册</button></form>
+<p><a href="/panel">← 返回登录</a></p>
+</div></body></html>"""
+_PANEL_HTML = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>花璃 · 管理后台</title>
+<style>@CSS@</style></head><body>
+<h2 style="display:flex;justify-content:space-between;align-items:center;max-width:960px;margin:0 auto 12px">
+<span>花璃 · 配置管理 <small style="color:#8b96a5">无 JS 版面板</small></span>
+<span style="font-size:13px"><a href="/panel?tab=logs">日志</a> · <a href="/panel/logout">退出</a></span>
+</h2>
+<div style="max-width:960px;margin:0 auto">
+@MSG@
+@SECTIONS@
+@LOGS@
+</div></body></html>"""
 
 _INDEX_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">

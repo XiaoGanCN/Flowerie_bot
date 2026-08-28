@@ -128,16 +128,22 @@ def test_restart_required_flag(cs):
 
 # ---------- Web UI（handler 层集成，本地与 CI 行为一致） ----------
 class FakeRequest:
-    """最小 request 桩：headers / remote / json()。"""
+    """最小 request 桩：headers / remote / json() / post() / cookies / query。"""
 
-    def __init__(self, headers=None, remote="127.0.0.1", body=None, query=None):
+    def __init__(self, headers=None, remote="127.0.0.1", body=None, query=None,
+                 cookies=None, form=None):
         self.headers = headers or {}
         self.remote = remote
         self.query = query or {}
         self._body = body or {}
+        self.cookies = cookies or {}
+        self._form = form or {}
 
     async def json(self):
         return self._body
+
+    async def post(self):
+        return self._form
 
 
 @pytest.fixture()
@@ -163,6 +169,19 @@ async def _resp_data(resp):
     if isinstance(body, bytes):
         return _json.loads(body.decode())
     return _json.loads(body)
+
+
+async def _resp_text(resp):
+    """取响应文本：真实 aiohttp 的 .text 是属性，本地桩是协程。"""
+    t = getattr(resp, "text", None)
+    if isinstance(t, str):
+        return t
+    if callable(t):
+        return await t()
+    body = getattr(resp, "body", b"")
+    if isinstance(body, bytes):
+        return body.decode("utf-8", "replace")
+    return str(body or "")
 
 
 async def _login(server):
@@ -222,6 +241,51 @@ async def test_config_read_with_auth(webapp):
     keys = [c["key"] for c in (await _resp_data(resp))["configs"]]
     assert "DEEPSEEK_API_KEY" in keys
     assert "MAX_REPLY_LENGTH" in keys
+
+
+# ---------- 无 JS 面板（/panel，服务端渲染） ----------
+async def test_panel_login_page_without_auth(webapp):
+    server = webapp
+    resp = await server._handle_panel(FakeRequest())
+    assert resp.status == 200
+    assert "登录" in await _resp_text(resp)
+    assert "注册管理员账号" in await _resp_text(resp)
+
+
+async def test_panel_login_sets_cookie_and_enters(webapp):
+    server = webapp
+    resp = await server._handle_panel_login(FakeRequest(form={"username": "admin", "password": "secret123"}))
+    assert resp.status == 302  # 重定向到 /panel
+    cookie = resp.cookies.get("fb_token")
+    assert cookie is not None
+    # 带 cookie 访问面板成功
+    resp2 = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie.value}))
+    assert resp2.status == 200
+    assert "配置管理" in await _resp_text(resp2)
+    # 错误密码
+    resp3 = await server._handle_panel_login(FakeRequest(form={"username": "admin", "password": "wrong"}))
+    assert "用户名或密码错误" in await _resp_text(resp3)
+
+
+async def test_panel_register_via_form(webapp):
+    server = webapp
+    resp = await server._handle_panel_register(FakeRequest(
+        form={"username": "boss", "password": "newpass123", "admin_password": "secret123"}))
+    assert resp.status == 200
+    assert "注册成功" in await _resp_text(resp)
+    # 新账号走面板登录成功
+    resp2 = await server._handle_panel_login(FakeRequest(form={"username": "boss", "password": "newpass123"}))
+    assert resp2.status == 302
+
+
+async def test_panel_save_config_via_form(webapp):
+    server = webapp
+    resp = await server._handle_panel_login(FakeRequest(form={"username": "admin", "password": "secret123"}))
+    cookie = resp.cookies.get("fb_token").value
+    resp2 = await server._handle_panel_save(FakeRequest(
+        cookies={"fb_token": cookie}, form={"key": "MAX_REPLY_LENGTH", "value": "55"}))
+    assert resp2.status == 302
+    assert server.config_service.repository.get_config("MAX_REPLY_LENGTH") == "55"
 
 
 async def test_config_update_via_api(webapp):
