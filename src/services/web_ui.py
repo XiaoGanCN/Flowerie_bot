@@ -12,7 +12,7 @@
 import json
 import secrets
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from aiohttp import web
 
@@ -63,6 +63,15 @@ class WebUIServer:
         self._login_fails.setdefault(ip, []).append(time.time())
 
     # ---------- 处理器 ----------
+    def _effective_credentials(self) -> Tuple[str, str]:
+        """实际生效的管理账号：优先使用注册/修改后存于 settings.db 的账号，
+        未注册时回退 .env 的 WEB_UI_USERNAME / WEB_UI_PASSWORD。"""
+        repo_user = self.config_service.repository.get_config("WEB_UI_USERNAME")
+        repo_pass = self.config_service.repository.get_config("WEB_UI_PASSWORD")
+        user = repo_user if repo_user is not None else str(getattr(self.config, "WEB_UI_USERNAME", "admin"))
+        pwd = repo_pass if repo_pass is not None else str(getattr(self.config, "WEB_UI_PASSWORD", "") or "")
+        return user, pwd
+
     async def _handle_login(self, request: web.Request) -> web.Response:
         ip = request.remote or "unknown"
         if self._login_blocked(ip):
@@ -73,13 +82,35 @@ class WebUIServer:
             return web.json_response({"error": "请求格式错误"}, status=400)
         username = str(body.get("username", ""))
         password = str(body.get("password", ""))
-        if (username == self.config.WEB_UI_USERNAME and
-                secrets.compare_digest(password, self.config.WEB_UI_PASSWORD or "")):
+        eff_user, eff_pass = self._effective_credentials()
+        if (username == eff_user and secrets.compare_digest(password, eff_pass)):
             token = self._issue_token()
             logger.info("web_ui login success", extra={"event": "config_reload"})
             return web.json_response({"token": token, "expires_in": getattr(self.config, "WEB_UI_TOKEN_TTL_SECONDS", 3600)})
         self._record_login_fail(ip)
         return web.json_response({"error": "用户名或密码错误"}, status=401)
+
+    async def _handle_register(self, request: web.Request) -> web.Response:
+        """注册/修改管理账号：账号密码持久化到 settings.db，之后登录不再依赖 .env。
+
+        安全护栏：若当前已有生效密码（.env 或已注册），必须提供当前管理员密码验证；
+        仅当完全未配置密码（首次搭建）时才允许免验证注册。
+        """
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "请求格式错误"}, status=400)
+        username = str(body.get("username", ""))
+        password = str(body.get("password", ""))
+        admin_password = str(body.get("admin_password", ""))
+        eff_user, eff_pass = self._effective_credentials()
+        if eff_pass and not secrets.compare_digest(admin_password, eff_pass):
+            return web.json_response({"error": "当前管理员密码不正确，无法注册"}, status=403)
+        ok, message = self.config_service.register_user(username, password)
+        if not ok:
+            return web.json_response({"error": message}, status=400)
+        logger.info("web_ui register success user=%s", username, extra={"event": "config_reload"})
+        return web.json_response({"ok": True, "message": message})
 
     async def _handle_logout(self, request: web.Request) -> web.Response:
         if not self._check_token(request):
@@ -151,6 +182,7 @@ class WebUIServer:
         app.router.add_get("/", self._handle_index)
         app.router.add_get("/webui", self._handle_index)  # NapCat 风格路径别名
         app.router.add_post("/api/login", self._handle_login)
+        app.router.add_post("/api/register", self._handle_register)
         app.router.add_post("/api/logout", self._handle_logout)
         app.router.add_get("/api/config", self._handle_get_config)
         app.router.add_put("/api/config", self._handle_update_config)
@@ -277,7 +309,17 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
       <button type="submit">登录</button>
     </form>
     <div class="msg err" id="loginMsg"></div>
-    <div class="hint">账号/密码在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD），本后台无注册功能 · UI v8</div>
+    <div id="registerForm" class="hidden" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
+      <div class="lbl" style="margin-bottom:10px">注册管理员账号（保存到项目 data/settings.db，之后登录不再依赖 .env）</div>
+      <input id="ru" placeholder="新用户名" autocomplete="off">
+      <input id="rp" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password">
+      <input id="radmin" type="password" placeholder="当前管理员密码" autocomplete="current-password">
+      <button type="button" onclick="register()">注册</button>
+      <div class="msg err" id="regMsg"></div>
+      <div class="hint" style="cursor:pointer;color:var(--accent)" onclick="toggleRegister()">← 返回登录</div>
+    </div>
+    <div class="hint" id="toggleReg" style="cursor:pointer;color:var(--accent)">没有账号？注册管理员账号</div>
+    <div class="hint">未注册时用 .env 的 WEB_UI_USERNAME / WEB_UI_PASSWORD 登录 · UI v9</div>
     <noscript><div class="hint" style="color:var(--err)">⚠️ 此页面需要启用 JavaScript 才能登录和操作</div></noscript>
   </div>
 </div>
@@ -302,7 +344,7 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
     <div class="topbar">
       <h1 id="pageTitle">总览</h1>
       <div style="display:flex;gap:8px;align-items:center">
-        <span class="badge" id="uiVer">UI v8</span>
+        <span class="badge" id="uiVer">UI v9</span>
         <span class="badge offline" id="wsBadge">未连接</span>
         <button class="ghost" onclick="logout()">退出</button>
       </div>
@@ -324,7 +366,7 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
       <div class="page" id="page-about">
         <div class="card">
           <p><b>花璃 Flowerie</b> v0.0.1</p>
-          <p class="lbl" style="margin-top:8px">DeepSeek 驱动 · NapCat OneBot11 · SQLite 存储 · UI v8</p>
+          <p class="lbl" style="margin-top:8px">DeepSeek 驱动 · NapCat OneBot11 · SQLite 存储 · UI v9</p>
           <p class="lbl">架构审计与完整文档见仓库 docs/</p>
         </div>
       </div>
@@ -352,6 +394,21 @@ async function login(){
   else loginMsg.textContent = r.data.error || "登录失败";
 }
 function logout(){ token = null; renderAuthState(); }
+function toggleRegister(){
+  const rf = document.getElementById("registerForm");
+  const lf = document.getElementById("loginForm");
+  const tr = document.getElementById("toggleReg");
+  if (!rf) return;
+  if (rf.classList.contains("hidden")) { rf.classList.remove("hidden"); if(lf) lf.style.display="none"; if(tr) tr.style.display="none"; }
+  else { rf.classList.add("hidden"); if(lf) lf.style.display=""; if(tr) tr.style.display=""; }
+}
+async function register(){
+  const r = await api("/api/register", "POST", {username:ru.value, password:rp.value, admin_password:radmin.value});
+  const m = document.getElementById("regMsg");
+  m.textContent = r.data.message || r.data.error || "";
+  m.className = "msg" + (r.status === 200 ? "" : " err");
+  if (r.status === 200) { m.textContent = "注册成功！请用新账号登录"; setTimeout(toggleRegister, 900); }
+}
 function renderAuthState(){
   const lv = document.getElementById("loginView");
   const db = document.getElementById("dashboard");

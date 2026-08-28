@@ -181,6 +181,39 @@ async def test_login_and_unauthorized(webapp):
     assert "token" in await _resp_data(resp)
 
 
+# ---------- 注册（账号持久化到 settings.db，登录优先于 .env） ----------
+async def test_register_and_login_with_registered_account(webapp):
+    server = webapp
+    # 首次注册需提供当前 .env 密码验证
+    resp = await server._handle_register(FakeRequest(
+        body={"username": "boss", "password": "newpass123", "admin_password": "secret123"}))
+    assert resp.status == 200
+    # 用新注册账号登录成功
+    resp = await server._handle_login(FakeRequest(body={"username": "boss", "password": "newpass123"}))
+    assert resp.status == 200
+    assert "token" in await _resp_data(resp)
+    # 注册后以注册账号为准，旧 .env 账号不再可登录
+    resp = await server._handle_login(FakeRequest(body={"username": "admin", "password": "secret123"}))
+    assert resp.status == 401
+
+
+async def test_register_requires_current_password(webapp):
+    server = webapp
+    resp = await server._handle_register(FakeRequest(
+        body={"username": "hacker", "password": "newpass123", "admin_password": "wrong"}))
+    assert resp.status == 403
+
+
+async def test_register_validates_username_password(webapp):
+    server = webapp
+    resp = await server._handle_register(FakeRequest(
+        body={"username": "ab", "password": "newpass123", "admin_password": "secret123"}))
+    assert resp.status == 400  # 用户名太短
+    resp = await server._handle_register(FakeRequest(
+        body={"username": "boss", "password": "123", "admin_password": "secret123"}))
+    assert resp.status == 400  # 密码太短
+
+
 async def test_config_read_with_auth(webapp):
     server = webapp
     token = await _login(server)

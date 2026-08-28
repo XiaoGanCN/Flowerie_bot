@@ -128,6 +128,28 @@ class ConfigService:
             )
         return applied
 
+    # ---------- 注册/修改管理账号 ----------
+    def register_user(self, username: str, password: str) -> Tuple[bool, str]:
+        """注册/修改 Web UI 管理账号（持久化到 settings.db，优先级高于 .env）。
+
+        之后登录优先使用这里保存的账号；.env 的 WEB_UI_USERNAME / WEB_UI_PASSWORD
+        仅作未注册时的兜底。账号信息存入项目数据目录（data/settings.db），不依赖 .env。
+        """
+        username = (username or "").strip()
+        if not (3 <= len(username) <= 32):
+            return False, "用户名长度需 3~32 字符"
+        if len(password or "") < 6:
+            return False, "密码至少 6 位"
+        self.repository.set_config("WEB_UI_USERNAME", username)
+        self.repository.set_config("WEB_UI_PASSWORD", password)
+        try:
+            setattr(self.config, "WEB_UI_USERNAME", username)
+            setattr(self.config, "WEB_UI_PASSWORD", password)
+        except Exception:  # noqa: BLE001
+            pass
+        logger.info("web_ui account registered user=%s", username, extra={"event": "config_reload"})
+        return True, "注册成功，请用新账号登录"
+
     # ---------- 修改 ----------
     def update(self, key: str, raw_value: str) -> Tuple[bool, str]:
         """更新配置。返回 (是否成功, 提示信息)。校验失败返回 (False, 原因)。"""
