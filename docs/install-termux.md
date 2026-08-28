@@ -37,7 +37,45 @@ pip install -r requirements.txt \
   --only-binary pydantic-core,pydantic
 ```
 
-> **⚠️ 如果上述命令因网络问题下载失败**（提示 `github.com` 超时），请尝试：
+> **⚠️ 如果出现 SSL 报错**（`SSL: UNEXPECTED_EOF_WHILE_READING`、`Could not fetch URL ... tuna`）——清华源 HTTPS 偶发被网络重置，按顺序尝试：
+>
+> **1. 更新 CA 证书后重试**（证书过期/缺失最常见）：
+> ```bash
+> pkg install ca-certificates -y
+> pkg upgrade -y
+> ```
+>
+> **2. 换一个备用 PyPI 镜像**（任选其一，把清华源换成下面的）：
+> ```bash
+> # 阿里云镜像
+> pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ \
+>   --extra-index-url https://termux-user-repository.github.io/pypi/ \
+>   --only-binary pydantic-core,pydantic
+> # 中科大镜像
+> pip install -r requirements.txt -i https://mirrors.ustc.edu.cn/pypi/simple/ \
+>   --extra-index-url https://termux-user-repository.github.io/pypi/ \
+>   --only-binary pydantic-core,pydantic
+> # 官方源
+> pip install -r requirements.txt -i https://pypi.org/simple/ \
+>   --extra-index-url https://termux-user-repository.github.io/pypi/ \
+>   --only-binary pydantic-core,pydantic
+> ```
+>
+> **3. 若 HTTPS 握手持续被重置**，用 http + `--trusted-host` 绕过 TLS 校验：
+> ```bash
+> pip install -r requirements.txt \
+>   -i http://pypi.tuna.tsinghua.edu.cn/simple \
+>   --extra-index-url https://termux-user-repository.github.io/pypi/ \
+>   --trusted-host pypi.tuna.tsinghua.edu.cn \
+>   --only-binary pydantic-core,pydantic
+> ```
+
+> **💡 说明**：`aiohttp` 等包在 Termux 没有预编译包（Termux 专用源只预编译了 `pydantic-core` 等少数几个），pip 会**自动下载源码用 clang 编译**，耗时几分钟属正常现象。建议**提前装好编译工具**，避免编译中途失败：
+> ```bash
+> pkg install python-yaml clang binutils rust -y
+> ```
+
+> **⚠️ 如果仍因网络问题下载失败**（提示 `github.com` 超时），请尝试：
 > 1. 先安装系统自带的 yaml：`pkg install python-yaml -y`
 > 2. 安装编译工具：`pkg install clang binutils rust -y`
 > 3. 升级 pip 后直接编译安装（耗时约 10~20 分钟，请耐心等待）：
