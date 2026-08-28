@@ -44,7 +44,7 @@
 git clone https://github.com/lingcat521/Flowerie_bot.git
 cd Flowerie_bot
 pip install -r requirements.txt
-cp .env.example .env        # 然后编辑 .env
+cp .env_example .env        # 然后编辑 .env
 ```
 
 > 📱 **安卓 / Termux 用户**  
@@ -84,7 +84,7 @@ OneBot WebSocket connected
 | `WS_PORT` / `HTTP_API_BASE` | 反向 WS 端口 / NapCat HTTP 地址 | `3001` / `http://127.0.0.1:3000` |
 | `STICKER_DIR` / `STICKER_ENABLED` | 表情包目录 / 开关 | 空 / `false` |
 | `MCP_ENABLED` / `MCP_SERVER_URL` / `MCP_ALLOWED_TOOLS` | MCP 开关 / 地址 / 工具白名单 | `false` |
-| `WEB_UI_ENABLED` / `WEB_UI_PORT` / `WEB_UI_PASSWORD` | Web UI 开关 / 端口 / 密码 | `false` / `8080` |
+| `WEB_UI_ENABLED` / `WEB_UI_PORT` / `WEB_UI_USERNAME` / `WEB_UI_PASSWORD` | Web UI 开关 / 端口 / 登录账号 / 密码 | `false` / `8080` / `admin` / 空 |
 | `LOG_FORMAT` | 日志格式 `text`/`json` | `text` |
 
 > ⚠️ WEB_UI_PORT 不能与 WS_PORT 相同（端口冲突时启动会报错）。
