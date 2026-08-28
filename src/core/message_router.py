@@ -302,7 +302,7 @@ class MessageRouter:
         if self.sticker_manager and self.sticker_manager.is_enabled():
             sticker_ctx = self.sticker_manager.build_sticker_context()
             if sticker_ctx:
-                user_prompt = f"{user_prompt}\n\n{sticker_ctx}" 
+                user_prompt = f"{user_prompt}\n\n{sticker_ctx}"
         # 输入截断已统一收敛到 AIClient.chat_once（覆盖主动聊天等所有路径）
         logger.info("policy_pass group=%s user=%s", group_id, user_id, extra={"event": "policy_pass"})
         reply, memory_update, denied = await self.guarded_chat(
