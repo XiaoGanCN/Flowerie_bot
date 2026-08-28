@@ -44,8 +44,10 @@ pip install -r requirements.txt
 ## 步骤四：运行项目
 
 ```bash
-cd ~/bot #请替换为你的实际项目路径
-python main.py
+cd Flowerie_bot          # 进入项目目录（若克隆到其他路径请相应调整）
+cp .env_example .env     # 复制示例配置生成 .env
+# 然后编辑 .env，填入 DEEPSEEK_API_KEY（DeepSeek 密钥）与 BOT_QQ（机器人 QQ 号）
+python main.py           # 启动机器人
 ```
 
 ---
