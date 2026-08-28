@@ -1,4 +1,5 @@
 """Web UI 与 Config Service 测试（第四轮）：认证/脱敏/持久化/热更新/端口校验。"""
+import json as _json
 import tempfile
 
 import pytest
@@ -133,10 +134,23 @@ def webapp(cs):
     server._tokens.clear()
 
 
+async def _resp_data(resp):
+    """兼容本地桩（_body 为 bytes JSON）与真 aiohttp（web.Response.body 为 bytes）。"""
+    body = getattr(resp, "body", None)
+    if body is None:
+        body = getattr(resp, "_body", None)
+    if body is None:
+        return await resp.json()
+    if isinstance(body, (dict, list)):
+        return body
+    if isinstance(body, bytes):
+        return _json.loads(body.decode())
+    return _json.loads(body)
+
+
 async def _login(server):
     resp = await server._handle_login(FakeRequest(body={"username": "admin", "password": "secret123"}))
-    data = await resp.json()
-    return data["token"]
+    return (await _resp_data(resp))["token"]
 
 
 async def test_login_and_unauthorized(webapp):
@@ -147,7 +161,7 @@ async def test_login_and_unauthorized(webapp):
     assert resp.status == 401
     resp = await server._handle_login(FakeRequest(body={"username": "admin", "password": "secret123"}))
     assert resp.status == 200
-    assert "token" in await resp.json()
+    assert "token" in await _resp_data(resp)
 
 
 async def test_config_read_with_auth(webapp):
@@ -155,7 +169,7 @@ async def test_config_read_with_auth(webapp):
     token = await _login(server)
     resp = await server._handle_get_config(FakeRequest(headers={"Authorization": f"Bearer {token}"}))
     assert resp.status == 200
-    keys = [c["key"] for c in (await resp.json())["configs"]]
+    keys = [c["key"] for c in (await _resp_data(resp))["configs"]]
     assert "DEEPSEEK_API_KEY" in keys
     assert "MAX_REPLY_LENGTH" in keys
 
@@ -166,7 +180,7 @@ async def test_config_update_via_api(webapp):
     resp = await server._handle_update_config(
         FakeRequest(headers={"Authorization": f"Bearer {token}"}, body={"key": "MAX_REPLY_LENGTH", "value": "55"}))
     assert resp.status == 200
-    assert (await resp.json())["ok"] is True
+    assert (await _resp_data(resp))["ok"] is True
     assert server.config_service.config.MAX_REPLY_LENGTH == 55  # 热更新
 
 
