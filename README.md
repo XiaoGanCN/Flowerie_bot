@@ -122,7 +122,7 @@ OneBot WebSocket connected
 
 ## MCP
 
-默认关闭。配置 `MCP_ENABLED=true` + `MCP_SERVER_URL`（或插件式多 server：`MCP_SERVERS` JSON，可自行添加任意数量的 MCP 服务，支持本地/内网地址）后，模型可调用白名单内的工具获取实时信息。详见 [docs/mcp.md](docs/mcp.md)。
+默认关闭。配置 MCP_ENABLED=true + MCP_SERVER_URL（或插件式多 server：MCP_SERVERS JSON，可自行添加任意数量的 MCP 服务，支持本地/内网地址）后，模型可调用白名单内的工具获取实时信息。详见 [docs/mcp.md](docs/mcp.md)。
 
 ## 开发
 
