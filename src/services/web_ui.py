@@ -261,13 +261,23 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
   <div class="topbar">
     <h1 id="pageTitle">总览</h1>
     <div style="display:flex;gap:8px;align-items:center">
-      <span class="badge" id="uiVer">UI v3</span>
+      <span class="badge" id="uiVer">UI v4</span>
       <span class="badge offline" id="wsBadge">未连接</span>
       <button class="ghost" onclick="logout()">退出</button>
     </div>
   </div>
-  <div id="loginWrap"></div>
-  <div id="app" class="hidden">
+  <div id="loginPanel" class="hidden" style="max-width:720px;margin-bottom:16px">
+    <div class="set-item">
+      <div class="set-row">
+        <div class="set-info"><div class="name">登录管理后台</div><div class="desc">账号/密码在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD），无注册功能 · UI v4</div></div>
+        <input class="set-input" id="u" placeholder="用户名" style="max-width:150px;flex:none">
+        <input class="set-input" id="p" type="password" placeholder="密码" style="max-width:150px;flex:none">
+        <button onclick="login()">登录</button>
+        <span class="msg err" id="loginMsg"></span>
+      </div>
+    </div>
+  </div>
+  <div id="app">
     <div class="page active" id="page-overview"></div>
     <div class="page" id="page-ai"></div>
     <div class="page" id="page-bot"></div>
@@ -291,8 +301,8 @@ h2.sec{font-size:15px;margin:18px 0 10px;color:var(--dim)}
   </div>
 </div>
 <script>
-// token 仅保存在内存（不写 localStorage）：每次打开页面都需要重新登录，
-// 服务端重启后 token 失效也会自动回到登录页，不会有"没要密码"的困惑
+// token 仅保存在内存（不写 localStorage）：每次打开页面都需要重新登录；
+// 登录条内嵌在配置页顶部，不再使用独立弹窗/登录页
 let token = null;
 const CATS = {ai:"AI 设置",bot:"Bot 设置",memory:"记忆",sticker:"表情包",mcp:"MCP",logging:"日志设置",policy:"预算与策略",advanced:"高级（需重启）"};
 const PAGES = {ai:"AI",bot:"Bot",memory:"Memory",sticker:"Sticker",mcp:"MCP",policy:"Policy",logging:"Logging",advanced:"Advanced"};
@@ -301,22 +311,31 @@ async function api(url, method, body){
   if (token) opt.headers["Authorization"] = "Bearer " + token;
   if (body) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const r = await fetch(url, opt);
-  // token 过期/失效：清掉并回到登录页（否则所有设置页会是空的"点不动"）
-  if (r.status === 401 && token) { token = null; showLogin(); }
+  // token 过期/失效：清掉并回到登录态（顶部登录条重新出现）
+  if (r.status === 401 && token) { token = null; renderAuthState(); }
   try { return {status:r.status, data:await r.json()}; } catch(e) { return {status:r.status, data:{}}; }
 }
 async function login(){
   const r = await api("/api/login", "POST", {username:u.value, password:p.value});
-  if (r.data.token){ token = r.data.token; boot(); }
+  if (r.data.token){ token = r.data.token; renderAuthState(); }
   else loginMsg.textContent = r.data.error || "登录失败";
 }
-function logout(){ token = null; location.reload(); }
-async function boot(){
-  if (!token) return;
-  document.getElementById("loginWrap").innerHTML = "";
-  document.getElementById("app").classList.remove("hidden");
-  loadStatus(); loadConfigs(); loadLogs();
-  setInterval(loadStatus, 5000);
+function logout(){ token = null; renderAuthState(); }
+// 登录态渲染：未登录时显示内嵌登录条，设置页提示先登录；登录后加载配置
+function renderAuthState(){
+  const panel = document.getElementById("loginPanel");
+  if (!panel) return;
+  if (token) {
+    panel.classList.add("hidden");
+    loadStatus(); loadConfigs(); loadLogs();
+  } else {
+    panel.classList.remove("hidden");
+    ["overview","ai","bot","memory","sticker","mcp","policy","advanced"].forEach(p => {
+      const el = document.getElementById("page-" + p);
+      if (el) el.innerHTML = `<div class="card"><span class="lbl">请先在上方登录后查看和修改配置</span></div>`;
+    });
+    document.getElementById("pageTitle").textContent = "总览";
+  }
 }
 async function loadStatus(){
   const r = await api("/api/status", "GET");
@@ -382,19 +401,6 @@ async function loadLogs(){
   }
 }
 function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;"); }
-function showLogin(){
-  document.getElementById("app").classList.add("hidden");
-  document.getElementById("loginWrap").innerHTML = `
-    <div id="login">
-      <h2>花璃 · 管理后台</h2>
-      <input id="u" placeholder="用户名">
-      <input id="p" type="password" placeholder="密码">
-      <button style="width:100%" onclick="login()">登录</button>
-      <div class="msg err" id="loginMsg"></div>
-      <div class="lbl" style="text-align:center;margin-top:12px">本后台无注册功能，账号/密码请在项目 .env 中配置（WEB_UI_USERNAME / WEB_UI_PASSWORD）</div>
-      <div class="lbl" style="text-align:center;margin-top:6px;font-size:11px">UI v3 · 无登录框=旧版页面，请在 Termux 执行 git pull 并重启</div>
-    </div>`;
-}
 // 导航
 document.querySelectorAll(".nav-item").forEach(el => el.onclick = () => {
   document.querySelectorAll(".nav-item").forEach(x => x.classList.remove("active"));
@@ -405,9 +411,9 @@ document.querySelectorAll(".nav-item").forEach(el => el.onclick = () => {
   if (el.dataset.page === "logging") loadLogs();
   if (el.dataset.page === "overview") loadStatus();
 });
-// 登录页
-showLogin();
-boot();
+// 启动
+renderAuthState();
+setInterval(loadStatus, 5000);
 </script>
 </body>
 </html>
