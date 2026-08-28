@@ -260,7 +260,7 @@ class MessageRouter:
         if silent_memory_only and not self._memory_disabled(group_id):
             claim = validate_memory_content(clean_text[:100])
             if claim is None:
-                logger.warning(f"强制记忆被代码层校验拒绝（疑似注入）: {clean_text[:60]}")
+                logger.warning("memory_inject_rejected user=%s group=%s len=%d", user_id, group_id, len(clean_text), extra={"event": "memory_inject_rejected"})
                 return
             await self.memory_manager.append_memory_text(
                 user_id, group_id, claim,
@@ -334,7 +334,7 @@ class MessageRouter:
                         source_message_id=msg_id,
                         confidence="model",
                     )
-                    logger.info(f"Memory updated for user {target_uid} in group {group_id}: {mem_content}")
+                    logger.info("memory_updated user=%s group=%s len=%d", target_uid, group_id, len(mem_content or ""), extra={"event": "memory_updated"})
 
         # 兜底：guarded_chat 已内部重试过（每次重试过预算），仍空则给个兜底回复
         if is_mentioned and (not reply or not reply.strip()):
@@ -371,7 +371,7 @@ class MessageRouter:
                 self.policy_engine.record_bot_reply(group_id)
                 self.policy_engine.add_context(group_id, 0, reply, is_bot=True)
                 self.policy_engine.add_recent_reply(group_id, reply)
-                logger.info(f"Reply sent: {reply[:30]}...")
+                logger.info("reply_sent group=%s len=%d", group_id, len(reply or ""), extra={"event": "reply_sent"})
             else:
                 logger.error("Reply send failed")
 
@@ -689,7 +689,7 @@ class MessageRouter:
                 self.policy_engine.record_bot_reply(group_id)
                 self.policy_engine.add_context(group_id, 0, reply, is_bot=True)
                 self.policy_engine.add_recent_reply(group_id, reply)
-                logger.info(f"Active chat sent: {reply[:30]}...")
+                logger.info("active_chat_sent group=%s len=%d", group_id, len(reply or ""), extra={"event": "active_chat_sent"})
                 break
             else:
                 break

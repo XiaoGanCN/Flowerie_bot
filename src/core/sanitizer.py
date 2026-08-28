@@ -1,6 +1,7 @@
 import ipaddress
+import json
 import re
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 
 def check_image_url(url: str, allowed_hosts: Optional[list] = None) -> Tuple[bool, str]:
@@ -164,3 +165,58 @@ def validate_memory_content(text: str) -> Optional[str]:
         if kw in t:
             return None
     return t
+
+
+def validate_mcp_resolved_ips(host: str, ips: list, allowed_hosts: Optional[list] = None) -> Tuple[bool, str]:
+    """MCP DNS 解析结果策略校验（SSRF 第二道闸，纯函数便于测试）。
+
+    在 URL 字面量校验之后，连接前解析主机名得到的**每一个** IP 都必须通过：
+    - 主机在 MCP_ALLOWED_HOSTS 显式白名单内 → 放行（管理员明确建立的信任边界）
+    - 否则任何解析结果落在 回环/私网/链路本地/组播/保留/未指定 一律拒绝
+      （防 DNS rebinding：公网域名解析出 127.0.0.1 或 192.168.x.x 时拦截）
+    - IPv4/IPv6 统一处理；IPv4-mapped IPv6（::ffff:127.0.0.1）按其映射的 IPv4 判断
+    返回 (是否允许, 拒绝原因)。原因 '' 表示允许。
+    """
+    if not ips:
+        return False, "dns_empty"
+    allowed = set((h or "").strip().lower() for h in (allowed_hosts or []))
+    if host in allowed:
+        return True, ""
+    for raw in ips:
+        try:
+            ip = ipaddress.ip_address(str(raw).split("%")[0])
+        except ValueError:
+            continue  # 解析不出有效 IP 的条目跳过（getaddrinfo 已保证是 IP）
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped  # ::ffff:127.0.0.1 → 127.0.0.1，按 IPv4 判断
+        if ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_reserved \
+                or ip.is_multicast or ip.is_unspecified:
+            return False, f"dns_ip_rejected:{ip}"
+    return True, ""
+
+
+def sanitize_tool_metadata(name: str, description: str, input_schema: Any,
+                           max_name: int = 64, max_desc: int = 500,
+                           max_schema_chars: int = 4000) -> Tuple[str, str, Any]:
+    """MCP tool 元数据按**不可信外部输入**处理（防 tool description 注入）。
+
+    - name：仅保留安全字符，超长截断（allowlist 在调用层仍由 Python 强制）
+    - description：清洗控制字符/注入句式（sanitize_untrusted_text）+ 截断
+    - inputSchema：JSON 序列化大小上限，超限降级为空 object schema；
+      结构异常（非 dict）也降级为空 object schema
+    返回 (name, description, input_schema)。
+    """
+    import re as _re
+    safe_name = _re.sub(r"[^A-Za-z0-9_.\-]", "_", str(name or ""))[:max_name]
+    desc = str(description or "")[:max_desc * 2]
+    desc, _changed = sanitize_untrusted_text(desc)
+    desc = desc[:max_desc]
+    schema = input_schema if isinstance(input_schema, dict) else {"type": "object", "properties": {}}
+    try:
+        schema_text = json.dumps(schema, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):
+        schema = {"type": "object", "properties": {}}
+        schema_text = "{}"
+    if len(schema_text) > max_schema_chars:
+        schema = {"type": "object", "properties": {}}
+    return safe_name, desc, schema

@@ -18,7 +18,7 @@ from typing import Dict, Optional, Tuple
 from aiohttp import web
 
 from src.config import Settings
-from src.services.config_service import ConfigService
+from src.services.config_service import ConfigService, verify_password
 from src.utils.logging_setup import get_logger, get_recent_logs
 from src.utils.metrics import registry
 
@@ -76,6 +76,20 @@ class WebUIServer:
         pwd = repo_pass if repo_pass is not None else str(getattr(self.config, "WEB_UI_PASSWORD", "") or "")
         return user, pwd
 
+    def _verify_admin(self, username: str, password: str) -> bool:
+        """安全校验管理员凭据：scrypt 哈希校验或旧明文兼容比较（恒定时间），
+        登录成功且为旧明文时自动迁移为哈希（DB 不再保留明文）。"""
+        eff_user, eff_pass = self._effective_credentials()
+        if username != eff_user:
+            return False
+        if not verify_password(password, eff_pass):
+            return False
+        try:
+            self.config_service.migrate_plaintext_password(eff_user, password)
+        except Exception:  # noqa: BLE001 - 迁移失败不阻断登录
+            pass
+        return True
+
     async def _handle_login(self, request: web.Request) -> web.Response:
         ip = request.remote or "unknown"
         if self._login_blocked(ip):
@@ -86,8 +100,7 @@ class WebUIServer:
             return web.json_response({"error": "请求格式错误"}, status=400)
         username = str(body.get("username", ""))
         password = str(body.get("password", ""))
-        eff_user, eff_pass = self._effective_credentials()
-        if (username == eff_user and secrets.compare_digest(password, eff_pass)):
+        if self._verify_admin(username, password):
             token = self._issue_token()
             logger.info("web_ui login success", extra={"event": "config_reload"})
             return web.json_response({"token": token, "expires_in": getattr(self.config, "WEB_UI_TOKEN_TTL_SECONDS", 3600)})
@@ -113,7 +126,7 @@ class WebUIServer:
         password = str(body.get("password", ""))
         admin_password = str(body.get("admin_password", ""))
         eff_user, eff_pass = self._effective_credentials()
-        if eff_pass and not secrets.compare_digest(admin_password, eff_pass):
+        if eff_pass and not self._verify_admin(eff_user, admin_password):
             self._record_login_fail(ip)
             return web.json_response({"error": "当前管理员密码不正确，无法注册"}, status=403)
         ok, message = self.config_service.register_user(username, password)
@@ -218,8 +231,7 @@ class WebUIServer:
         form = await request.post()
         username = str(form.get("username", ""))
         password = str(form.get("password", ""))
-        eff_user, eff_pass = self._effective_credentials()
-        if username == eff_user and secrets.compare_digest(password, eff_pass):
+        if self._verify_admin(username, password):
             token = self._issue_token()
             resp = web.HTTPFound("/panel")
             resp.set_cookie("fb_token", token, httponly=True, samesite="Strict",
@@ -243,7 +255,7 @@ class WebUIServer:
         password = str(form.get("password", ""))
         admin_password = str(form.get("admin_password", ""))
         eff_user, eff_pass = self._effective_credentials()
-        if eff_pass and not secrets.compare_digest(admin_password, eff_pass):
+        if eff_pass and not self._verify_admin(eff_user, admin_password):
             self._record_login_fail(ip)
             return web.Response(text=self._panel_register_page("当前管理员密码不正确"),
                                 content_type="text/html", charset="utf-8")

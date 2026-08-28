@@ -16,7 +16,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.config import Settings, parse_mcp_servers
-from src.core.sanitizer import sanitize_untrusted_text
+from src.core.sanitizer import sanitize_tool_metadata, sanitize_untrusted_text
 from src.services.mcp_client import McpClient, McpError
 from src.utils.circuit_breaker import CircuitBreaker
 from src.utils.logging_setup import get_logger
@@ -32,6 +32,7 @@ _M_REJECT = registry.counter("mcp_tool_rejections_total", "MCP 工具拒绝数",
 # MCP server 输出是不可信外部输入：结构化/长度/内容三重边界（最小加固，不过度过滤）
 _MAX_RESULT_ITEMS = 10      # content 条目数上限
 _MAX_RESULT_CHARS = 2000    # 单条工具结果总长度上限（字符）
+_MAX_TOOLS_PER_SERVER = 50  # 单个 server 暴露的工具数量上限（防元数据洪泛）
 
 
 def _sanitize_tool_result(result: Any) -> str:
@@ -158,25 +159,37 @@ class McpToolManager:
             except (McpError, Exception) as e:  # noqa: BLE001 - 工具同步失败不影响聊天
                 logger.warning("mcp tools sync failed server=%s err=%s", s.name, e)
                 continue
-            s.schemas = {t.get("name", ""): t for t in tools if t.get("name")}
+            # 工具元数据为不可信外部输入：数量上限（防元数据洪泛）
+            limited = [t for t in tools if t.get("name")][: _MAX_TOOLS_PER_SERVER]
+            s.schemas = {t.get("name", ""): t for t in limited}
             for name in s.schemas:
                 self._tool_owner[name] = s  # 同名工具：后同步的 server 覆盖
-            merged.extend(tools)
+            merged.extend(limited)
         return merged
 
     def build_tools_payload(self) -> List[Dict[str, Any]]:
-        """构造发送给模型的 OpenAI 风格 tools 参数（各 server 仅注入其 allowlist 内工具）。"""
+        """构造发送给模型的 OpenAI 风格 tools 参数（各 server 仅注入其 allowlist 内工具）。
+
+        MCP server 返回的 name/description/inputSchema 均视为**不可信外部输入**：
+        清洗控制字符/注入句式、截断长度、schema 大小上限（防 tool description 注入
+        改写系统策略）。allowlist 始终由 Python 强制，不交给 LLM。
+        """
         tools = []
         for s in self._servers:
-            for name, schema in s.schemas.items():
-                if name not in s.allowlist:
+            for raw_name, schema in s.schemas.items():
+                if raw_name not in s.allowlist:
                     continue
+                safe_name, safe_desc, safe_schema = sanitize_tool_metadata(
+                    raw_name,
+                    schema.get("description", ""),
+                    schema.get("inputSchema"),
+                )
                 tools.append({
                     "type": "function",
                     "function": {
-                        "name": name,
-                        "description": schema.get("description", ""),
-                        "parameters": schema.get("inputSchema", {"type": "object", "properties": {}}),
+                        "name": safe_name,
+                        "description": safe_desc,
+                        "parameters": safe_schema,
                     },
                 })
         return tools

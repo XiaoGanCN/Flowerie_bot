@@ -115,7 +115,7 @@ class AIClient:
         }
 
         try:
-            logger.debug(f"API call: user={user_id}, group={group_id}, msg={user_message[:30]}...")
+            logger.debug("api_call_started user=%s group=%s msg_len=%d", user_id, group_id, len(user_message))
             r = await self.client.post(
                 self.config.DEEPSEEK_API_URL,
                 headers=headers,
@@ -430,9 +430,9 @@ class AIClient:
         reply_content = "\n".join(clean_lines).strip()
         if len(reply_content) > self.config.MAX_REPLY_LENGTH:
             reply_content = reply_content[:self.config.MAX_REPLY_LENGTH] + "..."
-        logger.info("API reply: %s", reply_content)
+        logger.debug("api_reply len=%d", len(reply_content))
         if memory_update:
-            logger.info("Memory update detected: %s", memory_update)
+            logger.debug("memory_update_detected len=%d", len(memory_update))
         return reply_content, memory_update
 
     async def chat(self, user_message: str, context: str, user_id: Optional[int] = None,

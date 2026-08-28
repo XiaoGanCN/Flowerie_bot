@@ -15,6 +15,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.core.sanitizer import validate_memory_content
 from src.repositories.base import MemoryNote, MemoryRepository
 from src.repositories.sqlite_repository import SQLiteMemoryRepository
 from src.utils.logging_setup import get_logger
@@ -257,6 +258,14 @@ class MemoryManager:
         if not text or not text.strip():
             return
         text = text.strip()
+        # 代码层闸门（纵深防御）：写入路径同样校验，恶意/越界记忆不落库。
+        # 正常路径（路由层）已校验，这里兜底直接调用方/脏数据。
+        claim = validate_memory_content(text)
+        if claim is None:
+            logger.info("memory_append_rejected user=%s group=%s len=%d",
+                        user_id, group_id, len(text), extra={"event": "memory_append_rejected"})
+            return
+        text = claim
         notes = self.repository.list_notes(user_id, group_id)
 
         # 矛盾替换（治 misinformation）：新记忆是否定/退出、旧记忆是肯定/进行，且核心词重叠 → 旧被新顶掉。
@@ -268,7 +277,7 @@ class MemoryManager:
                 notes.pop(i)
                 break
         if replaced_old is not None:
-            logger.info("记忆矛盾替换: 旧=[%s] 新=[%s]", replaced_old, text)
+            logger.info("memory_contradiction_replaced user=%s group=%s", user_id, group_id, extra={"event": "memory_contradiction_replaced"})
             self._audit("REPLACE", user_id, group_id, f"旧={replaced_old} 新={text}")
 
         # 高相似度去重（完全相同/互为子串/相似度≥0.85/字符包含率≥80% 都跳过）

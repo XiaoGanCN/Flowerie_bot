@@ -8,8 +8,13 @@
 - Secret 保护：敏感项只返回脱敏视图（sk-****abcd），修改时输入新值才覆盖
 - 热更新：修改后立即写入 Settings 实例（运行中的 manager 每次读 config 属性）
 - 需要重启项：明确标记，UI 提示"已保存，需要重启生效"
+- 管理密码：**禁止明文落库**——register_user 只保存 scrypt 哈希；登录/注册
+  校验统一走 verify_password（兼容旧明文并自动迁移为哈希）
 """
+import hashlib
 import json
+import os
+import secrets as _secrets
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.config import Settings
@@ -17,6 +22,45 @@ from src.repositories.settings_repository import SettingsRepository
 from src.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)
+
+# scrypt 参数（stdlib hashlib，零新依赖；N 需为 2 的幂）
+_SCRYPT_N = 2 ** 14
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_SCRYPT_DKLEN = 32
+_PASSWORD_PREFIX = "scrypt$"
+
+
+def hash_password(password: str) -> str:
+    """口令哈希（scrypt + 随机盐），返回自描述格式 `scrypt$N$r$p$salt_hex$hash_hex`。
+
+    绝不返回/记录明文。参数内嵌便于未来升级 KDF 参数。
+    """
+    salt = os.urandom(16)
+    dk = hashlib.scrypt(password.encode("utf-8"), salt=salt,
+                        n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, dklen=_SCRYPT_DKLEN)
+    return f"{_PASSWORD_PREFIX}{_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${salt.hex()}${dk.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    """安全校验口令：stored 为 scrypt 哈希时用哈希校验；为旧版明文（历史 DB 或 .env）
+    时用恒定时间比较。任何解析失败按不通过处理，不抛异常。"""
+    if not stored:
+        return False
+    if stored.startswith(_PASSWORD_PREFIX):
+        try:
+            _prefix, n, r, p, salt_hex, hash_hex = stored.split("$", 5)
+            dk = hashlib.scrypt(password.encode("utf-8"), salt=bytes.fromhex(salt_hex),
+                                n=int(n), r=int(r), p=int(p), dklen=_SCRYPT_DKLEN)
+            return _secrets.compare_digest(dk.hex(), hash_hex)
+        except (ValueError, TypeError):
+            return False
+    # 旧版明文（兼容迁移路径）
+    return _secrets.compare_digest(password, stored)
+
+
+def is_hashed_password(stored: str) -> bool:
+    return bool(stored) and stored.startswith(_PASSWORD_PREFIX)
 
 
 class ConfigService:
@@ -134,21 +178,45 @@ class ConfigService:
 
         之后登录优先使用这里保存的账号；.env 的 WEB_UI_USERNAME / WEB_UI_PASSWORD
         仅作未注册时的兜底。账号信息存入项目数据目录（data/settings.db），不依赖 .env。
+        安全：密码只存 scrypt 哈希，**绝不写明文**，也不写入任何日志。
         """
         username = (username or "").strip()
         if not (3 <= len(username) <= 32):
             return False, "用户名长度需 3~32 字符"
         if len(password or "") < 6:
             return False, "密码至少 6 位"
+        password_hash = hash_password(password)
         self.repository.set_config("WEB_UI_USERNAME", username)
-        self.repository.set_config("WEB_UI_PASSWORD", password)
+        self.repository.set_config("WEB_UI_PASSWORD", password_hash)
         try:
             setattr(self.config, "WEB_UI_USERNAME", username)
-            setattr(self.config, "WEB_UI_PASSWORD", password)
+            setattr(self.config, "WEB_UI_PASSWORD", password_hash)
         except Exception:  # noqa: BLE001
             pass
         logger.info("web_ui account registered user=%s", username, extra={"event": "config_reload"})
         return True, "注册成功，请用新账号登录"
+
+    def migrate_plaintext_password(self, username: str, plaintext: str) -> bool:
+        """把 settings.db 中的旧版**明文**密码迁移为 scrypt 哈希（登录成功后调用）。
+
+        迁移前提：调用方已用 verify_password 验证通过。迁移成功后 DB 不再保留明文；
+        .env 的明文仍保留（文件本身无法改写，但此后登录走 DB 哈希）。
+        返回是否发生了写入。
+        """
+        stored = self.repository.get_config("WEB_UI_PASSWORD")
+        if stored is not None and not is_hashed_password(stored):
+            password_hash = hash_password(plaintext)
+            self.repository.set_config("WEB_UI_USERNAME", username)
+            self.repository.set_config("WEB_UI_PASSWORD", password_hash)
+            try:
+                setattr(self.config, "WEB_UI_USERNAME", username)
+                setattr(self.config, "WEB_UI_PASSWORD", password_hash)
+            except Exception:  # noqa: BLE001
+                pass
+            logger.info("web_ui password migrated to hash user=%s", username,
+                        extra={"event": "config_reload"})
+            return True
+        return False
 
     # ---------- 修改 ----------
     def update(self, key: str, raw_value: str) -> Tuple[bool, str]:
