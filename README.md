@@ -48,7 +48,7 @@ cp .env.example .env        # 然后编辑 .env
 ```
 
 > 📱 **安卓 / Termux 用户**  
-> 若在手机上（Termux）安装，请勿使用上述 `pip install` 直接装依赖——安卓环境需**绕过 `pydantic` 编译**并依赖预编译库，直接安装会长时间源码编译甚至失败。请务必查看专用安装文档：**[📱 安卓 (Termux) 专用安装](docs/install-termux.md)**。
+> 若在手机上（Termux）安装，请勿使用上述步骤直接装依赖——安卓环境需**绕过 `pydantic` 编译**并依赖预编译库，直接安装会长时间源码编译甚至失败。请务必查看专用安装文档：**[📱 安卓 (Termux) 专用安装](docs/install-termux.md)**。
 
 ### 配置（必填两项）
 
