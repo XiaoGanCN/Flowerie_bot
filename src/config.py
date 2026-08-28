@@ -1,7 +1,10 @@
+import re
 from typing import List, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from src.core.sanitizer import validate_mcp_server_url
 
 
 class Settings(BaseSettings):
@@ -110,7 +113,6 @@ class Settings(BaseSettings):
     STICKER_DB_PATH: str = "./data/stickers.db"
     STICKER_ENABLED: bool = False
     STICKER_COOLDOWN: int = 60          # 同一群两次表情包的最小间隔（秒）
-    MAX_STICKERS_PER_MESSAGE: int = 1   # 每次回复最多附带表情包数
     STICKER_MAX_LIST: int = 30          # 提供给模型的可用表情包描述上限（防 token 膨胀）
     # MCP（外部工具）：默认关闭，管理员主动配置后启用；仅 allowlist 内的工具可调用
     MCP_ENABLED: bool = False
@@ -228,3 +230,19 @@ def validate_config(config: Settings) -> None:
                 "Web UI 的本地回环端口不能与 NapCat 反向 WS 端口一致，请修改 WEB_UI_PORT")
         if not getattr(config, "WEB_UI_PASSWORD", ""):
             raise ValueError("WEB_UI_ENABLED=true 时必须设置 WEB_UI_PASSWORD（不允许无认证裸奔）")
+    # MCP（P3-3）：MCP_ENABLED=true 时必须完整配置，fail-fast，绝不静默降级
+    if getattr(config, "MCP_ENABLED", False):
+        mcp_url = (getattr(config, "MCP_SERVER_URL", "") or "").strip()
+        if not mcp_url:
+            raise ValueError("MCP_ENABLED=true 时必须配置 MCP_SERVER_URL（不允许静默降级为纯聊天）")
+        ok, reason = validate_mcp_server_url(mcp_url)
+        if not ok:
+            raise ValueError(f"MCP_SERVER_URL 不合法: {reason}")
+        if int(getattr(config, "MCP_TIMEOUT", 15)) < 1:
+            raise ValueError(f"MCP_TIMEOUT 必须 >= 1（秒），当前: {getattr(config, 'MCP_TIMEOUT', 15)}")
+        if int(getattr(config, "MCP_MAX_TOOL_CALLS", 5)) < 0:
+            raise ValueError(f"MCP_MAX_TOOL_CALLS 必须 >= 0，当前: {getattr(config, 'MCP_MAX_TOOL_CALLS', 5)}")
+        allowed = (getattr(config, "MCP_ALLOWED_TOOLS", "") or "").strip()
+        for token in (t.strip() for t in allowed.split(",") if t.strip()):
+            if not re.fullmatch(r"[A-Za-z0-9_.\-]+", token):
+                raise ValueError(f"MCP_ALLOWED_TOOLS 含非法工具名: {token!r}")

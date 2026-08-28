@@ -431,6 +431,10 @@ class MessageRouter:
         _M_AI_REQ.inc()  # logical request 计数
         reply, memory_update = None, None
         retryable_failure = False  # 是否发生了可重试的瞬时失败（用于熔断计数）
+        # P2-1：MCP 工具额度是一次 logical request 的硬上限——在重试循环前创建，
+        # 跨 attempt 复用；retry 不会重新获得新额度（tool_quota.used 持续累加）。
+        mcp_max_calls = max(0, int(getattr(self.config, "MCP_MAX_TOOL_CALLS", 5)))
+        tool_quota: Optional[dict] = None
         for attempt in range(attempts):
             # 用户聊天限速只在首次尝试检查（重试是同一逻辑调用的延续，
             # 若每次都查，会被自己刚更新的 user_ai_last_call 拦掉）
@@ -441,15 +445,19 @@ class MessageRouter:
             _M_AI_ATTEMPTS.inc()  # 实际 HTTP attempt 计数
             if self.prompt_manager is not None and group_id:
                 kwargs = {**kwargs, "custom_prompt": self.prompt_manager.get_effective_prompt(group_id)}
-            # MCP 工具：仅当启用且存在 allowlist 工具时注入（模型自主判断是否需要工具）
-            if self.tool_manager is not None and self.tool_manager.is_enabled():
+            # MCP 工具：仅当启用、存在 allowlist 工具且额度 > 0 时注入
+            # （模型自主判断是否需要工具；MCP_MAX_TOOL_CALLS=0 视为禁用工具）
+            if self.tool_manager is not None and self.tool_manager.is_enabled() and mcp_max_calls > 0:
                 tool_payload = self.tool_manager.build_tools_payload()
                 if tool_payload:
+                    if tool_quota is None:
+                        tool_quota = {"max": mcp_max_calls, "used": 0}
                     kwargs = {
                         **kwargs,
                         "tools": tool_payload,
                         "tool_caller": self.tool_manager.call_tool,
-                        "max_tool_calls": max(1, int(getattr(self.config, "MCP_MAX_TOOL_CALLS", 5))),
+                        "max_tool_calls": mcp_max_calls,
+                        "tool_quota": tool_quota,
                     }
             reply, memory_update = await self.ai_client.chat_once(**kwargs)
             if reply and reply.strip():

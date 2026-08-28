@@ -70,6 +70,7 @@ class AIClient:
         tools: Optional[list] = None,
         tool_caller=None,
         max_tool_calls: int = 5,
+        tool_quota: Optional[dict] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """单次真实 API 尝试，返回 (reply_text, memory_update)。内部不重试。
 
@@ -78,11 +79,14 @@ class AIClient:
         """
         self._api_backoff = 0.0  # 429 时置为更长退避，供准入层重试等待
         self._retryable = True  # 本次失败是否值得重试（4xx 业务错误置 False）
-        # 工具调用（MCP）：有 tools 且提供 tool_caller 时走多轮工具循环
-        if tools and tool_caller is not None:
+        # 工具调用（MCP）：有 tools、提供 tool_caller 且额度 > 0 时走多轮工具循环。
+        # max_tool_calls 是"一次 logical request 的硬上限"：tool_quota 由准入层在
+        # 逻辑请求开始时创建并跨 retry 复用，重试不会重新获得新额度。
+        if tools and tool_caller is not None and int(max_tool_calls) > 0:
+            quota = tool_quota if tool_quota is not None else {"max": int(max_tool_calls), "used": 0}
             return await self._chat_with_tools(
                 user_message, context, user_id, group_id, is_mentioned,
-                custom_prompt, tools, tool_caller, max(max_tool_calls, 1),
+                custom_prompt, tools, tool_caller, quota,
             )
         if not context or len(context.strip()) < 5:
             context = "（暂无历史聊天记录）"
@@ -165,13 +169,17 @@ class AIClient:
         custom_prompt: str,
         tools: list,
         tool_caller,
-        max_tool_calls: int,
+        tool_quota: dict,
     ) -> Tuple[Optional[str], Optional[str]]:
-        """多轮工具调用（MCP）：模型判断 → 工具执行 → 再请求，直到无工具调用或达上限。
+        """多轮工具调用（MCP）：模型判断 → 工具执行 → 再请求，直到无工具调用或额度用尽。
 
-        - 两段式：工具执行最多 max_tool_calls 次；之后必发一轮收尾请求让模型
-          基于已有工具结果回答——绝不无限循环，也不在超限后吞掉回答机会
-        - 工具结果作为 tool 消息回填，最终回复仍走 _parse_reply_content
+        额度语义（P2-1 修复）：
+        - tool_quota = {"max": MCP_MAX_TOOL_CALLS, "used": N} 是"一次 logical AI
+          request"的硬上限，按**实际工具执行次数**计数（不再按轮）。
+        - 同一轮模型可能返回多个 tool_calls：只执行到剩余额度为止，超出部分
+          追加"已跳过"的 tool 占位消息（保持对话格式合法），绝不突破上限。
+        - 额度由准入层在逻辑请求开始时创建并跨 retry 复用：重试不会重置额度。
+        - 额度用尽后仍必发一轮收尾请求让模型基于已有结果回答，不吞回答机会。
         """
         if not context or len(context.strip()) < 5:
             context = "（暂无历史聊天记录）"
@@ -183,15 +191,17 @@ class AIClient:
         ]
         headers = {"Authorization": f"Bearer {self.config.DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
 
-        async def _request() -> dict:
+        async def _request(include_tools: bool = True) -> dict:
             payload = {
                 "model": self.config.DEEPSEEK_MODEL,
                 "messages": messages,
-                "tools": tools,
                 "temperature": 0.7,
                 "max_tokens": 1024,
                 "top_p": 0.9,
             }
+            # 收尾请求不带 tools：额度已尽，模型必须直接回答，不能再发起工具调用
+            if include_tools:
+                payload["tools"] = tools
             try:
                 r = await self.client.post(self.config.DEEPSEEK_API_URL, headers=headers, json=payload)
             except (httpx.HTTPError, httpx.TimeoutException, ConnectionError) as e:
@@ -210,9 +220,11 @@ class AIClient:
                 return {"error": True}
             return data["choices"][0].get("message") or {}
 
-        # 第一段：工具循环（最多 max_tool_calls 次工具执行）
-        tool_calls_used = 0
-        for _round in range(max_tool_calls):
+        max_tool_calls = int(tool_quota.get("max", 0))
+        if max_tool_calls <= 0:
+            return None, None
+        # 工具循环：按实际调用次数硬上限（P2-1）
+        while int(tool_quota.get("used", 0)) < max_tool_calls:
             msg = await _request()
             if msg.get("error"):
                 return None, None
@@ -220,22 +232,42 @@ class AIClient:
             if not tool_calls:
                 return self._parse_reply_content(msg.get("content") or "")
             messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
+            quota_exhausted = False
             for tc in tool_calls:
                 fn = tc.get("function") or {}
                 name = fn.get("name", "")
+                tc_id = tc.get("id", "")
+                if int(tool_quota.get("used", 0)) >= max_tool_calls:
+                    # 额度耗尽：不执行，追加占位 tool 消息保持对话格式合法
+                    logger.warning("mcp_tool_call_skipped tool=%s quota_exhausted", name,
+                                   extra={"event": "mcp_tool_call_skipped", "tool": name})
+                    messages.append({
+                        "role": "tool", "tool_call_id": tc_id,
+                        "content": "[工具调用已跳过：本轮工具调用次数已达上限]",
+                    })
+                    quota_exhausted = True
+                    continue
                 try:
                     args = json.loads(fn.get("arguments") or "{}")
                 except json.JSONDecodeError:
                     args = {}
-                tool_calls_used += 1
-                logger.info("mcp_call_started tool=%s", name, extra={"event": "mcp_call_started"})
+                tool_quota["used"] = int(tool_quota.get("used", 0)) + 1
+                logger.info(
+                    "mcp_call_started tool=%s used=%d/%d", name, tool_quota["used"], max_tool_calls,
+                    extra={"event": "mcp_call_started", "tool": name, "used": tool_quota["used"], "max": max_tool_calls},
+                )
                 result = await tool_caller(name, args)
-                logger.info("mcp_call_completed tool=%s", name, extra={"event": "mcp_call_completed"})
-                messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": result})
+                logger.info(
+                    "mcp_call_completed tool=%s used=%d/%d", name, tool_quota["used"], max_tool_calls,
+                    extra={"event": "mcp_call_completed", "tool": name, "used": tool_quota["used"], "max": max_tool_calls},
+                )
+                messages.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+            if quota_exhausted or int(tool_quota.get("used", 0)) >= max_tool_calls:
+                break
 
-        # 第二段：收尾请求（工具额度用尽，模型必须基于已有结果回答）
+        # 收尾请求（额度用尽：不带 tools，模型必须基于已有结果直接回答，绝不吞回答机会）
         logger.warning("mcp max tool calls reached (%d)", max_tool_calls)
-        msg = await _request()
+        msg = await _request(include_tools=False)
         if msg.get("error"):
             return None, None
         return self._parse_reply_content(msg.get("content") or "")

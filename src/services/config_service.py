@@ -48,7 +48,6 @@ class ConfigService:
         # Sticker
         "STICKER_ENABLED": ("Sticker", "bool", False, True, "表情包功能开关"),
         "STICKER_COOLDOWN": ("Sticker", "int", False, True, "表情包冷却（秒）"),
-        "MAX_STICKERS_PER_MESSAGE": ("Sticker", "int", False, True, "每次回复最多表情包数"),
         # MCP
         "MCP_ENABLED": ("MCP", "bool", False, True, "MCP 工具开关"),
         "MCP_SERVER_URL": ("MCP", "str", False, True, "MCP server 地址"),
@@ -96,6 +95,36 @@ class ConfigService:
             return override
         return getattr(self.config, key, None)
 
+    def apply_persisted(self) -> int:
+        """启动阶段：把 settings.db 的持久化覆盖合并进运行中的 Settings 实例。
+
+        优先级：Persistent Config > Environment > Code Default（P2-2 修复）。
+        - 只应用 SCHEMA 内且类型/范围校验通过的键；非法值跳过并记日志，
+          不阻止 Bot 启动（无效持久化配置不把 Bot 带入危险状态）。
+        - 敏感项（secret）按用户保存时的原值应用；显示层仍走 _mask 脱敏。
+        返回成功应用的键数。
+        """
+        applied = 0
+        for key, value in self.repository.list_configs():
+            if key not in self.SCHEMA:
+                logger.warning("config_persisted_unknown key=%s（跳过）", key)
+                continue
+            _cat, ctype, _secret, _hot, _desc = self.SCHEMA[key]
+            if self._validate(key, ctype, str(value)) is None:
+                logger.warning("config_persisted_invalid key=%s（跳过，使用 .env/默认值）", key)
+                continue
+            try:
+                setattr(self.config, key, self._coerce(ctype, value))
+                applied += 1
+            except Exception:  # noqa: BLE001
+                logger.exception("config_persisted_apply_failed key=%s", key)
+        if applied:
+            logger.info(
+                "config_persisted_applied count=%d", applied,
+                extra={"event": "config_persisted_applied", "count": applied},
+            )
+        return applied
+
     # ---------- 修改 ----------
     def update(self, key: str, raw_value: str) -> Tuple[bool, str]:
         """更新配置。返回 (是否成功, 提示信息)。校验失败返回 (False, 原因)。"""
@@ -119,6 +148,30 @@ class ConfigService:
             return True, "已保存，立即生效"
         return True, "已保存，需要重启生效"
 
+    # P3-4：轻量枚举/数值范围校验（复用 SCHEMA 类型，不引入复杂 schema 框架）
+    _ENUM_VALUES = {
+        "LOG_LEVEL": {"debug", "info", "warning", "error", "critical"},
+        "LOG_FORMAT": {"text", "json"},
+    }
+    _RANGES = {
+        "MAX_REPLY_LENGTH": (1, 1000),
+        "USER_COOLDOWN": (0, 86400),
+        "BOT_COOLDOWN": (0, 86400),
+        "MAX_CONSECUTIVE_REPLIES": (0, 100),
+        "AI_MAX_RETRIES": (0, 20),
+        "AI_CIRCUIT_BREAKER_FAILURES": (1, 1000),
+        "AI_CIRCUIT_BREAKER_PAUSE_SECONDS": (1, 86400),
+        "DAILY_AI_CALL_BUDGET": (0, 1000000000),
+        "GROUP_DAILY_AI_CALL_BUDGET": (0, 1000000000),
+        "USER_AI_CALL_MIN_INTERVAL": (0, 86400),
+        "MEMORY_TTL_DAYS": (0, 36500),
+        "MODEL_MEMORY_TTL_DAYS": (0, 36500),
+        "STICKER_COOLDOWN": (0, 86400),
+        "MCP_TIMEOUT": (1, 3600),
+        "MCP_MAX_TOOL_CALLS": (0, 1000),
+        "WS_PORT": (1, 65535),
+    }
+
     def _validate(self, key: str, ctype: str, raw: str) -> Optional[str]:
         raw = raw.strip()
         try:
@@ -126,13 +179,19 @@ class ConfigService:
                 v = int(raw)
                 if v < 0:
                     return None
-                if key in ("WEB_UI_PORT", "WS_PORT") and not (0 < v < 65536):
+                lo, hi = self._RANGES.get(key, (0, None))
+                if v < lo:
+                    return None
+                if hi is not None and v > hi:
                     return None
             elif ctype == "bool":
                 if raw.lower() not in ("true", "false", "1", "0"):
                     return None
             elif ctype == "secret":
                 if len(raw) < 6:
+                    return None
+            elif ctype == "str":
+                if key in self._ENUM_VALUES and raw.lower() not in self._ENUM_VALUES[key]:
                     return None
         except ValueError:
             return None

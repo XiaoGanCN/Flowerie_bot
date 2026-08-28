@@ -1,3 +1,4 @@
+import ipaddress
 import re
 from typing import Optional, Tuple
 
@@ -25,6 +26,58 @@ def check_image_url(url: str, allowed_hosts: Optional[list] = None) -> Tuple[boo
         # 覆盖整个 127.0.0.0/8 与 localhost / ::1
         loopback = host in ("localhost", "::1") or (host or "").startswith("127.")
         if not loopback and host not in allowed_hosts:
+            return False, f"host_rejected:{host}"
+    return True, ""
+
+
+def validate_mcp_server_url(url: str) -> Tuple[bool, str]:
+    """校验 MCP server URL（MCP 路径的 SSRF 防线，纯函数便于测试）。
+
+    与 check_image_url 不同：MCP server 是管理员配置的**外部**服务，
+    内网/回环/链路本地目标一律拒绝（MCP 不需要 NapCat 式的 loopback 信任边界）。
+
+    规则：
+    - 空 URL 拒绝
+    - 仅允许 http / https scheme
+    - 禁止 URL userinfo（user:pass@）
+    - 禁止回环（localhost、127.0.0.0/8、::1）、0.0.0.0、私网 IPv4/IPv6、
+      链路本地、组播、保留地址等字面量 IP 目标
+    - 主机名形态：拒绝 .local / .localhost 后缀（DNS rebinding 的常见目标命名域）；
+      其余主机名依赖 httpx 默认不跟随重定向（mcp_client 不设置 follow_redirects）
+      作为重定向边界——3xx 响应按错误处理，不会二次跳转到内网。
+    返回 (是否允许, 拒绝原因)。原因 '' 表示允许。
+    """
+    if not url or not url.strip():
+        return False, "empty"
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return False, "invalid_url"
+    scheme = (parts.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return False, f"scheme_rejected:{scheme or 'none'}"
+    if parts.username is not None or parts.password is not None:
+        return False, "userinfo_rejected"
+    host = (parts.hostname or "").lower()
+    if not host:
+        return False, "host_missing"
+    if host in ("localhost", "localhost.localdomain"):
+        return False, "loopback_rejected"
+    if host == "0.0.0.0":
+        return False, "wildcard_rejected"
+    # 字面量 IP：ipaddress 统一覆盖 IPv4/IPv6 的回环/私网/链路本地/组播/保留等
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        if ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_reserved \
+                or ip.is_multicast or ip.is_unspecified:
+            return False, f"ip_rejected:{host}"
+    else:
+        # 主机名形态：拒绝常见内网命名域后缀（DNS rebinding 目标域）
+        if host.endswith(".local") or host.endswith(".localhost"):
             return False, f"host_rejected:{host}"
     return True, ""
 

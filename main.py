@@ -31,6 +31,12 @@ logger = get_logger(__name__)
 
 async def main():
     config = load_config()
+    # P2-2：启动阶段先加载持久化配置（settings.db）覆盖 .env/代码默认，
+    # 使"Persistent Config > Environment > Code Default"对**运行时组件**真正生效
+    # （而非仅 UI 显示层）。合并后再做启动校验，保证最终运行配置合法。
+    settings_repo = SettingsRepository(config.SETTINGS_DB_PATH)
+    config_service = ConfigService(config, settings_repo)
+    config_service.apply_persisted()
     # 启动阶段即校验配置：类型错误/必填缺失直接报错退出
     validate_config(config)
     init_logging(level=config.LOG_LEVEL, fmt=config.LOG_FORMAT)
@@ -38,7 +44,6 @@ async def main():
     logger.info("花璃启动中...", extra={"event": "startup"})
 
     memory_manager = MemoryManager(config.MEMORY_PATH, config.MEMORY_TTL_DAYS, config.AUDIT_LOG_PATH, config.MODEL_MEMORY_TTL_DAYS)
-    settings_repo = SettingsRepository(config.SETTINGS_DB_PATH)
     prompt_manager = PromptManager(settings_repo, max_length=config.MAX_CUSTOM_PROMPT_LENGTH)
 
     # 优雅管理异步资源（HTTP session / AI 客户端）
@@ -46,7 +51,6 @@ async def main():
         sticker_repo = StickerRepository(config.STICKER_DB_PATH)
         sticker_manager = StickerManager(config, sticker_repo, ai_client)
         tool_manager = McpToolManager(config)
-        config_service = ConfigService(config, settings_repo)
         web_ui = None
         if config.WEB_UI_ENABLED:
             def _status_provider():

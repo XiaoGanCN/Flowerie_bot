@@ -52,7 +52,6 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 | `STICKER_DIR` | 表情包目录（图片文件） | 空（禁用） |
 | `STICKER_ENABLED` | 功能开关 | `false` |
 | `STICKER_COOLDOWN` | 每群表情包冷却（秒） | `60` |
-| `MAX_STICKERS_PER_MESSAGE` | 每次回复最多表情包数 | `1` |
 | `STICKER_DB_PATH` | Vision 索引缓存（SQLite） | `./data/stickers.db` |
 
 索引机制：首次扫描用视觉模型生成描述缓存（按文件 SHA-256）；重启复用缓存不重复调 API；文件被替换（同名不同内容）重新分析；Vision 失败记录状态，24 小时后自动重试。

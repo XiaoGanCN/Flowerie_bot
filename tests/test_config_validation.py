@@ -65,3 +65,52 @@ def test_error_message_does_not_contain_key():
     with pytest.raises(ValueError) as exc:
         validate_config(_cfg(DEEPSEEK_API_KEY=secret, BOT_QQ=0))
     assert secret not in str(exc.value)
+
+
+# ---------- P3-3：MCP 配置校验（fail-fast，不静默降级） ----------
+_MCP_OK = dict(
+    MCP_ENABLED=True,
+    MCP_SERVER_URL="https://mcp.example.com/mcp",
+    MCP_TIMEOUT=15,
+    MCP_MAX_TOOL_CALLS=5,
+    MCP_ALLOWED_TOOLS="web_search, fetch_url",
+)
+
+
+def test_mcp_enabled_without_server_url_rejected():
+    with pytest.raises(ValueError, match="MCP_SERVER_URL"):
+        validate_config(_cfg(MCP_ENABLED=True, MCP_SERVER_URL=""))
+
+
+def test_mcp_enabled_loopback_url_rejected():
+    with pytest.raises(ValueError, match="MCP_SERVER_URL 不合法"):
+        validate_config(_cfg(**{**_MCP_OK, "MCP_SERVER_URL": "http://127.0.0.1:9000/mcp"}))
+
+
+def test_mcp_enabled_invalid_scheme_rejected():
+    with pytest.raises(ValueError, match="MCP_SERVER_URL 不合法"):
+        validate_config(_cfg(**{**_MCP_OK, "MCP_SERVER_URL": "ftp://example.com/mcp"}))
+
+
+def test_mcp_timeout_invalid_rejected():
+    with pytest.raises(ValueError, match="MCP_TIMEOUT"):
+        validate_config(_cfg(**{**_MCP_OK, "MCP_TIMEOUT": 0}))
+
+
+def test_mcp_max_tool_calls_negative_rejected():
+    with pytest.raises(ValueError, match="MCP_MAX_TOOL_CALLS"):
+        validate_config(_cfg(**{**_MCP_OK, "MCP_MAX_TOOL_CALLS": -1}))
+
+
+def test_mcp_allowed_tools_format_rejected():
+    with pytest.raises(ValueError, match="MCP_ALLOWED_TOOLS"):
+        validate_config(_cfg(**{**_MCP_OK, "MCP_ALLOWED_TOOLS": "web_search, bad tool!"}))
+
+
+def test_mcp_valid_config_passes():
+    validate_config(_cfg(**_MCP_OK))  # 不抛异常
+
+
+def test_mcp_disabled_not_blocked_by_missing_url():
+    """MCP_ENABLED=false 时，缺少 SERVER_URL 不应阻止 Bot 启动。"""
+    validate_config(_cfg(MCP_ENABLED=False, MCP_SERVER_URL=""))  # 不抛异常

@@ -42,7 +42,6 @@ def env():
         STICKER_DIR=sticker_dir,
         STICKER_ENABLED=True,
         STICKER_COOLDOWN=60,
-        MAX_STICKERS_PER_MESSAGE=1,
         STICKER_MAX_LIST=30,
     )
     repo = StickerRepository(os.path.join(tmp.name, "stickers.db"))
