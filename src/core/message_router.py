@@ -12,6 +12,7 @@ from src.core.sanitizer import validate_memory_content
 from src.models import GroupMessage
 from src.services.ai_client import AIClient
 from src.services.file_parser import FileParser
+from src.services.mcp_tool_manager import McpToolManager
 from src.services.memory_manager import MemoryManager
 from src.services.prompt_manager import PromptManager
 from src.services.sender import Sender
@@ -58,6 +59,7 @@ class MessageRouter:
         task_manager: Optional[BackgroundTaskManager] = None,
         prompt_manager: Optional["PromptManager"] = None,
         sticker_manager: Optional["StickerManager"] = None,
+        tool_manager: Optional["McpToolManager"] = None,
     ):
         self.config = config
         self.ai_client = ai_client
@@ -70,6 +72,8 @@ class MessageRouter:
         self.prompt_manager = prompt_manager
         # 表情包（Sticker）：None 时跳过（不影响现有行为）
         self.sticker_manager = sticker_manager
+        # MCP 工具：None 或未启用时走纯聊天路径（不影响现有行为）
+        self.tool_manager = tool_manager
         # 消息组装（文本/识图/转发/卡片/文件/存档）→ MessageAssembler
         self.assembler = MessageAssembler(config, ai_client, file_parser, self.global_state)
         # 指令处理 → CommandHandler
@@ -113,6 +117,9 @@ class MessageRouter:
         # 表情包 Vision 索引（一次性后台任务；失败不影响启动，单文件失败跳过）
         if self.sticker_manager and self.sticker_manager.is_enabled():
             self.task_manager.register("sticker_index", self.sticker_manager.scan_and_index())
+        # MCP 工具列表同步（失败不阻塞启动；工具列表为空则不会注入 tools）
+        if self.tool_manager is not None and self.tool_manager.is_enabled():
+            self.task_manager.register("mcp_tools_sync", self.tool_manager.sync_tools())
 
     async def stop(self):
         # 统一取消并等待所有后台任务（TaskManager 负责异常记录与超时强杀）
@@ -434,6 +441,16 @@ class MessageRouter:
             _M_AI_ATTEMPTS.inc()  # 实际 HTTP attempt 计数
             if self.prompt_manager is not None and group_id:
                 kwargs = {**kwargs, "custom_prompt": self.prompt_manager.get_effective_prompt(group_id)}
+            # MCP 工具：仅当启用且存在 allowlist 工具时注入（模型自主判断是否需要工具）
+            if self.tool_manager is not None and self.tool_manager.is_enabled():
+                tool_payload = self.tool_manager.build_tools_payload()
+                if tool_payload:
+                    kwargs = {
+                        **kwargs,
+                        "tools": tool_payload,
+                        "tool_caller": self.tool_manager.call_tool,
+                        "max_tool_calls": max(1, int(getattr(self.config, "MCP_MAX_TOOL_CALLS", 5))),
+                    }
             reply, memory_update = await self.ai_client.chat_once(**kwargs)
             if reply and reply.strip():
                 latency = time.monotonic() - started

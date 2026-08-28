@@ -112,6 +112,15 @@ class Settings(BaseSettings):
     STICKER_COOLDOWN: int = 60          # 同一群两次表情包的最小间隔（秒）
     MAX_STICKERS_PER_MESSAGE: int = 1   # 每次回复最多附带表情包数
     STICKER_MAX_LIST: int = 30          # 提供给模型的可用表情包描述上限（防 token 膨胀）
+    # MCP（外部工具）：默认关闭，管理员主动配置后启用；仅 allowlist 内的工具可调用
+    MCP_ENABLED: bool = False
+    MCP_SERVER_URL: str = ""            # MCP server 地址（HTTP/SSE）
+    MCP_SERVER_NAME: str = "mcp"        # MCP server 名称
+    MCP_TIMEOUT: int = 15               # 单次工具调用超时（秒）
+    MCP_MAX_TOOL_CALLS: int = 5         # 单轮对话工具调用次数上限
+    MCP_ALLOWED_TOOLS: str = ""         # 逗号分隔的工具 allowlist（空=不允许任何工具）
+    MCP_CIRCUIT_FAILURES: int = 5       # MCP 独立熔断：连续失败阈值
+    MCP_CIRCUIT_PAUSE_SECONDS: int = 60 # MCP 熔断冷却
 
     # White list
     ALLOWED_GROUP_IDS: Optional[List[int]] = None

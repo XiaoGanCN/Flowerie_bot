@@ -15,6 +15,7 @@ from src.repositories.settings_repository import SettingsRepository
 from src.repositories.sticker_repository import StickerRepository
 from src.services.ai_client import AIClient
 from src.services.file_parser import FileParser
+from src.services.mcp_tool_manager import McpToolManager
 from src.services.memory_manager import MemoryManager
 from src.services.prompt_manager import PromptManager
 from src.services.sender import Sender
@@ -42,6 +43,7 @@ async def main():
     async with AIClient(config, memory_manager) as ai_client, Sender(config) as sender:
         sticker_repo = StickerRepository(config.STICKER_DB_PATH)
         sticker_manager = StickerManager(config, sticker_repo, ai_client)
+        tool_manager = McpToolManager(config)
         file_parser = FileParser(config)
         policy_engine = PolicyEngine(config, memory_manager)
         message_router = MessageRouter(
@@ -53,6 +55,7 @@ async def main():
             policy_engine=policy_engine,
             prompt_manager=prompt_manager,
             sticker_manager=sticker_manager,
+            tool_manager=tool_manager,
         )
         ws_server = WebSocketServer(config, message_router)
 
@@ -74,6 +77,7 @@ async def main():
             memory_manager.close()
             settings_repo.close()
             sticker_manager.close()
+            await tool_manager.close()
             # 4) 输出进程内 metrics 摘要
             logger.info(
                 "shutdown metrics=%s", registry.export_text().replace("\n", " | ")[:800],
