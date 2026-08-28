@@ -9,6 +9,7 @@
 - 热更新：修改后立即写入 Settings 实例（运行中的 manager 每次读 config 属性）
 - 需要重启项：明确标记，UI 提示"已保存，需要重启生效"
 """
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.config import Settings
@@ -50,7 +51,9 @@ class ConfigService:
         "STICKER_COOLDOWN": ("Sticker", "int", False, True, "表情包冷却（秒）"),
         # MCP
         "MCP_ENABLED": ("MCP", "bool", False, True, "MCP 工具开关"),
-        "MCP_SERVER_URL": ("MCP", "str", False, True, "MCP server 地址"),
+        "MCP_SERVER_URL": ("MCP", "str", False, True, "MCP server 地址（单 server）"),
+        "MCP_SERVERS": ("MCP", "str", False, False, "MCP 服务列表 JSON（多 server 插件式，需重启）"),
+        "MCP_ALLOWED_HOSTS": ("MCP", "str", False, False, "MCP 本地/内网主机白名单（逗号分隔，需重启）"),
         "MCP_TIMEOUT": ("MCP", "int", False, True, "工具调用超时（秒）"),
         "MCP_MAX_TOOL_CALLS": ("MCP", "int", False, True, "单轮工具调用上限"),
         "MCP_ALLOWED_TOOLS": ("MCP", "str", False, True, "工具 allowlist（逗号分隔）"),
@@ -193,6 +196,14 @@ class ConfigService:
             elif ctype == "str":
                 if key in self._ENUM_VALUES and raw.lower() not in self._ENUM_VALUES[key]:
                     return None
+                # MCP_SERVERS：必须是合法 JSON 数组（元素级校验交给启动 validate_config）
+                if key == "MCP_SERVERS" and raw:
+                    try:
+                        data = json.loads(raw)
+                    except json.JSONDecodeError:
+                        return None
+                    if not isinstance(data, list):
+                        return None
         except ValueError:
             return None
         return raw

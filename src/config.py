@@ -1,3 +1,4 @@
+import json
 import re
 from typing import List, Optional
 
@@ -114,14 +115,18 @@ class Settings(BaseSettings):
     STICKER_ENABLED: bool = False
     STICKER_COOLDOWN: int = 60          # 同一群两次表情包的最小间隔（秒）
     STICKER_MAX_LIST: int = 30          # 提供给模型的可用表情包描述上限（防 token 膨胀）
-    # MCP（外部工具）：默认关闭，管理员主动配置后启用；仅 allowlist 内的工具可调用
+    # MCP（外部工具）：默认关闭，管理员主动配置后启用；仅 allowlist 内的工具可调用。
+    # 插件式多 server：MCP_SERVERS 为 JSON 数组（每个元素含 name/url/allowed_tools/
+    # timeout/enabled），为空时回退到下方单 server 字段（向后兼容）。
     MCP_ENABLED: bool = False
-    MCP_SERVER_URL: str = ""            # MCP server 地址（HTTP/SSE）
-    MCP_SERVER_NAME: str = "mcp"        # MCP server 名称
-    MCP_TIMEOUT: int = 15               # 单次工具调用超时（秒）
-    MCP_MAX_TOOL_CALLS: int = 5         # 单轮对话工具调用次数上限
-    MCP_ALLOWED_TOOLS: str = ""         # 逗号分隔的工具 allowlist（空=不允许任何工具）
-    MCP_CIRCUIT_FAILURES: int = 5       # MCP 独立熔断：连续失败阈值
+    MCP_SERVER_URL: str = ""            # （单 server）MCP server 地址（HTTP/SSE）
+    MCP_SERVER_NAME: str = "mcp"        # （单 server）MCP server 名称
+    MCP_SERVERS: str = ""               # 多 server JSON：[{"name","url","allowed_tools"?,"timeout"?,"enabled"?}, ...]
+    MCP_TIMEOUT: int = 15               # 单次工具调用超时（秒，多 server 未单独指定时用此值）
+    MCP_MAX_TOOL_CALLS: int = 5         # 单轮对话工具调用次数上限（所有 server 合计）
+    MCP_ALLOWED_TOOLS: str = ""         # 逗号分隔的工具 allowlist（空=不允许任何工具；多 server 未单独指定时用此值）
+    MCP_ALLOWED_HOSTS: Optional[List[str]] = None  # 显式放行的本地/内网主机白名单（逗号分隔；仅这些地址可绕过回环/私网拒绝）
+    MCP_CIRCUIT_FAILURES: int = 5       # MCP 独立熔断：连续失败阈值（每个 server 各自独立）
     MCP_CIRCUIT_PAUSE_SECONDS: int = 60 # MCP 熔断冷却
     # Web UI（管理后台）：默认关闭；必须认证；端口与反向 WS 端口（WS_PORT）错开
     WEB_UI_ENABLED: bool = False
@@ -175,7 +180,7 @@ class Settings(BaseSettings):
             return [int(x.strip()) for x in v.split(",") if x.strip().isdigit()]
         return v
 
-    @field_validator("IMAGE_ALLOWED_HOSTS", mode="before")
+    @field_validator("IMAGE_ALLOWED_HOSTS", "MCP_ALLOWED_HOSTS", mode="before")
     @classmethod
     def parse_str_list(cls, v):
         if isinstance(v, str):
@@ -196,6 +201,61 @@ class Settings(BaseSettings):
 
 def load_config() -> Settings:
     return Settings()
+
+
+def parse_mcp_servers(raw: str, default_timeout: int = 15, default_tools: str = "",
+                      default_name: str = "mcp", legacy_url: str = "",
+                      legacy_tools: str = "") -> List[dict]:
+    """解析 MCP_SERVERS（插件式多 server，JSON 数组）；为空时回退 legacy 单 server。
+
+    每个元素：{"name": 必填且唯一, "url": 必填, "allowed_tools"?: 逗号分隔,
+              "timeout"?: 秒, "enabled"?: bool}。allowed_tools/timeout 缺省用全局值。
+    返回 server dict 列表（含 enabled 标记；禁用项由调用方跳过）。
+    """
+    servers: List[dict] = []
+    raw = (raw or "").strip()
+    if raw:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            raise ValueError("MCP_SERVERS 必须是合法 JSON 数组")
+        if not isinstance(data, list):
+            raise ValueError("MCP_SERVERS 必须是 JSON 数组")
+        for item in data:
+            if not isinstance(item, dict):
+                raise ValueError(f"MCP_SERVERS 元素必须是对象: {item!r}")
+            name = str(item.get("name") or "").strip()
+            url = str(item.get("url") or "").strip()
+            if not name or not url:
+                raise ValueError(f"MCP_SERVERS 元素缺少 name/url: {item!r}")
+            if not re.fullmatch(r"[A-Za-z0-9_.\-]+", name):
+                raise ValueError(f"MCP_SERVERS 元素 name 非法: {name!r}")
+            timeout_raw = item.get("timeout", default_timeout)
+            try:
+                timeout = int(timeout_raw) if timeout_raw is not None else int(default_timeout)
+            except (TypeError, ValueError):
+                raise ValueError(f"MCP_SERVERS 元素 timeout 非法: {item!r}") from None
+            tools = item.get("allowed_tools")
+            servers.append({
+                "name": name,
+                "url": url,
+                "allowed_tools": str(tools).strip() if tools is not None else str(default_tools).strip(),
+                "timeout": timeout,
+                "enabled": bool(item.get("enabled", True)),
+            })
+        if servers:
+            return servers
+    # legacy 单 server（MCP_SERVERS 为空时）
+    url = (legacy_url or "").strip()
+    if url:
+        servers.append({
+            "name": default_name or "mcp",
+            "url": url,
+            "allowed_tools": (legacy_tools or "").strip(),
+            "timeout": int(default_timeout),
+            "enabled": True,
+        })
+    return servers
 
 def validate_config(config: Settings) -> None:
     """启动阶段配置校验：必填项缺失/取值非法时直接抛错（进程不启动）。
@@ -230,19 +290,52 @@ def validate_config(config: Settings) -> None:
                 "Web UI 的本地回环端口不能与 NapCat 反向 WS 端口一致，请修改 WEB_UI_PORT")
         if not getattr(config, "WEB_UI_PASSWORD", ""):
             raise ValueError("WEB_UI_ENABLED=true 时必须设置 WEB_UI_PASSWORD（不允许无认证裸奔）")
-    # MCP（P3-3）：MCP_ENABLED=true 时必须完整配置，fail-fast，绝不静默降级
+    # MCP：MCP_ENABLED=true 时必须完整配置，fail-fast，绝不静默降级。
+    # 支持插件式多 server（MCP_SERVERS JSON）与 legacy 单 server（MCP_SERVER_URL）。
     if getattr(config, "MCP_ENABLED", False):
-        mcp_url = (getattr(config, "MCP_SERVER_URL", "") or "").strip()
-        if not mcp_url:
-            raise ValueError("MCP_ENABLED=true 时必须配置 MCP_SERVER_URL（不允许静默降级为纯聊天）")
-        ok, reason = validate_mcp_server_url(mcp_url)
-        if not ok:
-            raise ValueError(f"MCP_SERVER_URL 不合法: {reason}")
-        if int(getattr(config, "MCP_TIMEOUT", 15)) < 1:
-            raise ValueError(f"MCP_TIMEOUT 必须 >= 1（秒），当前: {getattr(config, 'MCP_TIMEOUT', 15)}")
+        mcp_raw = (getattr(config, "MCP_SERVERS", "") or "").strip()
+        allowed_hosts = list(getattr(config, "MCP_ALLOWED_HOSTS", None) or [])
+        if mcp_raw:
+            # ---- 多 server（MCP_SERVERS JSON）----
+            try:
+                servers = parse_mcp_servers(
+                    mcp_raw,
+                    default_timeout=int(getattr(config, "MCP_TIMEOUT", 15)),
+                    default_tools=(getattr(config, "MCP_ALLOWED_TOOLS", "") or ""),
+                    default_name=(getattr(config, "MCP_SERVER_NAME", "mcp") or "mcp"),
+                )
+            except ValueError as e:
+                raise ValueError(str(e)) from None
+            enabled = [s for s in servers if s.get("enabled", True)]
+            if not enabled:
+                raise ValueError("MCP_ENABLED=true 时 MCP_SERVERS 必须至少包含一个 enabled 的 server")
+            seen_names = set()
+            for s in enabled:
+                name = s["name"]
+                if name in seen_names:
+                    raise ValueError(f"MCP_SERVERS 中 server name 重复: {name!r}")
+                seen_names.add(name)
+                ok, reason = validate_mcp_server_url(s["url"], allowed_hosts)
+                if not ok:
+                    raise ValueError(f"MCP_SERVERS 中 server {name!r} 的 URL 不合法: {reason}")
+                if s["timeout"] < 1:
+                    raise ValueError(f"MCP_SERVERS 中 server {name!r} 的 timeout 必须 >= 1（秒）")
+                for token in (t.strip() for t in s["allowed_tools"].split(",") if t.strip()):
+                    if not re.fullmatch(r"[A-Za-z0-9_.\-]+", token):
+                        raise ValueError(f"MCP_SERVERS 中 server {name!r} 的 allowed_tools 含非法工具名: {token!r}")
+        else:
+            # ---- legacy 单 server（保持原有报错文案）----
+            mcp_url = (getattr(config, "MCP_SERVER_URL", "") or "").strip()
+            if not mcp_url:
+                raise ValueError("MCP_ENABLED=true 时必须配置 MCP_SERVER_URL（不允许静默降级为纯聊天）")
+            ok, reason = validate_mcp_server_url(mcp_url, allowed_hosts)
+            if not ok:
+                raise ValueError(f"MCP_SERVER_URL 不合法: {reason}")
+            if int(getattr(config, "MCP_TIMEOUT", 15)) < 1:
+                raise ValueError(f"MCP_TIMEOUT 必须 >= 1（秒），当前: {getattr(config, 'MCP_TIMEOUT', 15)}")
+            allowed = (getattr(config, "MCP_ALLOWED_TOOLS", "") or "").strip()
+            for token in (t.strip() for t in allowed.split(",") if t.strip()):
+                if not re.fullmatch(r"[A-Za-z0-9_.\-]+", token):
+                    raise ValueError(f"MCP_ALLOWED_TOOLS 含非法工具名: {token!r}")
         if int(getattr(config, "MCP_MAX_TOOL_CALLS", 5)) < 0:
             raise ValueError(f"MCP_MAX_TOOL_CALLS 必须 >= 0，当前: {getattr(config, 'MCP_MAX_TOOL_CALLS', 5)}")
-        allowed = (getattr(config, "MCP_ALLOWED_TOOLS", "") or "").strip()
-        for token in (t.strip() for t in allowed.split(",") if t.strip()):
-            if not re.fullmatch(r"[A-Za-z0-9_.\-]+", token):
-                raise ValueError(f"MCP_ALLOWED_TOOLS 含非法工具名: {token!r}")

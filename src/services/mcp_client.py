@@ -26,9 +26,11 @@ class McpError(Exception):
 
 
 class McpClient:
-    def __init__(self, url: str, name: str = "mcp", timeout: float = 15.0):
-        # SSRF 防线：构造即校验，非法 URL（内网/回环/私网/非法 scheme 等）直接拒绝
-        ok, reason = validate_mcp_server_url(url)
+    def __init__(self, url: str, name: str = "mcp", timeout: float = 15.0,
+                 allowed_hosts: Optional[List[str]] = None):
+        # SSRF 防线：构造即校验，非法 URL（内网/回环/私网/非法 scheme 等）直接拒绝；
+        # allowed_hosts 为用户显式放行的本地/内网主机白名单（管理员明确建立的信任边界）
+        ok, reason = validate_mcp_server_url(url, allowed_hosts)
         if not ok:
             raise McpError(f"MCP_SERVER_URL 不合法: {reason}")
         self.url = url

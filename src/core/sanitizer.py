@@ -30,19 +30,21 @@ def check_image_url(url: str, allowed_hosts: Optional[list] = None) -> Tuple[boo
     return True, ""
 
 
-def validate_mcp_server_url(url: str) -> Tuple[bool, str]:
+def validate_mcp_server_url(url: str, allowed_hosts: Optional[list] = None) -> Tuple[bool, str]:
     """校验 MCP server URL（MCP 路径的 SSRF 防线，纯函数便于测试）。
 
-    与 check_image_url 不同：MCP server 是管理员配置的**外部**服务，
-    内网/回环/链路本地目标一律拒绝（MCP 不需要 NapCat 式的 loopback 信任边界）。
+    默认行为：MCP server 是管理员配置的**外部**服务，内网/回环/链路本地目标
+    一律拒绝。若管理员通过 MCP_ALLOWED_HOSTS **显式**放行了某主机（如自建的
+    内网/本机 MCP server），该主机的回环/私网限制可绕过——这是用户明确配置的
+    信任边界（与 IMAGE_ALLOWED_HOSTS 放行 NapCat loopback 同模式）。
 
     规则：
     - 空 URL 拒绝
     - 仅允许 http / https scheme
     - 禁止 URL userinfo（user:pass@）
     - 禁止回环（localhost、127.0.0.0/8、::1）、0.0.0.0、私网 IPv4/IPv6、
-      链路本地、组播、保留地址等字面量 IP 目标
-    - 主机名形态：拒绝 .local / .localhost 后缀（DNS rebinding 的常见目标命名域）；
+      链路本地、组播、保留地址等字面量 IP 目标（除非主机在 allowed_hosts 中）
+    - 主机名形态：拒绝 .local / .localhost 后缀（除非显式放行）；
       其余主机名依赖 httpx 默认不跟随重定向（mcp_client 不设置 follow_redirects）
       作为重定向边界——3xx 响应按错误处理，不会二次跳转到内网。
     返回 (是否允许, 拒绝原因)。原因 '' 表示允许。
@@ -62,6 +64,10 @@ def validate_mcp_server_url(url: str) -> Tuple[bool, str]:
     host = (parts.hostname or "").lower()
     if not host:
         return False, "host_missing"
+    allowed = set((h or "").strip().lower() for h in (allowed_hosts or []))
+    # 显式白名单：用户配置放行的主机/地址直接通过（信任边界由管理员明确建立）
+    if host in allowed:
+        return True, ""
     if host in ("localhost", "localhost.localdomain"):
         return False, "loopback_rejected"
     if host == "0.0.0.0":
