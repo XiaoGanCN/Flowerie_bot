@@ -1,4 +1,3 @@
-import json
 """Web UI 无 JS 面板测试：全量配置表单 / 分组保存 / 主题 / 背景颜色/图片 / 图片安全。
 
 覆盖任务要求：
@@ -10,6 +9,7 @@ import json
 - 图片上传校验（合法/非法/超大/路径穿越）+ 删除 + 持久化
 """
 import io
+import json
 import os
 import tempfile
 

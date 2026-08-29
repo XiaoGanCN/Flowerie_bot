@@ -525,7 +525,7 @@ def _mcp_server_form(index, s, title, default_timeout: int = 15) -> str:
     timeout = _esc(s.get("timeout", default_timeout))
     checked = " checked" if s.get("enabled", True) else ""
     hint = '<span class="hint">名称唯一；地址支持 http(s)/SSE；工具白名单逗号分隔（空=不在此 server 放行）；超时秒</span>'
-    delete_btn = (f'<button type="submit" name="mcp_action" value="delete" class="btn danger">删除</button>'
+    delete_btn = ('<button type="submit" name="mcp_action" value="delete" class="btn danger">删除</button>'
                   if index is not None else "")
     submit_label = "保存" if index is not None else "添加服务器"
     return (
@@ -662,7 +662,7 @@ def render_appearance(theme: str, bg_color: str, opacity: int, size: str, positi
         '<div class="row-control" style="flex-direction:row;gap:18px;flex-wrap:wrap">'
         f'<label class="opt"><input type="radio" name="panel_style" value="clear"{" checked" if panel_style=="clear" else ""}> 纯透明（淡入淡出）</label>'
         f'<label class="opt"><input type="radio" name="panel_style" value="glass"{" checked" if panel_style=="glass" else ""}> 液态玻璃（磨砂）</label>'
-        '</div></div>' 
+        '</div></div>'
         '</div></div></fieldset>'
 
         '<fieldset class="group"><legend>背景颜色（跟主题绑定）</legend>'
