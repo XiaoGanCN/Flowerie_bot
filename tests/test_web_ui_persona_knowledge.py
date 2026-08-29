@@ -258,12 +258,16 @@ async def test_html_only_interaction_forms_present():
         text2 = _resp_text(page2)
         for action in ("/panel/persona/save", "/panel/persona/delete"):
             assert f'action="{action}"' in text2
-        # 内置人格（atri）编辑页有 save 但无 delete（内置保护）
+        # 内置人格（atri）编辑表单有 save 但无 delete（内置保护；
+        # 页面其他区域（自定义人格列表卡片）仍可能有删除按钮，只断言编辑区）
         page3 = await server._handle_panel(FakeRequest(query={"tab": "persona", "edit": "atri"},
                                                       cookies={"fb_token": cookie}))
         text3 = _resp_text(page3)
-        assert 'action="/panel/persona/save"' in text3
-        assert 'action="/panel/persona/delete"' not in text3
+        form_start = text3.index("编辑人格：亚托莉")
+        form_end = text3.index("人格列表") if "人格列表" in text3 else len(text3)
+        edit_zone = text3[form_start:form_end]
+        assert 'action="/panel/persona/save"' in edit_zone
+        assert 'action="/panel/persona/delete"' not in edit_zone
         page = await server._handle_panel(FakeRequest(query={"tab": "knowledge"},
                                                      cookies={"fb_token": cookie}))
         text = _resp_text(page)
