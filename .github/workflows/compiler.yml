@@ -33,10 +33,6 @@ jobs:
           - os: macos-latest
             name: macos-arm64
 
-          - os: macos-13
-            name: macos-x64
-
-
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -89,9 +85,7 @@ jobs:
   # Termux ARM64 package
   build-termux:
 
-
     runs-on: ubuntu-24.04-arm
-
 
     steps:
 
@@ -99,25 +93,23 @@ jobs:
       uses: actions/checkout@v5
 
 
-    - name: Setup Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: "3.12"
-
-
     - name: Prepare Termux package
       run: |
 
-        mkdir -p termux-package
+        mkdir -p ../termux-package
 
-        cp -r . \
-          termux-package/Flowerie_bot
+        rsync -a \
+          --exclude ".git" \
+          --exclude ".github" \
+          ./ \
+          ../termux-package/Flowerie_bot/
 
 
-        cd termux-package
+        cd ../termux-package
 
-
-        tar -czf ../Flowerie_bot-termux-arm64.tar.gz Flowerie_bot
+        tar -czf \
+          ../Flowerie_bot-termux-arm64.tar.gz \
+          Flowerie_bot
 
 
     - name: Upload Termux package
