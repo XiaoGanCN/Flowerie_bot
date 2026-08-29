@@ -316,7 +316,7 @@ async def test_upload_path_traversal_contained():
         assert os.path.isfile(os.path.join(td, "webui", "background", "background.png"))
         assert not os.path.exists(os.path.join(td, "evil.png"))
         assert not os.path.exists(os.path.join(td, "webui", "evil.png"))
-        for root, _dirs, files in os.walk(td):
+        for _root, _dirs, files in os.walk(td):
             for f in files:
                 assert not f.startswith("evil")
 

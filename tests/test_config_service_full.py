@@ -34,8 +34,6 @@ def _env(tmp: str) -> EnvFileStore:
 # ---------- 全量配置 ----------
 def test_all_settings_fields_covered():
     """Settings 的每个字段都出现在 ConfigService.SCHEMA（除管理账号两项）。"""
-    from tests.test_router_regression import make_config
-    cfg = make_config(DEEPSEEK_API_KEY="sk-x" * 20, BOT_QQ=10001, WEB_UI_PASSWORD="x")
     # 用真实 Settings 字段集做对照（pydantic 模型字段）
     real_fields = set(Settings.model_fields.keys())
     schema_keys = set(ConfigService.SCHEMA.keys())
