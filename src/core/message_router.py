@@ -88,11 +88,15 @@ class MessageRouter:
         self.budget = budget or BudgetManager(config, self.global_state, sender)
         # 后台任务统一管理（TaskManager：注册/跟踪/异常记录/优雅关闭）
         self.task_manager = task_manager or BackgroundTaskManager()
-        # AI 准入层（熔断/预算/人格/知识/重试）→ AiGateway（防上帝类）
+        # AI 准入层（熔断/预算/人格/知识/重试）→ AiGateway（防上帝类）。
+        # 可变依赖以 provider 传入：gateway 动态读取 router 当前属性
+        # （测试常直接替换 router.ai_client / router.tool_manager，快照会失效）
         self.ai_gateway = AiGateway(
-            config, ai_client, self.budget,
-            prompt_manager=prompt_manager, tool_manager=tool_manager,
-            persona_manager=persona_manager, meme_manager=meme_manager,
+            config, lambda: self.ai_client, self.budget,
+            prompt_manager=lambda: self.prompt_manager,
+            tool_manager=lambda: self.tool_manager,
+            persona_manager=lambda: self.persona_manager,
+            meme_manager=lambda: self.meme_manager,
         )
         # 兼容属性：熔断器/群级熔断容器由 AiGateway 持有（旧调用路径）
         self.provider_breaker = self.ai_gateway.provider_breaker

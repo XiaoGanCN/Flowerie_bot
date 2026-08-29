@@ -35,13 +35,16 @@ class AiGateway:
 
     def __init__(self, config, ai_client, budget, prompt_manager=None,
                  tool_manager=None, persona_manager=None, meme_manager=None):
+        """ai_client/tool_manager 等可变依赖以 provider（可调用）传入：
+        动态读取宿主（MessageRouter）当前属性，支持测试/运行期热替换。"""
         self.config = config
-        self.ai_client = ai_client
+        self._ai_client = ai_client if callable(ai_client) else (lambda: ai_client)
         self.budget = budget
-        self.prompt_manager = prompt_manager
-        self.tool_manager = tool_manager
-        self.persona_manager = persona_manager
-        self.meme_manager = meme_manager
+        self._prompt_manager = prompt_manager if callable(prompt_manager) else (lambda: prompt_manager)
+        self._tool_manager = tool_manager if callable(tool_manager) else (lambda: tool_manager)
+        self._persona_manager = persona_manager if callable(persona_manager) else (lambda: persona_manager)
+        self._meme_manager = meme_manager if callable(meme_manager) else (lambda: meme_manager)
+
         # ---- Circuit Breaker（双层：provider 级全局 + 群级有界）----
         self.provider_breaker = CircuitBreaker(
             name="provider",
@@ -53,6 +56,26 @@ class AiGateway:
             max_size=max(10, int(getattr(config, "GROUP_CIRCUIT_BREAKER_MAX_GROUPS", 1000))),
         )
 
+
+    @property
+    def ai_client(self):
+        return self._ai_client()
+
+    @property
+    def prompt_manager(self):
+        return self._prompt_manager()
+
+    @property
+    def tool_manager(self):
+        return self._tool_manager()
+
+    @property
+    def persona_manager(self):
+        return self._persona_manager()
+
+    @property
+    def meme_manager(self):
+        return self._meme_manager()
     async def guarded_chat(self, group_id: int, user_id: int, **kwargs) -> Tuple[Optional[str], Optional[str], bool]:
         """统一 AI 对话入口（logical request 层）。
 

@@ -151,17 +151,40 @@ class ConfigService:
     def apply_persisted(self) -> int:
         """启动阶段：把 settings.db 的持久化覆盖合并进运行中的 Settings 实例。
 
-        优先级：Persistent Config > Environment > Code Default（P2-2 修复）。
+        优先级：Persistent Config > Environment > Code Default（P2-2 修复），
+        **但本地手工修改的 .env 不会被 settings.db 的旧值覆盖**（P4-1 修复）：
+        - 若 .env 中存在同 key 且 .env 文件修改时间晚于 settings.db 的
+          updated_at → 视为管理员在本地直接改了 .env，以 .env 新值为准，
+          并把新值同步回 settings.db（避免重启后旧 UI 值再次压掉 .env）。
+        - 其余情况维持原优先级（settings.db > .env > 代码默认）。
         - 只应用 SCHEMA 内且类型/范围校验通过的键；非法值跳过并记日志，
           不阻止 Bot 启动（无效持久化配置不把 Bot 带入危险状态）。
         - 敏感项（secret）按用户保存时的原值应用；显示层仍走 _mask 脱敏。
         返回成功应用的键数。
         """
         applied = 0
+        env_values: Dict[str, str] = {}
+        env_mtime = 0.0
+        if self.env_store is not None:
+            try:
+                env_values = self.env_store.read_values()
+                env_mtime = os.path.getmtime(self.env_store._path)
+            except OSError:
+                env_mtime = 0.0
         for key, value in self.repository.list_configs():
             if key not in self.SCHEMA:
                 logger.warning("config_persisted_unknown key=%s（跳过）", key)
                 continue
+            # .env 较新优先：本地手工修改的 .env 值覆盖 db 旧值（并同步 db）
+            if key in env_values and env_mtime > 0:
+                meta = self.repository.get_config_meta(key)
+                db_ts = meta[1] if meta else 0.0
+                if env_mtime > db_ts:
+                    value = env_values[key]
+                    try:
+                        self.repository.set_config(key, str(value))
+                    except Exception:  # noqa: BLE001 - 同步失败不影响启动
+                        pass
             _cat, ctype, _secret, _hot, _desc = self.SCHEMA[key]
             if self._validate(key, ctype, str(value)) is None:
                 logger.warning("config_persisted_invalid key=%s（跳过，使用 .env/默认值）", key)
@@ -177,8 +200,6 @@ class ConfigService:
                 extra={"event": "config_persisted_applied", "count": applied},
             )
         return applied
-
-    # ---------- 注册/修改管理账号 ----------
     def register_user(self, username: str, password: str) -> Tuple[bool, str]:
         """注册/修改 Web UI 管理账号（持久化到 settings.db，优先级高于 .env）。
 
