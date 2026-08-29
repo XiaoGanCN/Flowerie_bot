@@ -314,6 +314,11 @@ border-radius:11px;cursor:pointer;transition:border-color .15s,background .15s}
 .range-row{display:flex;align-items:center;gap:12px}
 .range-row output{font-size:12.5px;color:var(--text-muted);min-width:44px;text-align:right}
 .inline-form{display:inline-block}
+.mcp-card{background:var(--panel-bg);border:1px solid var(--panel-border);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.mcp-card-head{display:flex;align-items:center;gap:10px;font-size:14px}
+.mcp-card-head b{color:var(--heading)}
+.mcp-card-meta{font-size:12px;color:var(--text-muted);margin:6px 0 2px}
+.mcp-card-url{font-size:12px;color:var(--text-muted);font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all;margin-bottom:10px}
 .actions-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
 .log{background:var(--input-bg);border:1px solid var(--panel-border);border-radius:10px;padding:14px;
 font-size:12px;overflow-x:auto;line-height:1.7;white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace}
@@ -419,7 +424,7 @@ def render_panel_page(*, theme_class: str, bg_rules: str, msg_html: str,
     )
 
 
-def render_config_sections(configs, active_cat: str = "all") -> str:
+def render_config_sections(configs, active_cat: str = "all", mcp_edit=None) -> str:
     """按分类渲染配置分组表单，顶部带分类导航（点某个分类只看那一类，避免全部堆在一屏）。
 
     active_cat: "all" 显示全部分类；否则只显示该分类。纯 HTML + 链接跳转，零 JS。
@@ -450,17 +455,18 @@ def render_config_sections(configs, active_cat: str = "all") -> str:
             f'<form method="post" action="{action}">{"".join(rows_html)}'
             '<div class="group-actions"><button type="submit" class="btn">保存本组</button></div>'
             '</form>'
-            + (render_mcp_editor(mcp_raw) if mcp_raw is not None else "")
+            + (render_mcp_editor(mcp_raw, edit_index=mcp_edit) if mcp_raw is not None else "")
             + '</fieldset>'
         )
         sections.append(section)
     return nav + "\n" + "\n".join(sections)
 
 
-def render_mcp_editor(raw: str, default_timeout: int = 15) -> str:
-    """把 MCP_SERVERS 的 JSON 渲染成结构化编辑器（每个 server 一个独立表单，零 JS）。
+def render_mcp_editor(raw: str, default_timeout: int = 15, edit_index=None) -> str:
+    """把 MCP_SERVERS 的 JSON 渲染成卡片式列表（每个 server 一张卡，零 JS）。
 
-    支持逐条添加 / 编辑 / 删除，服务端组装回 MCP_SERVERS JSON 数组。
+    默认显示摘要卡 + 按钮（启用/停用、测试、编辑、删除）；点"编辑"（?cat=MCP&edit=i）
+    时该 server 渲染为编辑表单。添加服务器表单始终在底部。
     """
     import json
     servers = []
@@ -474,9 +480,41 @@ def render_mcp_editor(raw: str, default_timeout: int = 15) -> str:
             servers = []
     blocks = []
     for i, s in enumerate(servers):
-        blocks.append(_mcp_server_form(i, s, "编辑"))
+        if edit_index is not None and i == edit_index:
+            blocks.append(_mcp_server_form(i, s, "编辑", default_timeout))
+        else:
+            blocks.append(_mcp_server_card(i, s))
     blocks.append(_mcp_server_form(None, {}, "添加", default_timeout))
     return '<div class="mcp-editor">' + "".join(blocks) + "</div>"
+
+
+def _mcp_server_card(i, s) -> str:
+    """服务器摘要卡 + 操作按钮（启用/停用、测试、编辑、删除）。"""
+    name = _esc(s.get("name", ""))
+    url = _esc(s.get("url", ""))
+    tools_count = len([t for t in str(s.get("allowed_tools", "") or "").split(",") if t.strip()])
+    transport = "sse" if url.lower().startswith("sse://") or "/sse" in url.lower() else "streamable-http"
+    enabled = bool(s.get("enabled", True))
+    status = '<span class="badge">已启用</span>' if enabled else '<span class="badge warn">已停用</span>'
+    toggle = "停用" if enabled else "启用"
+    return (
+        '<div class="mcp-card">'
+        f'<div class="mcp-card-head"><b>{name}</b>{status}</div>'
+        f'<div class="mcp-card-meta">{transport} · {tools_count} 个工具</div>'
+        f'<div class="mcp-card-url">{url}</div>'
+        '<div class="actions-row">'
+        f'<form method="post" action="/panel/mcp/edit" class="inline-form">'
+        f'<input type="hidden" name="mcp_index" value="{i}">'
+        f'<button type="submit" name="mcp_action" value="toggle" class="btn small">{toggle}</button>'
+        f'<button type="submit" name="mcp_action" value="test" class="btn small">测试</button>'
+        '</form>'
+        f'<a class="btn small" href="/panel?cat=MCP&edit={i}">编辑</a>'
+        f'<form method="post" action="/panel/mcp/edit" class="inline-form">'
+        f'<input type="hidden" name="mcp_index" value="{i}">'
+        f'<button type="submit" name="mcp_action" value="delete" class="btn small danger">删除</button>'
+        '</form>'
+        '</div></div>'
+    )
 
 
 def _mcp_server_form(index, s, title, default_timeout: int = 15) -> str:

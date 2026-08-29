@@ -393,10 +393,14 @@ class WebUIServer:
         cat = request.query.get("cat", "")
         if cat not in ("all", "") and cat not in ConfigService.CATEGORY_ORDER:
             cat = ""
-        return web.Response(text=self._panel_page(msg, err, tab, cat),
+        try:
+            mcp_edit = int(request.query.get("edit", ""))
+        except (TypeError, ValueError):
+            mcp_edit = None
+        return web.Response(text=self._panel_page(msg, err, tab, cat, mcp_edit),
                             content_type="text/html", charset="utf-8")
 
-    def _panel_page(self, msg: str = "", err: bool = False, tab: str = "config", cat: str = "") -> str:
+    def _panel_page(self, msg: str = "", err: bool = False, tab: str = "config", cat: str = "", mcp_edit=None) -> str:
         prefs = self._get_prefs()
         theme = str(prefs["theme"])
         if theme not in THEMES:
@@ -439,7 +443,7 @@ class WebUIServer:
             logs = "\n".join(get_recent_logs(200))
             body_html = f'<pre class="log">{_html.escape(logs)}</pre>'
         else:
-            body_html = render_config_sections(self.config_service.list_configs(), active_cat=cat)
+            body_html = render_config_sections(self.config_service.list_configs(), active_cat=cat, mcp_edit=mcp_edit)
         return render_panel_page(
             theme_class=theme_body_class(theme),
             bg_rules=bg_rules,
@@ -683,6 +687,33 @@ class WebUIServer:
                 return f"工具名非法: {token}"
         return ""
 
+    async def _mcp_ping(self, url: str, timeout: int) -> Tuple[bool, str]:
+        """测试 MCP server 连通性：POST MCP initialize 握手。"""
+        if not re.match(r"^(https?|sse)://", url or ""):
+            return False, "地址需以 http:// https:// 或 sse:// 开头"
+        import aiohttp as _aiohttp
+        payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                       "clientInfo": {"name": "flowerie", "version": "1.0.1"}},
+        }
+        try:
+            async with _aiohttp.ClientSession() as sess:
+                async with sess.post(url, json=payload,
+                                     timeout=_aiohttp.ClientTimeout(total=max(1, min(timeout, 30)))) as resp:
+                    if resp.status >= 400:
+                        return False, f"HTTP {resp.status}，连接失败"
+                    try:
+                        data = await resp.json()
+                    except Exception:  # noqa: BLE001
+                        return False, f"HTTP {resp.status} 返回非 JSON"
+                    info = data.get("result", {}).get("serverInfo", {}) if isinstance(data, dict) else {}
+                    server = info.get("name", "MCP") if isinstance(info, dict) else "MCP"
+                    version = info.get("version", "") if isinstance(info, dict) else ""
+                    return True, f"连接成功：{server} {version}".strip()
+        except Exception as e:  # noqa: BLE001
+            return False, f"连接失败：{e}"
+
     async def _handle_panel_mcp_edit(self, request: web.Request) -> web.Response:
         if not self._check_token(request):
             return web.HTTPFound("/panel")
@@ -693,12 +724,23 @@ class WebUIServer:
             index = int(form.get("mcp_index", ""))
         except (TypeError, ValueError):
             index = None
-        redirect = web.HTTPFound("/panel?cat=MCP")
         if action == "delete":
             if index is not None and 0 <= index < len(servers):
                 servers.pop(index)
             ok, msg = self._save_mcp_servers(servers)
             return web.HTTPFound(f"/panel?cat=MCP&msg={quote(msg)}&err={'1' if not ok else ''}")
+        if action == "toggle":
+            if index is not None and 0 <= index < len(servers):
+                servers[index]["enabled"] = not bool(servers[index].get("enabled", True))
+            ok, msg = self._save_mcp_servers(servers)
+            state = "已启用" if servers[index].get("enabled") else "已停用"
+            return web.HTTPFound(f"/panel?cat=MCP&msg={quote(servers[index]['name'] + ' ' + state)}&err={'1' if not ok else ''}")
+        if action == "test":
+            if index is not None and 0 <= index < len(servers):
+                tgt = servers[index]
+                ok, msg = await self._mcp_ping(str(tgt.get("url", "")), int(tgt.get("timeout", 15) or 15))
+                return web.HTTPFound(f"/panel?cat=MCP&msg={quote(msg)}&err={'1' if not ok else ''}")
+            return web.HTTPFound("/panel?cat=MCP&msg=" + quote("未找到该服务器") + "&err=1")
         # 添加 / 保存
         name = str(form.get("mcp_name", "") or "").strip()
         url = str(form.get("mcp_url", "") or "").strip()

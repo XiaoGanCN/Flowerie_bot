@@ -541,6 +541,32 @@ async def test_background_image_survives_restart():
         repo2.close()
 
 
+async def test_mcp_card_toggle_and_edit_link():
+    """MCP 卡片：停用/启用切换；编辑链接进入编辑表单。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, repo, _, server = _make_stack(td)
+        cookie = await _login(server)
+        repo.set_config("MCP_SERVERS", json.dumps(
+            [{"name": "mt", "url": "http://127.0.0.1:8787/mcp", "allowed_tools": "web_search", "timeout": 60, "enabled": True}]))
+        # 停用
+        await server._handle_panel_mcp_edit(FakeRequest(cookies={"fb_token": cookie},
+                                                        form=FakeMulti([("mcp_action", "toggle"), ("mcp_index", "0")])))
+        assert json.loads(repo.get_config("MCP_SERVERS"))[0]["enabled"] is False
+        # 启用
+        await server._handle_panel_mcp_edit(FakeRequest(cookies={"fb_token": cookie},
+                                                        form=FakeMulti([("mcp_action", "toggle"), ("mcp_index", "0")])))
+        assert json.loads(repo.get_config("MCP_SERVERS"))[0]["enabled"] is True
+        # 卡片渲染含按钮 + 编辑链接
+        resp = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"cat": "MCP"}))
+        text = _resp_text(resp)
+        assert "mcp-card" in text
+        assert 'value="toggle"' in text and 'value="test"' in text and 'value="delete"' in text
+        # 编辑链接渲染编辑表单
+        resp2 = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"cat": "MCP", "edit": "0"}))
+        text2 = _resp_text(resp2)
+        assert 'name="mcp_url"' in text2 and 'value="http://127.0.0.1:8787/mcp"' in text2
+
+
 async def test_mcp_server_editor_add_delete():
     """MCP server 结构化编辑器：添加/编辑/删除，服务端组装 MCP_SERVERS JSON。"""
     with tempfile.TemporaryDirectory() as td:
@@ -579,8 +605,11 @@ async def test_mcp_editor_renders_in_config_page():
         resp = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"cat": "MCP"}))
         text = _resp_text(resp)
         assert 'action="/panel/mcp/edit"' in text
-        assert 'name="mcp_name"' in text
-        assert 'name="mcp_url"' in text
+        assert 'mcp-card' in text  # 卡片兜底
+        assert 'value="toggle"' in text  # 停用/启用
+        assert 'value="test"' in text  # 测试
+        assert 'value="delete"' in text  # 删除
+        assert '编辑' in text
         assert '添加服务器' in text
 
 
