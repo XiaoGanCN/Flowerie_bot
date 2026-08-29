@@ -323,9 +323,11 @@ async def main():
     rec(saved, "上传合法 PNG", "已保存 background.png" if saved else "未保存")
 
     # 刷新后仍在（GET /panel/background）
-    st, txt, resp = await http(port, ("GET", "/panel/background", None, None, auth))
-    rec(st == 200 and resp.content_type == "image/png" if hasattr(resp, "content_type") else st == 200,
-        "刷新后背景图仍可访问", f"HTTP {st}")
+    async with SESS.get(f"http://127.0.0.1:{port}/panel/background",
+                        cookies={"fb_token": TOKEN}) as resp:
+        data = await resp.read()
+        rec(resp.status == 200 and data[:8] == PNG[:8],
+            "刷新后背景图仍可访问", f"HTTP {resp.status} content-type={resp.headers.get('Content-Type')} 字节={len(data)}")
 
     # 非法文件
     async def check_reject(fname, fbytes, label):
