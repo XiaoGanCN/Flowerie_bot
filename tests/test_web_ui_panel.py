@@ -100,6 +100,8 @@ async def test_panel_contains_all_config_keys():
         resp = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}))
         text = _resp_text(resp)
         for key in ConfigService.SCHEMA.keys():
+            if key == "MCP_SERVERS":
+                continue  # 渲染为专用编辑器（卡片），由 test_mcp_editor_renders_in_config_page 覆盖
             assert f'name="{key}"' in text, f"面板缺少配置项 {key}"
         assert "保存本组" in text  # 分组保存按钮
 
@@ -598,10 +600,13 @@ async def test_mcp_server_editor_add_delete():
 
 
 async def test_mcp_editor_renders_in_config_page():
-    """MCP 分类不再渲染成 textarea 的 MCP_SERVERS，而渲染结构化编辑器。"""
+    """MCP 分类不再渲染成 textarea，而渲染卡片式编辑器（含卡片与添加表单）。"""
     with tempfile.TemporaryDirectory() as td:
-        _, _, _, server = _make_stack(td)
+        _, repo, _, server = _make_stack(td)
         cookie = await _login(server)
+        # seed 一个 server 让卡片（启停/测试/编辑/删除）渲染出来
+        repo.set_config("MCP_SERVERS", json.dumps(
+            [{"name": "mt", "url": "http://127.0.0.1:8787/mcp", "allowed_tools": "web_search", "timeout": 60, "enabled": True}]))
         resp = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"cat": "MCP"}))
         text = _resp_text(resp)
         assert 'action="/panel/mcp/edit"' in text
