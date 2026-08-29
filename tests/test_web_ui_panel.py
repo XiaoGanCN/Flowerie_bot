@@ -53,7 +53,9 @@ class FakeRequest:
         self.query = query or {}
         self._body = body or {}
         self.cookies = cookies or {}
-        self._form = form or {}
+        # 注意：不能用 `form or {}` —— FakeMulti 继承 dict 但内容在 _items 里，
+        # 空 dict 判定为 falsy 会把表单整个丢掉
+        self._form = form if form is not None else {}
 
     async def json(self):
         return self._body
@@ -230,7 +232,11 @@ async def test_appearance_restore_default():
 
 # ---------- 背景图片上传与安全 ----------
 def _file_field(data: bytes, filename: str = "bg.png"):
-    return web.FileField("bg_image", filename, io.BytesIO(data), "image/png")
+    """构造 multipart 文件字段；兼容不同 aiohttp 版本（3.13+ 需要 headers 参数）。"""
+    try:
+        return web.FileField("bg_image", filename, io.BytesIO(data), "image/png", headers={})
+    except TypeError:
+        return web.FileField("bg_image", filename, io.BytesIO(data), "image/png")
 
 
 async def test_upload_valid_png():
