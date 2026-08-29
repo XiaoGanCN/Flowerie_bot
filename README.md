@@ -29,7 +29,7 @@
 | 🔧 MCP 工具 | 外部工具调用（如搜索），插件式多 server + 工具白名单 + 独立熔断 |
 | ⚔️ 引战检测 | 关键词 + AI 双重确认 |
 | 🎯 冷却/预算 | 用户/机器人冷却、全局+群+用户三层 AI 预算、复读检测、主动聊天 |
-| 🖥️ Web UI | 管理后台：配置/人格/群聊知识/外观/日志，全零 JS，热更新 |
+| 🖥️ Web UI | 管理后台：配置/人格/群聊知识/外观/日志/用户状态，全零 JS，热更新 |
 | 🛡️ 安全 | SSRF 防护、Prompt 注入多层防线、知识防污染、日志脱敏、双层熔断 |
 
 ## 快速开始
@@ -109,7 +109,7 @@ OneBot WebSocket connected
 默认关闭。启用后访问 `http://127.0.0.1:8080/panel`（无 JS 兼容面板，手机浏览器也能用）
 用 `WEB_UI_USERNAME` / `WEB_UI_PASSWORD` 登录。
 
-面板五个页签，全部纯 HTML + CSS + 服务端渲染，**零 JavaScript**：
+面板六个页签，全部纯 HTML + CSS + 服务端渲染，**零 JavaScript**：
 
 - **配置**：全部配置变量按功能分组（fieldset 表单），
   bool/int/secret/文本/列表/JSON 各有对应控件（checkbox/number/password/textarea/select）；
@@ -162,7 +162,7 @@ Web UI「群聊知识」页管理；详细设计见 [docs/knowledge.md](docs/kno
 
 ```bash
 pip install -r requirements-dev.txt
-pytest              # 507 个测试（含 Persona / Meme / Web UI 新套件）
+pytest              # 535 个测试（含 Persona / Meme / Web UI 新套件）
 ruff check .        # 代码检查
 ```
 

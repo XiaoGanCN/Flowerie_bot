@@ -76,7 +76,7 @@ class McpPanelMixin:
         payload = {
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                       "clientInfo": {"name": "flowerie", "version": "1.0.1"}},
+                       "clientInfo": {"name": "flowerie", "version": "1.1.0"}},
         }
         try:
             async with _aiohttp.ClientSession() as sess:

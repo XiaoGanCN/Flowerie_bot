@@ -14,7 +14,7 @@ pytest              # 全部测试
 pytest tests/xxx    # 单文件
 ```
 
-当前 517 个测试：并发安全、故障隔离、熔断、状态治理、Prompt/Sticker/MCP/Web UI、SSRF/注入回归、MCP 额度/安全、配置持久化/校验、Web UI 注册/无 JS 面板、**Persona 系统、群聊 Meme Knowledge、每日总结、Web UI 人格/知识页**（新增 `test_persona_manager.py` / `test_meme_knowledge.py` / `test_meme_summary.py` / `test_web_ui_persona_knowledge.py`）。
+当前 535 个测试：并发安全、故障隔离、熔断、状态治理、Prompt/Sticker/MCP/Web UI、SSRF/注入回归、MCP 额度/安全、配置持久化/校验、Web UI 注册/无 JS 面板、**Persona 系统、群聊 Meme Knowledge、每日总结、Web UI 人格/知识页**（新增 `test_persona_manager.py` / `test_meme_knowledge.py` / `test_meme_summary.py` / `test_web_ui_persona_knowledge.py`）。
 
 ## 代码检查
 
@@ -42,13 +42,14 @@ src/
 │   ├── toxic_detector.py  # 引战检测 ToxicDetector（从 AIClient 拆分）
 │   ├── config_schema.py   # 配置声明 SCHEMA（从 ConfigService 拆分）
 │   ├── web_ui.py          # Web UI 薄门面（~340 行；面板 mixin 聚合）
-│   ├── webui_panels/      # 各功能域处理器 mixin（auth/config/appearance/mcp/persona/knowledge/prompt）
+│   ├── webui_panels/      # 各功能域处理器 mixin（account/auth/config/appearance/mcp/persona/knowledge/prompt）
 │   ├── webui_render/      # 渲染层（theme/pages/config_panel/appearance/persona/knowledge）
 │   ├── persona_manager/persona_presets（人格）
-│   └── meme_knowledge_manager/meme_summary（群聊梗知识/每日总结）
+│   ├── meme_knowledge_manager/meme_summary（群聊梗知识/每日总结）
+│   └── system_status.py     # 服务器状态采集（用户状态页用，零依赖 /proc）
 ├── repositories/   # SQLite 存储层（记忆/设置/表情包索引/梗知识）
 └── utils/          # 日志/trace/指标/熔断/过期容器/任务管理
-tests/              # 517 个测试
+tests/              # 535 个测试
 docs/               # 文档
 ```
 

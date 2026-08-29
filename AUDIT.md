@@ -22,7 +22,7 @@
 >   config_schema）、MessageRouter（732→564 行，拆出 ai_gateway）；
 >   本地手工修改的 .env 不再被 settings.db 旧值覆盖（较新优先 + 同步）—— ✅ 完成
 >
-> **当前基线**：测试 **517** 个（pytest + ruff 全过，CI Python 3.9 / 3.12 全绿）。
+> **当前基线**：测试 **535** 个（pytest + ruff 全过，CI Python 3.9 / 3.12 全绿）。
 
 > 审计对象：Flowerie_bot（NapCat 版，`/storage/emulated/0/Flowerie_bot/`）
 > 审计时间：2026-08-27
