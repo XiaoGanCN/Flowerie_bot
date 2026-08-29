@@ -1,0 +1,41 @@
+name: Build
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install dependencies
+      run:
+
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    - name: Build
+      run:
+
+        pyinstaller --onefile main.py
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: Flowerie_bot-${{ matrix.os }}
+        path: dist/
