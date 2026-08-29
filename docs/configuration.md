@@ -112,6 +112,32 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 
 > 同一局域网内的电脑访问：在 `.env` 加 `WEB_UI_ALLOW_LAN=true`（显式开关），然后浏览器打开 `http://局域网IP:8080/panel`（请设置强密码，勿直接暴露公网）。
 
+### 配置中心（无 JS 面板）
+
+`/panel` 面板的三个页签全部**纯 HTML + CSS + 服务端渲染，零 JavaScript**：
+
+- **配置页**：全部 **97 个配置变量**按 19 个功能分组展示（AI / 基础 / 连接 /
+  行为 / 稳定性 / 记忆 / 表情包 / MCP / Web UI / 日志 / 预算 / 主动聊天 /
+  复读 / 戳戳 / 文件解析 / 安全 / 白名单 / 存档 / 数据路径），每组一个表单保存。
+  控件按类型自动选择：bool→checkbox、int/float→number（含 min/max/step）、
+  secret→password（只显示掩码，留空不覆盖）、枚举→select（日志级别/格式）、
+  多行/JSON→textarea、列表→逗号分隔文本框。
+- **保存与持久化**：提交后服务端校验（类型/范围/枚举/JSON/列表），通过则
+  **真正写入项目根 `.env`**——原子更新（临时文件 + fsync + 替换）、保留注释与
+  原有变量、正确处理空格/`#`/`=`/引号/中文/换行，并发提交有锁保护；
+  同时热更新运行中的配置（部分需重启的项在页面上明确标注）。
+- **外观页**：7 套内置主题（`default`/`dark`/`light`/`sakura`/`ocean`/
+  `forest`/`amoled`，body class 切换 + CSS variables）、自定义背景颜色
+  （`<input type="color">`）、背景图片上传（PNG/JPEG/WEBP/GIF，≤5MB，
+  服务端魔数校验、固定文件名 `background.<ext>` 存于 `data/webui/background/`，
+  无路径穿越）、图片透明度（0~100%）、显示方式（cover/contain + 位置），
+  以及「恢复默认主题」「删除背景图片」。
+  背景颜色与图片透明度通过 CSS 渐变遮罩合成**同一视觉层**，刷新与重启均保留
+  （主题/颜色/透明度存 `data/settings.db` 的 `webui_prefs` 表，图片落盘）。
+
+> 管理账号（`WEB_UI_USERNAME` / `WEB_UI_PASSWORD`）不在配置表单中：统一走
+> `/panel` 的注册页管理，密码只存 scrypt 哈希，避免明文写入 `.env`。
+
 ## 日志
 
 | 变量 | 说明 | 默认 |

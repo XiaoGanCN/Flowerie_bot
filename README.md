@@ -103,8 +103,21 @@ OneBot WebSocket connected
 ## Web UI
 
 默认关闭。启用后访问 `http://127.0.0.1:8080/panel`（无 JS 兼容面板，手机浏览器也能用）
-用 `WEB_UI_USERNAME` / `WEB_UI_PASSWORD` 登录
-可管理 AI / Bot / 记忆 / 表情包 / MCP 配置（API Key 只显示掩码）。详见 [docs/configuration.md](docs/configuration.md)。
+用 `WEB_UI_USERNAME` / `WEB_UI_PASSWORD` 登录。
+
+面板三个页签，全部纯 HTML + CSS + 服务端渲染，**零 JavaScript**：
+
+- **配置**：全部 **97 个配置变量**按 19 个功能分组（fieldset 表单），
+  bool/int/secret/文本/列表/JSON 各有对应控件（checkbox/number/password/textarea/select）；
+  每组独立保存，修改**真正写入项目根 `.env`**（原子更新、保留注释与原有变量），
+  重启后由 pydantic-settings 自动读取；Secret 只显示掩码、留空不覆盖
+- **外观**：7 套内置主题（默认/深色/浅色/Sakura/Ocean/Forest/AMOLED）、
+  自定义背景颜色、背景图片上传（PNG/JPEG/WEBP/GIF，≤5MB，魔数校验，持久化到
+  `data/webui/background/`）、图片透明度、显示方式（cover/contain + 位置）、
+  恢复默认主题 / 删除背景图片
+- **日志**：最近 200 条运行日志
+
+详见 [docs/configuration.md](docs/configuration.md)。
 
 ### 如何开启
 
@@ -128,7 +141,7 @@ OneBot WebSocket connected
 
 ```bash
 pip install -r requirements-dev.txt
-pytest              # 326 个测试
+pytest              # 432 个测试
 ruff check .        # 代码检查
 ```
 
