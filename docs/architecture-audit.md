@@ -14,6 +14,11 @@
 >   MCP 插件式多 server（`MCP_SERVERS`）、Web UI 改为无 JS 服务端渲染面板（`/panel`，支持注册，账号持久化 `settings.db`）—— ✅ 完成
 >
 > **当前基线**：测试 **535** 个（pytest + ruff 全过，CI Python 3.9 / 3.12 全绿）。
+>
+> **v1.1.0 现行架构说明**（本报告为 v1.0.1 前的历史审计快照，正文保留当时的架构描述）：
+> 此后已做上帝类拆分——WebUIServer 1129→336 行（功能域 mixin `webui_panels/` + 渲染层 `webui_render/`）、
+> AIClient 800→353 行（拆出 `prompt_builder`/`vision`/`toxic_detector`）、ConfigService 689→455 行（拆出 `config_schema`）、
+> MessageRouter 732→564 行（拆出 `ai_gateway`）；当前目录结构见 [development.md](development.md)。
 
 > 审计对象：Flowerie_bot（NapCat 版，`/storage/emulated/0/Flowerie_bot/`）
 > 审计时间：2026-08-27

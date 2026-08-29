@@ -138,8 +138,9 @@ MCP 服务器以**卡片列表**展示，无需手写 JSON：
 | :--- | :--- |
 | 配置持久化 | 项目根 `.env`（原子写入）+ `data/settings.db`（`app_config` / `webui_prefs` / `personas` / `group_persona` / `persona_global` 表） |
 | 背景图片 | `data/webui/background/` |
-| 服务端实现 | `src/services/web_ui.py`（路由/处理器） |
-| 模板与主题 | `src/services/web_ui_assets.py`（HTML/CSS/7 主题/人格与知识页渲染） |
+| 服务端实现 | `src/services/web_ui.py`（薄门面：认证/面板壳/生命周期）+ `src/services/webui_panels/`（功能域 mixin：account/auth/config/appearance/mcp/persona/knowledge/prompt） |
+| 模板与主题 | `src/services/web_ui_assets.py`（聚合导出）+ `src/services/webui_render/`（theme/pages/config_panel/appearance/persona/knowledge/account，7 主题） |
+| 服务器状态 | `src/services/system_status.py`（用户状态页，零依赖读 /proc） |
 | 配置业务层 | `src/services/config_service.py`（配置 SCHEMA + `.env`/settings.db 双写） |
 | 人格业务层 | `src/services/persona_manager.py` + `src/services/persona_presets.py`（内置预设） |
 | 群聊知识业务层 | `src/services/meme_knowledge_manager.py` + `src/repositories/meme_knowledge_repository.py` |
