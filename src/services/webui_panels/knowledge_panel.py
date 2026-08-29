@@ -28,6 +28,7 @@ class KnowledgePanelMixin:
         return render_knowledge_tab(gid, rows, search=search or "", count=count,
                                     max_memes=self._meme_manager.max_memes_per_group, enabled=True)
 
+    @staticmethod
     def _fmt_ts(ts) -> str:
         try:
             return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(ts)))

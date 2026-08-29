@@ -53,6 +53,7 @@ class McpPanelMixin:
                 out[name] = (ok_str == "ok", msg)
         return out
 
+    @staticmethod
     def _mcp_server_error(name: str, url: str, tools: str) -> str:
         if not name:
             return "名称必填"

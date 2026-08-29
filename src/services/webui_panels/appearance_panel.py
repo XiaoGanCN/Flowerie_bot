@@ -247,5 +247,6 @@ class AppearancePanelMixin:
         self._set_pref("bg_image", target.name)
         return True, "背景图片已更新"
 
+    @staticmethod
     def _bg_color_pref_key(theme: str) -> str:
         return f"bg_color__{theme}"

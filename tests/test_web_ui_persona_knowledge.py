@@ -19,6 +19,7 @@ from tests.test_web_ui_panel import FakeRequest, _resp_text
 def _make_stack(tmp):
     repo = SettingsRepository(os.path.join(tmp, "settings.db"))
     config = FakeSettings(DEEPSEEK_API_KEY="sk-secret-key-1234567890")
+    config.PERSONA_DEFAULT = "flowerie"
     config.WEB_UI_USERNAME = "admin"
     config.WEB_UI_PASSWORD = "secret123"
     config.WEB_UI_TOKEN_TTL_SECONDS = 3600
