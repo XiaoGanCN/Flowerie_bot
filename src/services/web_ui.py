@@ -317,14 +317,20 @@ class WebUIServer:
             opacity = int(self._pref("bg_image_opacity", "100") or 100)
         except ValueError:
             opacity = 100
+        theme = self._pref("theme", "default")
         return {
-            "theme": self._pref("theme", "default"),
-            "bg_color": self._pref("bg_color", ""),
+            "theme": theme,
+            # 背景颜色按主题隔离：bg_color__<theme>，各主题互不污染
+            "bg_color": self._pref(f"bg_color__{theme}", ""),
             "bg_image": self._pref("bg_image", ""),
             "opacity": max(0, min(100, opacity)),
             "size": self._pref("bg_size", "cover"),
             "position": self._pref("bg_position", "center"),
         }
+
+    @staticmethod
+    def _bg_color_pref_key(theme: str) -> str:
+        return f"bg_color__{theme}"
 
     def _background_dir(self) -> Path:
         return Path(self._data_dir) / "background"
@@ -513,16 +519,23 @@ class WebUIServer:
         theme = str(form.get("theme", "") or "")
         if theme and theme not in THEMES:
             errors.append("主题无效")
-        # 背景颜色：优先手动输入的文本（#RRGGBB / R,G,B / rgb()），取色器作为兜底
+        # 背景颜色：跟主题走。颜色字段默认回显"当前主题"的实际背景；提交时只有当
+        # 颜色属于当前正在看的主题（color_for_theme 与所选 theme 一致）才生效；
+        # 切到别的主题时忽略旧颜色、用新主题默认，避免主题互相污染。
         color_text = str(form.get("bg_color_input", "") or "").strip()
         color_picker = str(form.get("bg_color", "") or "").strip()
-        bg_color = ""
-        if color_text or color_picker:
-            parsed = normalize_color(color_text) or normalize_color(color_picker)
-            if parsed is None:
-                errors.append("背景颜色格式无效（支持 #RRGGBB 或 R,G,B 或 rgb(r,g,b)）")
-            else:
-                bg_color = parsed
+        color_for_theme = str(form.get("color_for_theme", "") or "").strip()
+        same_theme = (color_for_theme == theme)
+        custom_text = normalize_color(color_text)
+        custom_picker = normalize_color(color_picker) if same_theme else None
+        if (color_text and custom_text is None) or (same_theme and color_picker and custom_picker is None):
+            errors.append("背景颜色格式无效（支持 #RRGGBB 或 R,G,B 或 rgb(r,g,b)）")
+        if custom_text:
+            bg_color = custom_text  # 手动文本优先（明确意图）
+        elif custom_picker:
+            bg_color = custom_picker  # 同主题下的取色器
+        else:
+            bg_color = ""  # 用该主题默认背景（含切换主题时忽略旧色）
         opacity_raw = str(form.get("bg_image_opacity", "") or "100")
         try:
             opacity = int(opacity_raw)
@@ -553,11 +566,11 @@ class WebUIServer:
         if errors:
             return web.HTTPFound(f"/panel?tab=appearance&msg={quote('未保存：' + '；'.join(errors))}&err=1")
 
-        # 全部通过 → 持久化（主题/颜色/透明度/显示方式）
+        # 全部通过 → 持久化（主题/颜色/透明度/显示方式；背景色按主题隔离）
         if theme:
             self._set_pref("theme", theme)
-        if bg_color:
-            self._set_pref("bg_color", bg_color)
+        # bg_color 为空=清除该主题自定义色（用主题默认背景）；有值=保存为该主题背景
+        self._set_pref(self._bg_color_pref_key(theme or "default"), bg_color)
         self._set_pref("bg_image_opacity", str(opacity))
         self._set_pref("bg_size", size)
         self._set_pref("bg_position", position)
@@ -575,7 +588,9 @@ class WebUIServer:
         if not self._check_token(request):
             return web.HTTPFound("/panel")
         self._set_pref("theme", "default")
-        self._set_pref("bg_color", "")
+        for k, _ in self.config_service.repository.list_prefs():
+            if k.startswith("bg_color__"):
+                self.config_service.repository.delete_pref(k)
         self._set_pref("bg_image_opacity", "100")
         self._set_pref("bg_size", "cover")
         self._set_pref("bg_position", "center")

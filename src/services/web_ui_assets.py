@@ -92,42 +92,42 @@ THEMES = {
     },
     "ocean": {
         "label": "Ocean",
-        "desc": "深海蓝，沉静可靠",
-        "bg": "#0f1f2e",
+        "desc": "明亮天空蓝，清澈惬意",
+        "bg": "#E7F3FC",
         "vars": {
-            "--panel-bg": "rgba(18, 40, 60, 0.9)",
-            "--panel-border": "#24475f",
-            "--text": "#cfe3f0",
-            "--text-muted": "#7fa3ba",
-            "--heading": "#e6f2fa",
-            "--accent": "#38bdf8",
-            "--accent-hover": "#0ea5e9",
-            "--accent-soft": "rgba(56, 189, 248, 0.13)",
-            "--input-bg": "#12283a",
-            "--input-border": "#2b5570",
-            "--ok": "#4ade80",
-            "--err": "#f87171",
-            "--shadow": "0 10px 30px rgba(0,0,0,.45)",
+            "--panel-bg": "rgba(255, 255, 255, 0.88)",
+            "--panel-border": "#C9E3F6",
+            "--text": "#24475F",
+            "--text-muted": "#6B8FA8",
+            "--heading": "#15354D",
+            "--accent": "#0B93E7",
+            "--accent-hover": "#0284C7",
+            "--accent-soft": "rgba(11, 147, 231, 0.12)",
+            "--input-bg": "#FFFFFF",
+            "--input-border": "#C6E1F4",
+            "--ok": "#1A7F37",
+            "--err": "#CF222E",
+            "--shadow": "0 10px 30px rgba(40, 100, 150, .14)",
         },
     },
     "forest": {
         "label": "Forest",
-        "desc": "森林绿，自然宁静",
-        "bg": "#14211a",
+        "desc": "明亮草绿，清新自然",
+        "bg": "#EAF6EC",
         "vars": {
-            "--panel-bg": "rgba(22, 40, 30, 0.9)",
-            "--panel-border": "#2e503c",
-            "--text": "#d3e5d8",
-            "--text-muted": "#8aa894",
-            "--heading": "#e8f5ec",
-            "--accent": "#4ade80",
-            "--accent-hover": "#22c55e",
-            "--accent-soft": "rgba(74, 222, 128, 0.13)",
-            "--input-bg": "#172a20",
-            "--input-border": "#35604a",
-            "--ok": "#86efac",
-            "--err": "#f87171",
-            "--shadow": "0 10px 30px rgba(0,0,0,.45)",
+            "--panel-bg": "rgba(255, 255, 255, 0.9)",
+            "--panel-border": "#CFE9D6",
+            "--text": "#2F5A39",
+            "--text-muted": "#7A9C82",
+            "--heading": "#1F3D27",
+            "--accent": "#2FA85A",
+            "--accent-hover": "#228B46",
+            "--accent-soft": "rgba(47, 168, 90, 0.12)",
+            "--input-bg": "#FFFFFF",
+            "--input-border": "#CBE7D2",
+            "--ok": "#1A7F37",
+            "--err": "#CF222E",
+            "--shadow": "0 10px 30px rgba(60, 120, 80, .14)",
         },
     },
     "amoled": {
@@ -509,14 +509,16 @@ def render_appearance(theme: str, bg_color: str, opacity: int, size: str, positi
         f'<div class="theme-grid">{"".join(cards)}</div>'
         '<p class="hint">主题通过服务端渲染切换（body class），不依赖任何脚本</p></fieldset>'
 
-        '<fieldset class="group"><legend>背景颜色</legend>'
+        '<fieldset class="group"><legend>背景颜色（跟主题绑定）</legend>'
+        f'<input type="hidden" name="color_for_theme" value="{_esc(theme)}">'
         '<div class="row"><div class="row-control" style="flex-direction:row;align-items:center;gap:14px;flex-wrap:wrap">'
         f'<input type="color" name="bg_color" value="{_esc(bg_color)}" title="取色器">'
         f'<input type="text" name="bg_color_input" value="{_esc(bg_color)}" '
         'placeholder="#FDEEF3 或 253,238,243" class="color-text" '
         'title="可粘贴 #RRGGBB 或输入 R,G,B / rgb(r,g,b)">'
-        '<span class="hint">支持十六进制或 RGB 手动输入（如 <code>253,238,243</code>）；'
-        '与背景图片透明度共同组成最终背景视觉，提交后刷新 / 重启服务器均保留</span>'
+        '<span class="hint">背景颜色已随所选主题自动带好（切换主题即整套换肤）；'
+        '想微调就用取色器或输入 <code>#RRGGBB</code> / <code>253,238,243</code>，'
+        '只改当前主题，不影响其他主题预览</span>'
         '</div></div></fieldset>'
 
         '<fieldset class="group"><legend>背景图片</legend>'
