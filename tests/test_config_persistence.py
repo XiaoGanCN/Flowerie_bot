@@ -152,3 +152,73 @@ def test_ui_shows_runtime_value_after_apply():
         assert listed["MAX_REPLY_LENGTH"] == "120"   # 显示层
         assert config.MAX_REPLY_LENGTH == 120        # 运行层（一致）
         assert svc.get_value("MAX_REPLY_LENGTH") == "120"
+
+
+# ---------- P4-1：本地修改的新 .env 不被 settings.db 旧值覆盖 ----------
+def test_local_env_newer_overrides_stale_db():
+    """场景：Web UI 保存过旧值（db 更新于 t1），管理员随后在本地改 .env（mtime t2>t1）。
+    重启 apply_persisted 后：以 .env 新值为准，且 db 同步为新值（防旧值回压）。"""
+    import os
+    import time as _time
+
+
+    tmp = tempfile.TemporaryDirectory()
+    try:
+        env_path = os.path.join(tmp.name, ".env")
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write("MAX_REPLY_LENGTH=40\n")
+        repo = SettingsRepository(os.path.join(tmp.name, "settings.db"))
+        # Web UI 保存旧值（db updated_at 早于 env mtime）
+        repo.set_config("MAX_REPLY_LENGTH", "33")
+        _time.sleep(0.05)
+        # 本地修改 .env 为新值（mtime 变新）
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write("MAX_REPLY_LENGTH=55\n")
+        config = ConfigService(FakeSettings(), repo, env_path=env_path)
+        assert config.apply_persisted() >= 1
+        # .env 新值生效（不被 db 旧值 33 覆盖）
+        assert config.config.MAX_REPLY_LENGTH == 55
+        # db 已同步为新值（下次启动不会回压旧值）
+        assert repo.get_config("MAX_REPLY_LENGTH") == "55"
+        repo.close()
+    finally:
+        tmp.cleanup()
+
+
+def test_db_newer_still_prioritized():
+    """场景：Web UI 保存（db updated_at 晚于 .env mtime）→ 重启后 db 值优先（原语义不变）。"""
+    import os
+    import time as _time
+
+
+    tmp = tempfile.TemporaryDirectory()
+    try:
+        env_path = os.path.join(tmp.name, ".env")
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write("MAX_REPLY_LENGTH=40\n")
+        _time.sleep(0.05)
+        repo = SettingsRepository(os.path.join(tmp.name, "settings.db"))
+        # Web UI 保存（db updated_at 晚于 .env mtime）
+        repo.set_config("MAX_REPLY_LENGTH", "66")
+        config = ConfigService(FakeSettings(), repo, env_path=env_path)
+        assert config.apply_persisted() >= 1
+        assert config.config.MAX_REPLY_LENGTH == 66  # db 优先（db 更新）
+        repo.close()
+    finally:
+        tmp.cleanup()
+
+
+def test_apply_persisted_without_env_unchanged():
+    """未启用 .env 持久化（env_store=None）时行为不变：db 值直接应用。"""
+    import os
+
+    tmp = tempfile.TemporaryDirectory()
+    try:
+        repo = SettingsRepository(os.path.join(tmp.name, "settings.db"))
+        repo.set_config("MAX_REPLY_LENGTH", "77")
+        config = ConfigService(FakeSettings(), repo, env_path=None)  # 无 .env 持久化
+        assert config.apply_persisted() >= 1
+        assert config.config.MAX_REPLY_LENGTH == 77
+        repo.close()
+    finally:
+        tmp.cleanup()

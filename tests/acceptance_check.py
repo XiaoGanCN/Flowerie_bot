@@ -415,11 +415,14 @@ async def main():
     import subprocess as sp
     out = sp.run(["grep", "-rnE", "<script|javascript:|onclick=|onload=|addEventListener|fetch\\(|XMLHttpRequest|let |const |var ",
                   "src/services/web_ui.py", "src/services/web_ui_assets.py",
+                  "src/services/webui_panels", "src/services/webui_render",
                   "src/repositories/env_store.py", "src/services/config_service.py",
                   "src/repositories/settings_repository.py", "main.py",
                   "src/services/persona_manager.py", "src/services/persona_presets.py",
                   "src/services/meme_knowledge_manager.py", "src/services/meme_summary.py",
-                  "src/repositories/meme_knowledge_repository.py"],
+                  "src/repositories/meme_knowledge_repository.py",
+                  "src/services/prompt_builder.py", "src/services/vision.py",
+                  "src/services/toxic_detector.py"],
                  capture_output=True, text=True)
     js_hits = [l for l in (out.stdout or "").splitlines()
                if not re.search(r"javascript:|# noqa", l)]

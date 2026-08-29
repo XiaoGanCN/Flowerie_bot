@@ -426,3 +426,27 @@ async def test_html_structure_balanced():
                 o = text.count(f"<{tag}")
                 c = text.count(f"</{tag}>")
                 assert o == c, f"页面{i} 标签 <{tag}> 不配对：开{o} 闭{c}"
+
+
+# ---------- 防上帝类回归（核心模块行数上限） ----------
+def test_core_modules_stay_slim():
+    """防上帝类回归：拆分后核心模块行数有上限（Web UI/AIClient/配置/Router）。
+
+    拆分目标：web_ui.py 1129→336、web_ui_assets.py 1082→聚合导出、
+    ai_client.py 800→353、config_service.py 689→455、message_router.py 732→564。
+    上限留有余量；新功能应继续走拆分方向而非堆回单个文件。
+    """
+    import os
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    limits = {
+        "src/services/web_ui.py": 430,           # 薄门面 + 核心（认证/面板壳/生命周期）
+        "src/services/web_ui_assets.py": 120,    # 渲染层聚合导出（实现拆到 webui_render/）
+        "src/services/ai_client.py": 430,        # 职责服务已拆：prompt_builder/vision/toxic
+        "src/services/config_service.py": 520,   # 数据声明已拆到 config_schema.py
+        "src/core/message_router.py": 650,       # AI 准入层已拆到 ai_gateway.py
+    }
+    for rel, limit in limits.items():
+        p = os.path.join(root, rel)
+        lines = sum(1 for _ in open(p, encoding="utf-8"))
+        assert lines <= limit, f"{rel} 行数 {lines} 超限 {limit}（防上帝类回归）"

@@ -117,6 +117,13 @@ class SettingsRepository:
             row = self._conn.execute("SELECT value FROM app_config WHERE key=?", (key,)).fetchone()
             return row["value"] if row else None
 
+    def get_config_meta(self, key: str) -> Optional[Tuple[str, float]]:
+        """返回 (value, updated_at)；用于与本地 .env 的修改时间比较（防旧值覆盖）。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value, updated_at FROM app_config WHERE key=?", (key,)).fetchone()
+            return (row["value"], row["updated_at"]) if row else None
+
     def set_config(self, key: str, value: str) -> None:
         import time
         with self._lock:

@@ -16,7 +16,13 @@
 >   群聊 Meme Knowledge（按群隔离、命中注入、每日 24h 批量总结 + MCP 按需检索）、
 >   Web UI 人格/群聊知识管理页（零 JS）—— ✅ 完成（CI 全绿后验收通过）
 >
-> **当前基线**：测试 **507** 个（pytest + ruff 全过，CI Python 3.9 / 3.12 全绿）。
+> - **第五轮：上帝类拆分 + .env 防旧值覆盖**：WebUIServer（1129→336 行，功能域
+>   mixin 拆分）、渲染层（webui_render/ 包）、AIClient（800→353 行，拆出
+>   prompt_builder/vision/toxic_detector）、ConfigService（689→455 行，拆出
+>   config_schema）、MessageRouter（732→564 行，拆出 ai_gateway）；
+>   本地手工修改的 .env 不再被 settings.db 旧值覆盖（较新优先 + 同步）—— ✅ 完成
+>
+> **当前基线**：测试 **517** 个（pytest + ruff 全过，CI Python 3.9 / 3.12 全绿）。
 
 > 审计对象：Flowerie_bot（NapCat 版，`/storage/emulated/0/Flowerie_bot/`）
 > 审计时间：2026-08-27

@@ -22,6 +22,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.config import Settings
 from src.repositories.env_store import EnvFileStore
 from src.repositories.settings_repository import SettingsRepository
+from src.services.config_schema import (
+    _ENUM_OPTIONS,
+    _ENUM_VALUES,
+    _RANGES,
+    CATEGORY_LABELS,
+    CATEGORY_ORDER,
+    SCHEMA,
+)
 from src.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -67,6 +75,19 @@ def is_hashed_password(stored: str) -> bool:
 
 
 class ConfigService:
+    """Web UI 可编辑配置的业务层。
+
+    数据声明（SCHEMA/分类/范围/枚举）已拆分到 src/services/config_schema.py；
+    本类只保留校验、持久化（.env + settings.db 双写）与热更新逻辑。
+    以下类属性为兼容别名：ConfigService.SCHEMA 等仍可直接访问。
+    """
+
+    SCHEMA = SCHEMA
+    CATEGORY_LABELS = CATEGORY_LABELS
+    CATEGORY_ORDER = CATEGORY_ORDER
+    _ENUM_VALUES = _ENUM_VALUES
+    _ENUM_OPTIONS = _ENUM_OPTIONS
+    _RANGES = _RANGES
     """管理 Web UI 可编辑的配置（覆盖 Settings 全部可管理变量）。
 
     SCHEMA 条目格式：key -> (分类, 类型, 是否敏感, 是否热更新, 说明)
@@ -79,168 +100,8 @@ class ConfigService:
     """
 
     # key -> (分类, 类型, 是否敏感, 是否热更新, 说明)
-    SCHEMA: Dict[str, Tuple[str, str, bool, bool, str]] = {
-        # ---------- AI / Provider ----------
-        "DEEPSEEK_API_KEY": ("AI", "secret", True, True, "DeepSeek API 密钥（必填）"),
-        "DEEPSEEK_API_URL": ("AI", "str", False, True, "DeepSeek API 地址"),
-        "DEEPSEEK_MODEL": ("AI", "str", False, True, "群聊对话模型"),
-        "TOXIC_API_KEY": ("AI", "secret", True, True, "引战检测 AI 密钥（留空回退 DeepSeek）"),
-        "TOXIC_API_URL": ("AI", "str", False, True, "引战检测 AI 地址（留空回退 DeepSeek）"),
-        "TOXIC_MODEL": ("AI", "str", False, True, "引战检测模型（留空回退 DeepSeek）"),
-        "VISION_API_KEY": ("AI", "secret", True, True, "视觉识图密钥（留空回退 DeepSeek）"),
-        "VISION_API_URL": ("AI", "str", False, True, "视觉识图 API 地址（留空回退 DeepSeek）"),
-        "VISION_MODEL": ("AI", "str", False, True, "视觉识图模型"),
-        "VISION_TIMEOUT": ("AI", "int", False, True, "识图超时（秒）"),
-        "VISION_FORWARD_IMAGES": ("AI", "bool", False, True, "识别合并转发里的图片（省视觉 token，默认关）"),
-        # ---------- 基础配置 ----------
-        "BOT_QQ": ("Bot", "int", False, False, "机器人 QQ 号（需重启）"),
-        "BOT_NICKNAME": ("Bot", "str", False, True, "机器人昵称"),
-        "ONLY_REPLY_WHEN_AT": ("Bot", "bool", False, True, "仅回复 @ 消息（哑巴模式）"),
-        "MAX_REPLY_LENGTH": ("Bot", "int", False, True, "最大回复长度"),
-        "MAX_CONSECUTIVE_REPLIES": ("Bot", "int", False, True, "连续回复上限"),
-        "MAX_CUSTOM_PROMPT_LENGTH": ("Bot", "int", False, False, "自定义 Prompt 最大长度（需重启）"),
-        # ---------- QQ / OneBot 连接 ----------
-        "WS_HOST": ("Connection", "str", False, False, "反向 WS 监听地址（需重启）"),
-        "WS_PORT": ("Connection", "int", False, False, "反向 WS 端口（需重启）"),
-        "HTTP_API_BASE": ("Connection", "str", False, False, "NapCat HTTP API 地址（需重启）"),
-        "WS_TOKEN": ("Connection", "secret", True, False, "反向 WS 鉴权 token（留空=不鉴权，需重启）"),
-        # ---------- 行为与回复 ----------
-        "CONTEXT_SIZE": ("Behavior", "int", False, True, "上下文条数"),
-        "USER_COOLDOWN": ("Behavior", "int", False, True, "用户冷却（秒）"),
-        "BOT_COOLDOWN": ("Behavior", "int", False, True, "机器人冷却（秒）"),
-        # ---------- 稳定性与熔断 ----------
-        "EVENT_PROCESS_TIMEOUT": ("Stability", "int", False, True, "单条消息处理超时（秒）"),
-        "MAX_CONCURRENT_AI": ("Stability", "int", False, False, "并发 AI 上限（需重启）"),
-        "AI_MAX_RETRIES": ("Stability", "int", False, True, "AI 最大重试次数"),
-        "AI_CIRCUIT_BREAKER_FAILURES": ("Stability", "int", False, True, "AI 熔断失败阈值"),
-        "AI_CIRCUIT_BREAKER_PAUSE_SECONDS": ("Stability", "int", False, True, "AI 熔断冷却（秒）"),
-        "GROUP_CIRCUIT_BREAKER_FAILURES": ("Stability", "int", False, True, "群级熔断失败阈值"),
-        "GROUP_CIRCUIT_BREAKER_PAUSE_SECONDS": ("Stability", "int", False, True, "群级熔断冷却（秒）"),
-        "GROUP_CIRCUIT_BREAKER_MAX_GROUPS": ("Stability", "int", False, False, "群级熔断器容量上限（需重启）"),
-        "GROUP_CIRCUIT_BREAKER_TTL_SECONDS": ("Stability", "int", False, True, "群级熔断器空闲 TTL（秒）"),
-        "CONTEXT_BACKUP_PATH": ("Stability", "str", False, False, "上下文备份库路径（需重启）"),
-        "CONTEXT_BACKUP_INTERVAL": ("Stability", "int", False, True, "上下文备份间隔（秒）"),
-        # ---------- 记忆库 ----------
-        "MEMORY_PATH": ("Memory", "str", False, False, "记忆库路径（需重启）"),
-        "MEMORY_TTL_DAYS": ("Memory", "int", False, True, "用户原话记忆保留天数（0=永久）"),
-        "MODEL_MEMORY_TTL_DAYS": ("Memory", "int", False, True, "AI 推断记忆保留天数（0=跟随）"),
-        "AUDIT_LOG_PATH": ("Memory", "str", False, False, "审计日志路径（需重启）"),
-        "MEMORY_DISABLED_GROUPS": ("Memory", "list-int", False, True, "禁用记忆的群号（逗号分隔）"),
-        # ---------- 表情包 ----------
-        "STICKER_ENABLED": ("Sticker", "bool", False, True, "表情包功能开关"),
-        "STICKER_DIR": ("Sticker", "str", False, False, "表情包目录（需重启；空=禁用）"),
-        "STICKER_DB_PATH": ("Sticker", "str", False, False, "表情包索引库路径（需重启）"),
-        "STICKER_COOLDOWN": ("Sticker", "int", False, True, "表情包冷却（秒）"),
-        "STICKER_MAX_LIST": ("Sticker", "int", False, True, "提供给模型的表情包描述上限"),
-        # ---------- MCP 工具 ----------
-        "MCP_ENABLED": ("MCP", "bool", False, True, "MCP 工具开关"),
-        "MCP_SERVER_URL": ("MCP", "str", False, True, "MCP server 地址（单 server）"),
-        "MCP_SERVER_NAME": ("MCP", "str", False, False, "MCP server 名称（需重启）"),
-        "MCP_SERVERS": ("MCP", "json", False, False, "MCP 多 server JSON 数组（需重启）"),
-        "MCP_TIMEOUT": ("MCP", "int", False, True, "工具调用超时（秒）"),
-        "MCP_MAX_TOOL_CALLS": ("MCP", "int", False, True, "单轮工具调用上限"),
-        "MCP_ALLOWED_TOOLS": ("MCP", "str", False, True, "工具 allowlist（逗号分隔）"),
-        "MCP_ALLOWED_HOSTS": ("MCP", "list-str", False, False, "MCP 本地/内网主机白名单（需重启）"),
-        "MCP_CIRCUIT_FAILURES": ("MCP", "int", False, True, "MCP 熔断失败阈值"),
-        "MCP_CIRCUIT_PAUSE_SECONDS": ("MCP", "int", False, True, "MCP 熔断冷却（秒）"),
-        # ---------- Web UI ----------
-        "WEB_UI_ENABLED": ("WebUI", "bool", False, False, "Web UI 开关（需重启）"),
-        "WEB_UI_HOST": ("WebUI", "str", False, False, "Web UI 监听地址（需重启）"),
-        "WEB_UI_ALLOW_LAN": ("WebUI", "bool", False, False, "绑定 0.0.0.0 局域网可访问（需重启）"),
-        "WEB_UI_PORT": ("WebUI", "int", False, False, "Web UI 端口（需重启）"),
-        "WEB_UI_TOKEN_TTL_SECONDS": ("WebUI", "int", False, True, "登录 token 有效期（秒）"),
-        # ---------- 日志 ----------
-        "LOG_LEVEL": ("Logging", "str", False, False, "日志级别（需重启）"),
-        "LOG_FORMAT": ("Logging", "str", False, False, "日志格式 text/json（需重启）"),
-        # ---------- 预算与限额 ----------
-        "DAILY_AI_CALL_BUDGET": ("Budget", "int", False, True, "全局每日 AI 调用上限（0=不限）"),
-        "GROUP_DAILY_AI_CALL_BUDGET": ("Budget", "int", False, True, "每群每日 AI 调用上限（0=不限）"),
-        "USER_AI_CALL_MIN_INTERVAL": ("Budget", "int", False, True, "同一用户 AI 调用最小间隔（秒）"),
-        "BUDGET_EXHAUSTED_NOTICE": ("Budget", "bool", False, True, "额度用尽时在群里说一句提示"),
-        # ---------- 主动聊天 ----------
-        "NIGHT_SILENCE_START": ("ActiveChat", "int", False, True, "夜间静默开始（小时 0-23）"),
-        "NIGHT_SILENCE_END": ("ActiveChat", "int", False, True, "夜间静默结束（小时 1-24）"),
-        "ACTIVE_CHAT_COOLDOWN": ("ActiveChat", "int", False, True, "主动聊天冷却（秒）"),
-        "BOT_CONSECUTIVE_REPLY_COOLDOWN": ("ActiveChat", "int", False, True, "连续回复后冷却（秒）"),
-        # ---------- 复读与防刷 ----------
-        "REPEAT_WINDOW": ("Repeat", "int", False, True, "复读检测窗口（秒）"),
-        "REPEAT_THRESHOLD": ("Repeat", "int", False, True, "复读触发次数"),
-        "TOXIC_WARNING_COOLDOWN": ("Repeat", "int", False, True, "引战警告冷却（秒）"),
-        # ---------- 戳戳 ----------
-        "POKE_REPLY_ENABLED": ("Poke", "bool", False, True, "戳戳回复开关"),
-        "POKE_REPLIES": ("Poke", "textarea", False, True, "戳戳回复语（每行一条）"),
-        # ---------- 文件解析 ----------
-        "MAX_FILE_TEXT_CHARS": ("FileParse", "int", False, True, "文件解析提取文本上限（字符）"),
-        "MAX_FILE_DOWNLOAD_BYTES": ("FileParse", "int", False, True, "文件下载解码字节上限"),
-        "MAX_PDF_PAGES": ("FileParse", "int", False, True, "PDF 最多解析页数"),
-        "MAX_EXCEL_CELLS": ("FileParse", "int", False, True, "Excel 最多解析单元格数"),
-        "MAX_CSV_ROWS": ("FileParse", "int", False, True, "CSV 最多解析行数"),
-        "MAX_IMAGES_PER_MESSAGE": ("FileParse", "int", False, True, "单条消息最多识图张数"),
-        "MAX_FORWARD_DEPTH": ("FileParse", "int", False, True, "转发最大展开深度"),
-        "MAX_FORWARD_MESSAGES": ("FileParse", "int", False, True, "转发展开消息总数上限"),
-        "MAX_FORWARD_NODES": ("FileParse", "int", False, True, "转发遍历节点总数上限"),
-        "MAX_FORWARD_FETCHES": ("FileParse", "int", False, True, "单条消息转发拉取次数上限"),
-        # ---------- 安全与资源限制 ----------
-        "MAX_AI_INPUT_CHARS": ("Security", "int", False, True, "单次 AI 输入最大字符数"),
-        "MAX_IMAGE_DOWNLOAD_BYTES": ("Security", "int", False, True, "单张图片下载上限（字节）"),
-        "IMAGE_DOWNLOAD_MAX_REDIRECTS": ("Security", "int", False, True, "图片下载最大重定向次数"),
-        "IMAGE_ALLOWED_HOSTS": ("Security", "list-str", False, True, "图片主机白名单（逗号分隔，空=放行所有）"),
-        # ---------- 白名单与隐私 ----------
-        "ALLOWED_GROUP_IDS": ("Whitelist", "list-int", False, True, "允许群号白名单（逗号分隔，空=所有群）"),
-        "TOXIC_GROUP_IDS": ("Whitelist", "list-int", False, True, "引战检测群号（逗号分隔，空=不检测）"),
-        "ADMIN_QQ_IDS": ("Whitelist", "list-int", False, True, "管理员 QQ（逗号分隔）"),
-        # ---------- 消息存档 ----------
-        "ARCHIVE_ENABLED": ("Archive", "bool", False, True, "消息存档开关（默认关）"),
-        "ARCHIVE_BASE_DIR": ("Archive", "str", False, False, "存档目录（需重启）"),
-        "ARCHIVE_RETENTION_DAYS": ("Archive", "int", False, True, "存档保留天数（0=永久）"),
-        "ARCHIVE_MAX_SIZE_MB": ("Archive", "int", False, True, "每群存档大小上限 MB（0=不限）"),
-        # ---------- 数据路径 ----------
-        "SETTINGS_DB_PATH": ("Paths", "str", False, False, "设置库路径（需重启，谨慎修改）"),
-        # ---------- Persona（人格系统） ----------
-        "PERSONA_DEFAULT": ("Persona", "str", False, True, "默认人格 id（兜底，立即生效）"),
-        "MAX_PERSONA_PROMPT_LENGTH": ("Persona", "int", False, False, "人格 system_prompt 最大长度（需重启）"),
-        "PERSONA_MAX_COUNT": ("Persona", "int", False, True, "自定义人格总数上限（内置不计）"),
-        # ---------- 群聊知识（Meme Knowledge） ----------
-        "MEME_LEARNING_ENABLED": ("Knowledge", "bool", False, True, "每日梗总结任务开关"),
-        "MEME_KNOWLEDGE_DB_PATH": ("Knowledge", "str", False, False, "梗知识库路径（需重启）"),
-        "MEME_SUMMARY_INTERVAL_HOURS": ("Knowledge", "int", False, True, "梗总结周期（小时）"),
-        "MAX_GROUP_MEMES": ("Knowledge", "int", False, True, "每群梗知识条数上限"),
-        "MEME_BUFFER_PER_GROUP": ("Knowledge", "int", False, False, "每群消息缓冲上限（需重启）"),
-        "MEME_MAX_GROUPS_PER_RUN": ("Knowledge", "int", False, True, "单轮总结最多处理群数"),
-        "MEME_MIN_MESSAGES_PER_SUMMARY": ("Knowledge", "int", False, True, "总结最少消息数"),
-        "MEME_MAX_SUMMARY_CANDIDATES": ("Knowledge", "int", False, True, "单群单轮候选梗上限"),
-    }
 
     # 分类显示名与展示顺序（表单分组用）
-    CATEGORY_LABELS: Dict[str, str] = {
-        "AI": "AI / Provider 配置",
-        "Bot": "基础配置",
-        "Connection": "QQ / OneBot 连接",
-        "Behavior": "行为与回复",
-        "Stability": "稳定性与熔断",
-        "Memory": "记忆库",
-        "Sticker": "表情包",
-        "MCP": "MCP 工具",
-        "WebUI": "Web UI",
-        "Logging": "日志",
-        "Budget": "预算与限额",
-        "ActiveChat": "主动聊天",
-        "Repeat": "复读与防刷",
-        "Poke": "戳戳",
-        "FileParse": "文件解析",
-        "Security": "安全与资源限制",
-        "Whitelist": "白名单与隐私",
-        "Archive": "消息存档",
-        "Paths": "数据路径",
-        "Persona": "人格（Persona）",
-        "Knowledge": "群聊知识（Meme）",
-    }
-    CATEGORY_ORDER: List[str] = [
-        "AI", "Bot", "Connection", "Behavior", "Stability", "Memory", "Context",
-        "Sticker", "MCP", "WebUI", "Logging", "Budget", "ActiveChat", "Repeat",
-        "Poke", "FileParse", "Security", "Whitelist", "Archive", "Paths",
-        "Persona", "Knowledge",
-    ]
 
     def __init__(self, config: Settings, repository: SettingsRepository,
                  env_path: Optional[str] = None):
@@ -440,79 +301,7 @@ class ConfigService:
                 pass
 
     # ---------- 校验 / 类型 ----------
-    _ENUM_VALUES = {
-        "LOG_LEVEL": {"debug", "info", "warning", "error", "critical"},
-        "LOG_FORMAT": {"text", "json"},
-    }
     # 枚举选项的显示/提交大小写（LOG_LEVEL 保持大写，loguru 对大小写敏感时也兼容）
-    _ENUM_OPTIONS = {
-        "LOG_LEVEL": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        "LOG_FORMAT": ["text", "json"],
-    }
-    _RANGES = {
-        "BOT_QQ": (1, 999999999999),
-        "MAX_REPLY_LENGTH": (1, 1000),
-        "MAX_CONSECUTIVE_REPLIES": (0, 100),
-        "MAX_CUSTOM_PROMPT_LENGTH": (100, 100000),
-        "CONTEXT_SIZE": (1, 2000),
-        "USER_COOLDOWN": (0, 86400),
-        "BOT_COOLDOWN": (0, 86400),
-        "EVENT_PROCESS_TIMEOUT": (1, 3600),
-        "MAX_CONCURRENT_AI": (1, 100),
-        "AI_MAX_RETRIES": (0, 20),
-        "AI_CIRCUIT_BREAKER_FAILURES": (1, 1000),
-        "AI_CIRCUIT_BREAKER_PAUSE_SECONDS": (1, 86400),
-        "GROUP_CIRCUIT_BREAKER_FAILURES": (1, 1000),
-        "GROUP_CIRCUIT_BREAKER_PAUSE_SECONDS": (1, 86400),
-        "GROUP_CIRCUIT_BREAKER_MAX_GROUPS": (1, 1000000),
-        "GROUP_CIRCUIT_BREAKER_TTL_SECONDS": (1, 31536000),
-        "CONTEXT_BACKUP_INTERVAL": (5, 86400),
-        "MEMORY_TTL_DAYS": (0, 36500),
-        "MODEL_MEMORY_TTL_DAYS": (0, 36500),
-        "STICKER_COOLDOWN": (0, 86400),
-        "STICKER_MAX_LIST": (1, 200),
-        "MCP_TIMEOUT": (1, 3600),
-        "MCP_MAX_TOOL_CALLS": (0, 1000),
-        "MCP_CIRCUIT_FAILURES": (1, 1000),
-        "MCP_CIRCUIT_PAUSE_SECONDS": (1, 86400),
-        "WEB_UI_PORT": (1, 65535),
-        "WEB_UI_TOKEN_TTL_SECONDS": (60, 604800),
-        "VISION_TIMEOUT": (1, 600),
-        "DAILY_AI_CALL_BUDGET": (0, 1000000000),
-        "GROUP_DAILY_AI_CALL_BUDGET": (0, 1000000000),
-        "USER_AI_CALL_MIN_INTERVAL": (0, 86400),
-        "NIGHT_SILENCE_START": (0, 23),
-        "NIGHT_SILENCE_END": (1, 24),
-        "ACTIVE_CHAT_COOLDOWN": (0, 86400),
-        "BOT_CONSECUTIVE_REPLY_COOLDOWN": (0, 86400),
-        "REPEAT_WINDOW": (1, 86400),
-        "REPEAT_THRESHOLD": (2, 100),
-        "TOXIC_WARNING_COOLDOWN": (0, 86400),
-        "MAX_FILE_TEXT_CHARS": (100, 1000000),
-        "MAX_FILE_DOWNLOAD_BYTES": (1024, 104857600),
-        "MAX_PDF_PAGES": (1, 10000),
-        "MAX_EXCEL_CELLS": (1, 10000000),
-        "MAX_CSV_ROWS": (1, 1000000),
-        "MAX_IMAGES_PER_MESSAGE": (1, 100),
-        "MAX_FORWARD_DEPTH": (1, 100),
-        "MAX_FORWARD_MESSAGES": (1, 10000),
-        "MAX_FORWARD_NODES": (1, 100000),
-        "MAX_FORWARD_FETCHES": (1, 1000),
-        "MAX_AI_INPUT_CHARS": (100, 1000000),
-        "MAX_IMAGE_DOWNLOAD_BYTES": (1024, 104857600),
-        "IMAGE_DOWNLOAD_MAX_REDIRECTS": (0, 20),
-        "ARCHIVE_RETENTION_DAYS": (0, 36500),
-        "ARCHIVE_MAX_SIZE_MB": (0, 1000000),
-        "WS_PORT": (1, 65535),
-        "MAX_PERSONA_PROMPT_LENGTH": (500, 100000),
-        "PERSONA_MAX_COUNT": (1, 100000),
-        "MEME_SUMMARY_INTERVAL_HOURS": (1, 8760),
-        "MAX_GROUP_MEMES": (10, 100000),
-        "MEME_BUFFER_PER_GROUP": (50, 100000),
-        "MEME_MAX_GROUPS_PER_RUN": (1, 10000),
-        "MEME_MIN_MESSAGES_PER_SUMMARY": (1, 10000),
-        "MEME_MAX_SUMMARY_CANDIDATES": (1, 200),
-    }
 
     def _validate(self, key: str, ctype: str, raw: str) -> Optional[str]:
         """校验并返回规范化存储值；非法返回 None。"""
