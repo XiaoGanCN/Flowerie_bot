@@ -147,6 +147,22 @@ MCP 服务器以**卡片列表**展示，无需手写 JSON：
 
 ---
 
+## 用户状态页
+
+集中展示当前管理员的账户信息与机器人运行/集成状态（全部零 JS）：
+
+- **当前管理员**：登录账号 + 凭据来源（`settings.db` 注册账号 / `.env` 初始配置）
+- **注销账号**：输入当前密码确认，**仅清除管理账号与密码**（settings.db 与 `.env` 的
+  `WEB_UI_USERNAME`/`WEB_UI_PASSWORD`），其他环境配置（API Key 等）一律不动；注销后强制登出并回到登录页，
+  需重新配置密码或注册才能登录
+- **服务器状态**：平台 / 系统 / 架构 / 主机名 / Python 版本 / **内存占用**（`/proc/meminfo`）/ **CPU 负载**（`/proc/loadavg`）
+  ——零依赖采集，读取失败显示 `N/A`
+- **MCP 工具状态**：各 MCP server 已同步工具数 + 熔断状态（未启用时提示去配置页开启）
+- **API 厂商连接状态**：DeepSeek（聊天主厂商）/ 视觉识图 / 引战检测——地址、模型、
+  Key 是否配置、是否回退 DeepSeek（配置层面展示）
+
+数据来源：`src/services/system_status.py`（服务器状态）、`McpToolManager`（MCP）、`ConfigService`（API 配置）。
+
 ## 说明
 
 - 全程 **无 JavaScript**（无 `<script>`/fetch/框架），仅 HTML + CSS + 服务端

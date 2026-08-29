@@ -123,6 +123,8 @@ OneBot WebSocket connected
   `data/webui/background/`）、图片透明度、显示方式（cover/contain + 位置）、
   恢复默认主题 / 删除背景图片
 - **日志**：最近 200 条运行日志
+- **用户状态**：当前管理员与凭据来源、注销账号（仅清账号密码，其他配置不动）、
+  服务器状态（平台/内存/CPU负载）、MCP 工具状态、API 厂商连接状态（DeepSeek/视觉/引战）
 
 完整功能指南（配置中心 / 人格管理 / 群聊知识 / 主题美化 / MCP 卡片管理 / 安全）见 **[docs/web-ui.md](docs/web-ui.md)**；
 人格系统设计见 [docs/persona.md](docs/persona.md)，梗知识层见 [docs/knowledge.md](docs/knowledge.md)；
