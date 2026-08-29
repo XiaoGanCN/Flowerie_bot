@@ -141,15 +141,17 @@ class MemeSummaryService:
         if self.budget is None:
             return True
         try:
+            # 预算数值与 BudgetManager 同源（budget.config），保证与聊天计数一致
+            bcfg = self.budget.config
             gs = self.budget.global_state
             from datetime import datetime
             today = datetime.now().strftime("%Y-%m-%d")
             if gs.ai_budget_date != today:
                 return True  # 跨天未计数（BudgetManager 会在下次 check 时重置）
-            cap = max(0, int(getattr(self.config, "DAILY_AI_CALL_BUDGET", 1000)))
+            cap = max(0, int(getattr(bcfg, "DAILY_AI_CALL_BUDGET", 1000)))
             if cap > 0 and gs.ai_budget_count >= cap:
                 return False
-            gcap = max(0, int(getattr(self.config, "GROUP_DAILY_AI_CALL_BUDGET", 300)))
+            gcap = max(0, int(getattr(bcfg, "GROUP_DAILY_AI_CALL_BUDGET", 300)))
             if gcap > 0 and gs.group_ai_budget_count.get(group_id, 0) >= gcap:
                 return False
         except Exception:  # noqa: BLE001 - 预算读取异常按放行处理（不阻塞总结）
