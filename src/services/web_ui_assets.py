@@ -187,24 +187,34 @@ def hex_to_rgb(hex_color: str):
 
 
 def background_rules(bg_color: str, image_url: str, opacity: int, size: str, position: str) -> str:
-    """合成 body 背景 CSS：背景颜色 + 图片透明度 → 同一视觉层。
+    """合成独立的背景层 CSS：背景颜色 + 图片透明度 → 同一视觉层。
 
+    背景放在 `position:fixed; inset:0` 的 `.bg-layer` 上（而非 body），这样：
+    - 图片始终按**视口**大小做 `cover` 缩放并裁剪（移动端 body 的
+      background-attachment: fixed 支持差，会按整页高度把图拉伸，无法比例缩放裁剪）
+    - 页面滚动时背景固定不动
     图片作为第二层背景，上面叠一层"背景颜色 + (100-透明度)% 不透明度"的渐变遮罩：
     - 透明度 100% → 遮罩全透明，图片完全显示
     - 透明度 0%   → 遮罩不透明，只剩背景颜色
     图片不透明度与背景颜色因此共同组成最终背景视觉。
     """
-    rules = [f"background-color: {bg_color};"]
+    rules = [
+        "position: fixed;",
+        "inset: 0;",
+        "z-index: -1;",
+        "pointer-events: none;",
+        f"background-color: {bg_color};",
+    ]
     if image_url:
         alpha = max(0.0, min(1.0, (100 - max(0, min(100, int(opacity)))) / 100.0))
         r, g, b = hex_to_rgb(bg_color)
         overlay = f"rgba({r},{g},{b},{alpha:.3f})"
+        # 第一层线性渐变是"背景颜色遮罩"，叠在第二层图片之上，透明度合成同一视觉层
         rules.append(f"background-image: linear-gradient({overlay}, {overlay}), url('{image_url}');")
-        rules.append(f"background-size: {size}, cover;")
-        rules.append(f"background-position: {position}, center;")
+        rules.append(f"background-size: cover, {size};")
+        rules.append(f"background-position: center, {position};")
         rules.append("background-repeat: no-repeat, no-repeat;")
-        rules.append("background-attachment: fixed;")
-    return "body {\n  " + "\n  ".join(rules) + "\n}"
+    return ".bg-layer {\n  " + "\n  ".join(rules) + "\n}"
 
 
 # ---------------------------------------------------------------- CSS
@@ -368,7 +378,7 @@ def render_panel_page(*, theme_class: str, bg_rules: str, msg_html: str,
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<title>花璃 · 管理后台</title>'
         f'<style>{PANEL_CSS}</style><style>{bg_rules}</style></head>'
-        f'<body class="{theme_class}"><div class="wrap">'
+        f'<body class="{theme_class}"><div class="bg-layer" aria-hidden="true"></div><div class="wrap">'
         '<header class="topbar">'
         '<div class="brand">花璃<small>· 管理后台</small></div>'
         f'<nav class="tabs">{tab_html}'
