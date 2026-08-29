@@ -35,7 +35,12 @@ async def main():
     # 使"Persistent Config > Environment > Code Default"对**运行时组件**真正生效
     # （而非仅 UI 显示层）。合并后再做启动校验，保证最终运行配置合法。
     settings_repo = SettingsRepository(config.SETTINGS_DB_PATH)
-    config_service = ConfigService(config, settings_repo)
+    # P2-2：启动阶段先加载持久化配置（settings.db）覆盖 .env/代码默认，
+    # 使"Persistent Config > Environment > Code Default"对**运行时组件**真正生效
+    # （而非仅 UI 显示层）。合并后再做启动校验，保证最终运行配置合法。
+    # env_path：Web UI 保存的配置会真正写入项目根 .env（原子更新，保留注释），
+    # 重启后由 pydantic-settings 读取；settings.db 保持同步（既有优先级链不变）。
+    config_service = ConfigService(config, settings_repo, env_path=ConfigService.default_env_path())
     config_service.apply_persisted()
     # 启动阶段即校验配置：类型错误/必填缺失直接报错退出
     validate_config(config)

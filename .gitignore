@@ -24,3 +24,6 @@ venv/
 *.swo
 # pytest 缓存（本地运行生成，不提交）
 .pytest_cache/
+
+# 误检出的嵌套旧克隆（与根目录同仓库，工作树已损坏），忽略避免误提交
+Flowerie_bot/

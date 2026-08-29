@@ -46,6 +46,11 @@ class SettingsRepository:
                 value TEXT NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS webui_prefs (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
             """)
             self._conn.commit()
 
@@ -98,6 +103,31 @@ class SettingsRepository:
     def list_configs(self) -> List[Tuple[str, str]]:
         with self._lock:
             rows = self._conn.execute("SELECT key, value FROM app_config").fetchall()
+            return [(r["key"], r["value"]) for r in rows]
+
+    # ---------- Web UI 外观偏好（主题/背景，复用同一 SQLite 持久化机制） ----------
+    def get_pref(self, key: str) -> Optional[str]:
+        with self._lock:
+            row = self._conn.execute("SELECT value FROM webui_prefs WHERE key=?", (key,)).fetchone()
+            return row["value"] if row else None
+
+    def set_pref(self, key: str, value: str) -> None:
+        import time
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO webui_prefs (key, value, updated_at) VALUES (?,?,?)",
+                (key, value, time.time()),
+            )
+            self._conn.commit()
+
+    def delete_pref(self, key: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM webui_prefs WHERE key=?", (key,))
+            self._conn.commit()
+
+    def list_prefs(self) -> List[Tuple[str, str]]:
+        with self._lock:
+            rows = self._conn.execute("SELECT key, value FROM webui_prefs").fetchall()
             return [(r["key"], r["value"]) for r in rows]
 
     def close(self) -> None:

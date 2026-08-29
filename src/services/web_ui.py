@@ -1,24 +1,47 @@
-"""Web UI：管理后台（aiohttp）。
+"""Web UI：管理后台（aiohttp，无 JS 纯服务端渲染）。
 
 安全设计：
 - 默认 WEB_UI_ENABLED=false；启用必须设置 WEB_UI_PASSWORD（启动校验）
 - 认证：POST /api/login 换取 token（secrets.token_hex，内存存储 + TTL）；
-  请求带 Authorization: Bearer <token>（无 cookie → 天然防 CSRF）
+  请求带 Authorization: Bearer <token>（无 cookie → 天然防 CSRF）；
+  无 JS 面板走 Cookie 会话（fb_token，httponly + SameSite=Strict）
 - 登录失败限速：同一 IP 连续 5 次失败锁 1 分钟
-- Secret 脱敏：GET /api/config 只返回掩码；PUT 时留空=不修改
+- Secret 脱敏：页面只返回掩码；提交时留空=不修改
 - 端口：与反向 WS 端口（WS_PORT）错开由启动校验保证
 - 所有管理接口必须管理员 token
+
+功能（全部纯 HTML/CSS/服务端，零 JavaScript）：
+- /panel 配置页：全部配置变量按分类分组（fieldset），每组一个表单保存
+- /panel?tab=appearance 外观页：内置主题 / 背景颜色 / 背景图片上传 /
+  图片透明度 / 显示方式 / 恢复默认 / 删除图片，持久化到 settings.db + data/webui
+- /panel?tab=logs 日志页
+- 配置保存双写：.env（原子）+ settings.db；热更新 Settings 实例
 """
 import html as _html
 import json
+import os
+import re
 import secrets
 import time
-from typing import Dict, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from aiohttp import web
 
 from src.config import Settings
 from src.services.config_service import ConfigService, verify_password
+from src.services.web_ui_assets import (
+    THEMES,
+    background_rules,
+    render_appearance,
+    render_config_sections,
+    render_login_page,
+    render_panel_page,
+    render_register_page,
+    theme_body_class,
+    theme_default_bg,
+)
 from src.utils.logging_setup import get_logger, get_recent_logs
 from src.utils.metrics import registry
 
@@ -26,10 +49,32 @@ logger = get_logger(__name__)
 
 _LOGIN_FAIL_LIMIT = 5
 _LOGIN_FAIL_WINDOW = 60
+# 背景图片上传限制（服务端强制）
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5MB
+_ALLOWED_IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "gif"}
+_EXT_MAP = {"png": "png", "jpeg": "jpg", "webp": "webp", "gif": "gif"}
+
+
+def detect_image_type(data: bytes) -> Optional[str]:
+    """按魔数检测真实图片格式（不信任扩展名/MIME）。"""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def validate_hex_color(value: str) -> bool:
+    return bool(re.fullmatch(r"#[0-9a-fA-F]{6}", value or ""))
 
 
 class WebUIServer:
-    def __init__(self, config: Settings, config_service: ConfigService, status_provider=None):
+    def __init__(self, config: Settings, config_service: ConfigService, status_provider=None,
+                 data_dir: str = "./data/webui"):
         self.config = config
         self.config_service = config_service
         # status_provider: 可调用，返回状态 dict（ws_connected/uptime 等），由 main 注入
@@ -38,7 +83,9 @@ class WebUIServer:
         self._login_fails: Dict[str, list] = {}  # ip -> [timestamps]
         self._runner: Optional[web.AppRunner] = None
         self._site: Optional[web.TCPSite] = None
-        self._started_at: float = __import__("time").time()
+        self._started_at: float = time.time()
+        # 外观资源持久化目录（背景图片），测试可注入临时目录
+        self._data_dir = str(data_dir)
 
     # ---------- 认证 ----------
     def _issue_token(self) -> str:
@@ -164,7 +211,6 @@ class WebUIServer:
     async def _handle_status(self, request: web.Request) -> web.Response:
         if not self._check_token(request):
             return web.json_response({"error": "未认证"}, status=401)
-        import time
         status = {
             "version": "1.0.0",
             "uptime_seconds": int(time.time() - self._started_at),
@@ -208,6 +254,12 @@ class WebUIServer:
         app.router.add_post("/panel/register", self._handle_panel_register)
         app.router.add_post("/panel/save", self._handle_panel_save)
         app.router.add_get("/panel/logout", self._handle_panel_logout)
+        # 外观美化（主题 / 背景颜色 / 背景图片 / 透明度）
+        app.router.add_post("/panel/appearance", self._handle_panel_appearance_save)
+        app.router.add_post("/panel/appearance/restore", self._handle_panel_appearance_restore)
+        app.router.add_post("/panel/appearance/delete-image", self._handle_panel_appearance_delete_image)
+        app.router.add_get("/panel/background", self._handle_panel_background)
+        # JSON API（保留，供脚本/自动化使用）
         app.router.add_post("/api/login", self._handle_login)
         app.router.add_post("/api/register", self._handle_register)
         app.router.add_post("/api/logout", self._handle_logout)
@@ -217,15 +269,121 @@ class WebUIServer:
         app.router.add_get("/api/logs", self._handle_logs)
         return app
 
+    # ---------- 外观偏好（settings.db webui_prefs 表持久化） ----------
+    def _pref(self, key: str, default: str = "") -> str:
+        v = self.config_service.repository.get_pref(key)
+        return v if v is not None else default
+
+    def _set_pref(self, key: str, value: str) -> None:
+        self.config_service.repository.set_pref(key, value)
+
+    def _get_prefs(self) -> Dict[str, object]:
+        try:
+            opacity = int(self._pref("bg_image_opacity", "100") or 100)
+        except ValueError:
+            opacity = 100
+        return {
+            "theme": self._pref("theme", "default"),
+            "bg_color": self._pref("bg_color", ""),
+            "bg_image": self._pref("bg_image", ""),
+            "opacity": max(0, min(100, opacity)),
+            "size": self._pref("bg_size", "cover"),
+            "position": self._pref("bg_position", "center"),
+        }
+
+    def _background_dir(self) -> Path:
+        return Path(self._data_dir) / "background"
+
+    def _background_path(self) -> Optional[Path]:
+        fname = self._pref("bg_image", "")
+        if not fname or os.path.basename(fname) != fname or not re.fullmatch(r"background\.(png|jpg|webp|gif)", fname):
+            return None
+        path = self._background_dir() / fname
+        return path if path.is_file() else None
+
+    def _delete_bg_image(self) -> None:
+        bg_dir = self._background_dir()
+        try:
+            for old in bg_dir.glob("background.*"):
+                old.unlink()
+        except OSError:  # noqa: BLE001
+            pass
+        self._set_pref("bg_image", "")
+
+    def _save_background_image(self, data: bytes, hint_filename: str) -> Tuple[bool, str]:
+        """服务端图片校验与持久化（大小/扩展名/魔数，固定安全文件名）。"""
+        if len(data) > MAX_UPLOAD_BYTES:
+            return False, "文件过大（最大 5MB）"
+        hint_ext = os.path.splitext(hint_filename or "")[1].lstrip(".").lower()
+        if hint_ext not in _ALLOWED_IMAGE_EXTS:
+            return False, "文件扩展名不合法（仅允许 png/jpg/jpeg/webp/gif）"
+        img_type = detect_image_type(data)
+        if img_type is None:
+            return False, "文件内容不是合法图片（PNG/JPEG/WEBP/GIF）"
+        bg_dir = self._background_dir()
+        bg_dir.mkdir(parents=True, exist_ok=True)
+        # 覆盖旧图（固定文件名，绝不用用户提供的文件名 → 无路径穿越）
+        for old in bg_dir.glob("background.*"):
+            try:
+                old.unlink()
+            except OSError:  # noqa: BLE001
+                pass
+        target = bg_dir / f"background.{_EXT_MAP[img_type]}"
+        tmp = bg_dir / ".background.tmp"
+        tmp.write_bytes(data)
+        os.replace(tmp, target)
+        self._set_pref("bg_image", target.name)
+        return True, "背景图片已更新"
+
     # ---------- 无 JS 兼容面板（纯服务端渲染，表单提交即可用） ----------
     async def _handle_panel(self, request: web.Request) -> web.Response:
         if not self._check_token(request):
-            return web.Response(text=self._panel_login_page(), content_type="text/html", charset="utf-8")
+            return web.Response(text=render_login_page(), content_type="text/html", charset="utf-8")
         msg = request.query.get("msg", "")
         err = request.query.get("err", "") == "1"
         tab = request.query.get("tab", "")
+        if tab not in ("appearance", "logs"):
+            tab = "config"
         return web.Response(text=self._panel_page(msg, err, tab),
                             content_type="text/html", charset="utf-8")
+
+    def _panel_page(self, msg: str = "", err: bool = False, tab: str = "config") -> str:
+        prefs = self._get_prefs()
+        theme = str(prefs["theme"])
+        if theme not in THEMES:
+            theme = "default"
+        bg_color = str(prefs["bg_color"]) or theme_default_bg(theme)
+        image_url = ""
+        if prefs["bg_image"]:
+            image_url = "/panel/background?v=%d" % int(time.time())
+        bg_rules = background_rules(
+            bg_color,
+            image_url if prefs["bg_image"] else "",
+            int(prefs["opacity"]),
+            str(prefs["size"]),
+            str(prefs["position"]),
+        )
+        msg_html = ""
+        if msg:
+            msg_html = f'<div class="msg {"ok" if not err else "err"}">{_html.escape(msg)}</div>'
+        if tab == "appearance":
+            body_html = render_appearance(
+                theme, bg_color, int(prefs["opacity"]),
+                str(prefs["size"]), str(prefs["position"]),
+                bool(prefs["bg_image"]), image_url,
+            )
+        elif tab == "logs":
+            logs = "\n".join(get_recent_logs(200))
+            body_html = f'<pre class="log">{_html.escape(logs)}</pre>'
+        else:
+            body_html = render_config_sections(self.config_service.list_configs())
+        return render_panel_page(
+            theme_class=theme_body_class(theme),
+            bg_rules=bg_rules,
+            msg_html=msg_html,
+            body_html=body_html,
+            active_tab=tab,
+        )
 
     async def _handle_panel_login(self, request: web.Request) -> web.Response:
         form = await request.post()
@@ -239,16 +397,16 @@ class WebUIServer:
             logger.info("web_ui panel login success", extra={"event": "config_reload"})
             return resp
         self._record_login_fail(request.remote or "unknown")
-        return web.Response(text=self._panel_login_page("用户名或密码错误"),
+        return web.Response(text=render_login_page("用户名或密码错误"),
                             content_type="text/html", charset="utf-8")
 
     async def _handle_panel_register_page(self, request: web.Request) -> web.Response:
-        return web.Response(text=self._panel_register_page(), content_type="text/html", charset="utf-8")
+        return web.Response(text=render_register_page(), content_type="text/html", charset="utf-8")
 
     async def _handle_panel_register(self, request: web.Request) -> web.Response:
         ip = request.remote or "unknown"
         if self._login_blocked(ip):
-            return web.Response(text=self._panel_register_page("尝试过多，请稍后再试"),
+            return web.Response(text=render_register_page("尝试过多，请稍后再试", ok=False),
                                 content_type="text/html", charset="utf-8")
         form = await request.post()
         username = str(form.get("username", ""))
@@ -257,20 +415,36 @@ class WebUIServer:
         eff_user, eff_pass = self._effective_credentials()
         if eff_pass and not self._verify_admin(eff_user, admin_password):
             self._record_login_fail(ip)
-            return web.Response(text=self._panel_register_page("当前管理员密码不正确"),
+            return web.Response(text=render_register_page("当前管理员密码不正确", ok=False),
                                 content_type="text/html", charset="utf-8")
         ok, message = self.config_service.register_user(username, password)
-        return web.Response(text=self._panel_register_page(message, ok=ok),
+        return web.Response(text=render_register_page(message, ok=ok),
                             content_type="text/html", charset="utf-8")
 
     async def _handle_panel_save(self, request: web.Request) -> web.Response:
+        """配置保存：兼容旧版单键表单（key/value）；分组表单字段名=配置键。
+
+        checkbox 采用 hidden false + checkbox true 同名字段模式：未勾选只提交
+        false，勾选提交 false 和 true —— 服务端取同名最后一个值（未提交=false 语义）。
+        """
         if not self._check_token(request):
             return web.HTTPFound("/panel")
         form = await request.post()
-        key = str(form.get("key", ""))
-        value = str(form.get("value", ""))
-        ok, message = self.config_service.update(key, value)
-        from urllib.parse import quote
+        if "key" in form and "value" in form:
+            key = str(form.get("key", ""))
+            value = str(form.get("value", ""))
+            ok, message = self.config_service.update(key, value)
+            return web.HTTPFound(f"/panel?msg={quote(message)}&err={'1' if not ok else ''}")
+        updates: Dict[str, str] = {}
+        for name in form.keys():
+            if name not in self.config_service.SCHEMA:
+                continue
+            if hasattr(form, "getall"):
+                vals = form.getall(name)
+                updates[name] = str(vals[-1]) if vals else ""
+            else:
+                updates[name] = str(form.get(name, ""))
+        ok, message = self.config_service.update_many(updates)
         return web.HTTPFound(f"/panel?msg={quote(message)}&err={'1' if not ok else ''}")
 
     async def _handle_panel_logout(self, request: web.Request) -> web.Response:
@@ -280,48 +454,105 @@ class WebUIServer:
         resp.del_cookie("fb_token")
         return resp
 
-    def _panel_login_page(self, msg: str = "") -> str:
-        return (_PANEL_LOGIN_HTML.replace("@CSS@", _PANEL_CSS)
-                .replace("@MSG@", _html.escape(msg)))
+    # ---------- 外观：保存（主题/背景颜色/图片/透明度/显示方式） ----------
+    async def _handle_panel_appearance_save(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        # 上传大小预检（防超大 multipart 打爆内存）
+        clen = request.headers.get("Content-Length", "")
+        if clen.isdigit() and int(clen) > MAX_UPLOAD_BYTES + 1_048_576:
+            return web.HTTPFound(f"/panel?tab=appearance&msg={quote('文件过大（最大 5MB）')}&err=1")
+        try:
+            form = await request.post()
+        except Exception:  # noqa: BLE001
+            return web.HTTPFound(f"/panel?tab=appearance&msg={quote('表单解析失败')}&err=1")
 
-    def _panel_register_page(self, msg: str = "", ok: bool = True) -> str:
-        return (_PANEL_REGISTER_HTML.replace("@CSS@", _PANEL_CSS)
-                .replace("@MSG@", _html.escape(msg))
-                .replace("@MSGCLASS@", "ok" if ok else "err"))
+        errors: List[str] = []
+        theme = str(form.get("theme", "") or "")
+        if theme and theme not in THEMES:
+            errors.append("主题无效")
+        bg_color = str(form.get("bg_color", "") or "")
+        if bg_color and not validate_hex_color(bg_color):
+            errors.append("背景颜色格式无效")
+        opacity_raw = str(form.get("bg_image_opacity", "") or "100")
+        try:
+            opacity = int(opacity_raw)
+            if not (0 <= opacity <= 100):
+                raise ValueError
+        except ValueError:
+            errors.append("图片透明度必须是 0~100 的整数")
+            opacity = 100
+        size = str(form.get("bg_size", "") or "cover")
+        if size not in ("cover", "contain"):
+            errors.append("图片显示方式无效")
+            size = "cover"
+        position = str(form.get("bg_position", "") or "center")
+        if position not in ("center", "top", "bottom", "left", "right"):
+            errors.append("图片位置无效")
+            position = "center"
 
-    def _panel_page(self, msg: str = "", err: bool = False, tab: str = "") -> str:
-        by_cat: Dict[str, list] = {}
-        for c in self.config_service.list_configs():
-            by_cat.setdefault(c["category"], []).append(c)
-        sections = []
-        for cat in ("AI", "Bot", "Memory", "Sticker", "MCP", "Policy", "Logging", "Advanced"):
-            items = by_cat.get(cat)
-            if not items:
-                continue
-            rows = []
-            for c in items:
-                rows.append(
-                    f'<form method="post" action="/panel/save" class="row">'
-                    f'<input type="hidden" name="key" value="{_html.escape(c["key"])}">'
-                    f'<span class="info"><b>{_html.escape(c["description"])}</b>'
-                    f'<small>{_html.escape(c["key"])}{" · 密钥" if c.get("secret") else ""}'
-                    f'{" · 需重启" if not c.get("hot_reload") else ""}</small></span>'
-                    f'<input name="value" value="{_html.escape(str(c.get("current") or ""))}">'
-                    f'<button type="submit">保存</button></form>'
-                )
-            sections.append(f'<h3>{_html.escape(cat)}</h3>' + "".join(rows))
-        msg_html = ""
-        if msg:
-            msg_html = f'<div class="{ "ok" if not err else "err" }">{_html.escape(msg)}</div>'
-        logs_html = ""
-        if tab == "logs":
-            logs = "<br>".join(_html.escape(x) for x in get_recent_logs(200))
-            logs_html = f'<h3>日志</h3><pre class="log">{logs}</pre>'
-        return (_PANEL_HTML.replace("@CSS@", _PANEL_CSS)
-                .replace("@MSG@", msg_html)
-                .replace("@SECTIONS@", "".join(sections))
-                .replace("@LOGS@", logs_html))
+        file_field = form.get("bg_image")
+        upload_data: Optional[bytes] = None
+        upload_hint = ""
+        if file_field is not None and getattr(file_field, "filename", ""):
+            upload_hint = file_field.filename
+            try:
+                upload_data = file_field.file.read()
+            except Exception:  # noqa: BLE001
+                errors.append("读取上传文件失败")
 
+        if errors:
+            return web.HTTPFound(f"/panel?tab=appearance&msg={quote('未保存：' + '；'.join(errors))}&err=1")
+
+        # 全部通过 → 持久化（主题/颜色/透明度/显示方式）
+        if theme:
+            self._set_pref("theme", theme)
+        if bg_color:
+            self._set_pref("bg_color", bg_color)
+        self._set_pref("bg_image_opacity", str(opacity))
+        self._set_pref("bg_size", size)
+        self._set_pref("bg_position", position)
+        message = "外观设置已保存"
+        if upload_data is not None:
+            ok, file_msg = self._save_background_image(upload_data, upload_hint)
+            if not ok:
+                return web.HTTPFound(f"/panel?tab=appearance&msg={quote(file_msg)}&err=1")
+            message = file_msg
+        logger.info("web_ui appearance saved theme=%s", theme, extra={"event": "config_reload"})
+        return web.HTTPFound(f"/panel?tab=appearance&msg={quote(message)}")
+
+    async def _handle_panel_appearance_restore(self, request: web.Request) -> web.Response:
+        """恢复默认主题/背景样式（不删除背景图片，由 delete-image 单独管理）。"""
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        self._set_pref("theme", "default")
+        self._set_pref("bg_color", "")
+        self._set_pref("bg_image_opacity", "100")
+        self._set_pref("bg_size", "cover")
+        self._set_pref("bg_position", "center")
+        logger.info("web_ui appearance restored", extra={"event": "config_reload"})
+        return web.HTTPFound(f"/panel?tab=appearance&msg={quote('已恢复默认主题与背景样式')}")
+
+    async def _handle_panel_appearance_delete_image(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        self._delete_bg_image()
+        logger.info("web_ui background image deleted", extra={"event": "config_reload"})
+        return web.HTTPFound(f"/panel?tab=appearance&msg={quote('背景图片已删除')}")
+
+    async def _handle_panel_background(self, request: web.Request) -> web.Response:
+        """提供已上传的背景图片（仅管理员 token，nosniff）。"""
+        if not self._check_token(request):
+            return web.Response(status=403, text="Forbidden")
+        path = self._background_path()
+        if path is None:
+            return web.Response(status=404, text="Not Found")
+        resp = web.FileResponse(path)
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["Cache-Control"] = "private, max-age=3600"
+        return resp
+
+    # ---------- 生命周期 ----------
     @staticmethod
     def effective_host(config) -> str:
         """实际监听地址：WEB_UI_ALLOW_LAN=true 时强制 0.0.0.0（局域网/公网可访问），否则用 WEB_UI_HOST。
@@ -357,53 +588,3 @@ class WebUIServer:
             self._runner = None
         self._tokens.clear()
         logger.info("Web UI stopped", extra={"event": "config_reload"})
-
-
-_PANEL_CSS = """body{font-family:sans-serif;background:#1e2229;color:#d7dde6;margin:0;padding:20px}
-.box{max-width:520px;margin:8vh auto;background:#262b33;border:1px solid #363d48;border-radius:12px;padding:28px}
-h2{margin-top:0;font-size:17px}h3{font-size:14px;color:#8b96a5;margin:20px 0 8px}
-input{background:#2d333d;border:1px solid #363d48;color:#d7dde6;border-radius:7px;padding:9px 12px;margin-bottom:10px;box-sizing:border-box}
-button{background:#5b8def;border:none;color:#fff;padding:9px 16px;border-radius:7px;cursor:pointer}
-a{color:#5b8def;font-size:13px;text-decoration:none}
-.err{color:#f85149;font-size:13px;margin-bottom:10px}.ok{color:#3fb950;font-size:13px;margin-bottom:10px}
-.row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;background:#262b33;border:1px solid #363d48;border-radius:8px;padding:10px 14px}
-.row .info{width:240px;flex-shrink:0}.row .info small{display:block;color:#8b96a5;font-size:11px}
-.row input{width:180px;margin:0}.row button{width:auto}
-.log{background:#171a1f;border:1px solid #363d48;border-radius:8px;padding:12px;font-size:12px;overflow-x:auto;line-height:1.7}
-"""
-_PANEL_LOGIN_HTML = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>花璃 · 管理后台</title>
-<style>@CSS@</style></head><body>
-<div class="box"><h2>花璃 · 管理后台</h2>
-<div class="err">@MSG@</div>
-<form method="post" action="/panel/login">
-<input name="username" placeholder="用户名" required style="width:100%">
-<input name="password" type="password" placeholder="密码" required style="width:100%">
-<button type="submit" style="width:100%">登录</button></form>
-<p><a href="/panel/register">没有账号？注册管理员账号</a></p>
-<p style="color:#8b96a5;font-size:12px">无 JS 兼容面板（服务端渲染）· 任意浏览器可用</p>
-</div></body></html>"""
-_PANEL_REGISTER_HTML = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>花璃 · 注册</title>
-<style>@CSS@</style></head><body>
-<div class="box"><h2>注册管理员账号</h2>
-<div class="@MSGCLASS@">@MSG@</div>
-<form method="post" action="/panel/register">
-<input name="username" placeholder="新用户名（3~32 字符）" required style="width:100%">
-<input name="password" type="password" placeholder="新密码（至少 6 位）" required style="width:100%">
-<input name="admin_password" type="password" placeholder="当前管理员密码" style="width:100%">
-<button type="submit" style="width:100%">注册</button></form>
-<p><a href="/panel">← 返回登录</a></p>
-</div></body></html>"""
-_PANEL_HTML = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>花璃 · 管理后台</title>
-<style>@CSS@</style></head><body>
-<h2 style="display:flex;justify-content:space-between;align-items:center;max-width:960px;margin:0 auto 12px">
-<span>花璃 · 配置管理 <small style="color:#8b96a5">无 JS 版面板</small></span>
-<span style="font-size:13px"><a href="/panel?tab=logs">日志</a> · <a href="/panel/logout">退出</a></span>
-</h2>
-<div style="max-width:960px;margin:0 auto">
-@MSG@
-@SECTIONS@
-@LOGS@
-</div></body></html>"""
