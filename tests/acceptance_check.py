@@ -422,7 +422,7 @@ async def main():
                   "src/services/meme_knowledge_manager.py", "src/services/meme_summary.py",
                   "src/repositories/meme_knowledge_repository.py",
                   "src/services/prompt_builder.py", "src/services/vision.py",
-                  "src/services/toxic_detector.py"],
+                  "src/services/toxic_detector.py", "src/services/system_status.py"],
                  capture_output=True, text=True)
     js_hits = [l for l in (out.stdout or "").splitlines()
                if not re.search(r"javascript:|# noqa", l)]

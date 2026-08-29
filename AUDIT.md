@@ -359,3 +359,35 @@ guarded_chat(group_id, user_id, ...)
 
 - `test_knowledge_config_keeps_gid_after_save`：配置保存后仍停留在原群
 - `test_unregister_message_mentions_restart_note`：注销提示含启动说明
+
+# 第六轮：用户状态页专项审计（账户/注销/服务器/MCP/API 状态 + 登录框修复）
+
+> 审计对象：webui_panels/account_panel.py、webui_render/account.py、system_status.py、
+> 注销迁移、登录框宽度修复、MCP/API 状态接入
+> 审计方式：结构核验 + 渲染体检 + 边界推演；结论：全绿。
+
+## 本轮改动与核验
+
+| 项 | 说明 | 核验 |
+| :--- | :--- | :--- |
+| 登录框宽度 | username 输入框补 `type="text"`（原无 type → CSS `[type=text]` 选择器不匹配而变窄） | ✅ 登录/注册页一致 |
+| 用户状态页 | 导航栏新增 tab：当前管理员/凭据来源 + 注销表单（仅清账号密码）+ 服务器状态 + MCP 工具 + API 连接状态 | ✅ 全部渲染 |
+| 注销迁移 | 注销表单从面板 body 底部移入「用户状态」页（handler 迁至 AccountPanelMixin） | ✅ MRO 无重复 |
+| 服务器状态 | system_status.py 零依赖读 /proc/meminfo + loadavg + platform；失败降级 N/A | ✅ |
+| MCP/API 状态 | MCP 各 server 工具数/熔断；API 配置层面状态（URL/模型/Key/独立或回退） | ✅ |
+
+## 关键推演（无 bug）
+
+- 注销后 `_effective_credentials` 回退到 .env/config 默认（admin / 空密码）→ 无法登录，需重新配置/注册（符合"回到未注册状态"）
+- 注销成功 → token 清空 → 未登录访问 `/panel` 回登录页（msg 不显示，但语义正确）
+- MCP 未启用 / tool_manager 为 None → 状态页显示"未启用"（短路保护）
+- 所有新文件零 JS（account_panel/account/system_status 扫描无脚本特征）
+- AccountPanelMixin 方法归属类 + 无重复定义（MRO）✅
+
+## 新增测试（第六轮）
+
+- `test_account_tab_renders_all_status`：账户/注销/服务器/MCP/API 状态齐全
+- `test_unregister_form_not_in_body_bottom`：注销表单只在用户状态页
+- `test_account_tab_is_js_free`：用户状态页零 JS
+- `test_login_and_register_username_input_width_consistent`：登录/注册框一致
+- 结构防回归测试补 AccountPanelMixin

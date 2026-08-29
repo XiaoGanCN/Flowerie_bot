@@ -485,6 +485,9 @@ def test_split_modules_keep_class_structure():
         "src/services/toxic_detector.py": ("ToxicDetector", ["__init__", "client", "is_toxic"]),
         "src/core/ai_gateway.py": ("AiGateway", [
             "__init__", "guarded_chat", "_ai_allowed", "guarded_is_toxic", "_get_group_breaker"]),
+        "src/services/webui_panels/account_panel.py": ("AccountPanelMixin", [
+            "_render_account_page", "_credential_info", "_mcp_status",
+            "_config_status", "_handle_panel_unregister"]),
     }
     for path, (cls_name, methods) in checks.items():
         methods_map = class_methods(path)
