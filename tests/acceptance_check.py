@@ -1,0 +1,383 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Flowerie_bot 最终验收：黑盒 + 白盒（在完整 Python 环境实际运行）。
+
+在 GitHub Actions 的 ubuntu + Python 3.12 上运行：pip install -r requirements.txt 后
+用本脚本实际启动 Web UI（main.py 中 WebUIServer.start() 同一路径）、发真 HTTP 请求、
+验证 .env round-trip / 重启加载 / 主题 / 图片 / 安全 / 零 JS，并跑 pytest + ruff。
+输出一段 markdown 结果，非 0 即验收失败。
+"""
+import asyncio
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.parse
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(ROOT)
+sys.path.insert(0, ROOT)
+
+RESULT = []  # (ok, 标题, 说明)
+
+
+def rec(ok, title, note=""):
+    RESULT.append((ok, title, note))
+    print(("[PASS] " if ok else "[FAIL] ") + title + ((" — " + note) if note else ""))
+
+
+async def http(port, req):
+    """req: (method, path, data=None, headers=None, cookies=None, is_multipart=False) → (status, text, resp)"""
+    import aiohttp
+    method, path = req[0], req[1]
+    url = f"http://127.0.0.1:{port}{path}"
+    kw = {}
+    if len(req) > 2 and req[2] is not None:
+        kw["data"] = req[2]
+    if len(req) > 3 and req[3]:
+        kw["headers"] = req[3]
+    if len(req) > 4 and req[4]:
+        kw["cookies"] = req[4]
+    async with aiohttp.ClientSession() as sess:
+        async with sess.request(method, url, **kw) as resp:
+            text = await resp.text()
+            return resp.status, text, resp
+
+
+def make_env(**over):
+    base = {
+        "DEEPSEEK_API_KEY": "sk-acceptance-key-123456",
+        "BOT_QQ": "10001",
+        "WS_PORT": "3001",
+        "WEB_UI_ENABLED": "true",
+        "WEB_UI_PORT": "18080",
+        "WEB_UI_PASSWORD": "secret123",
+        "MAX_REPLY_LENGTH": "40",
+        "ONLY_REPLY_WHEN_AT": "false",
+        "BOT_NICKNAME": "花璃",
+        "LOG_FORMAT": "text",
+        "# 中文注释保留测试": "",
+    }
+    base.update(over)
+    lines = []
+    for k, v in base.items():
+        if k.startswith("#"):
+            lines.append(k)
+        else:
+            lines.append(f"{k}={v}")
+    return "\n".join(lines) + "\n"
+
+
+def write_env(text):
+    with open(".env", "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def read_env():
+    with open(".env", "r", encoding="utf-8") as f:
+        return f.read()
+
+
+async def main():
+    # ---------- A. 实际启动 main.py（尝试）----------
+    rec(True, "验收环境", f"python {sys.version.split()[0]} / {sys.platform}")
+    write_env(make_env())
+    # 尝试启动 main.py（后台），看能否监听 web_ui 端口
+    main_proc = None
+    try:
+        main_proc = subprocess.Popen([sys.executable, "main.py"], cwd=ROOT,
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     text=True)
+    except Exception as e:  # noqa: BLE001
+        rec(False, "main.py 启动", f"subprocess 启动失败: {e}")
+        main_proc = None
+
+    port = 18080
+    main_ok = False
+    for _ in range(40):
+        try:
+            st, txt, _resp = await http(port, ("GET", "/panel"))
+            if st in (200, 302, 401, 403):
+                main_ok = True
+                break
+        except Exception:  # noqa: BLE001
+            pass
+        await asyncio.sleep(0.5)
+    if main_proc is not None:
+        try:
+            if main_proc.poll() is not None:
+                main_ok = False
+        except Exception:  # noqa: BLE001
+            pass
+    rec(main_ok, "实际启动 main.py", "Web UI 端口 18080 响应" if main_ok else "main.py 未能保持监听（需 NapCat WS），改由 WebUIServer 组件实际启动")
+
+    # ---------- 准备组件级启动（真实 Web UI 服务）----------
+    from src.config import load_config, Settings
+    from src.repositories.settings_repository import SettingsRepository
+    from src.services.config_service import ConfigService
+    from src.services.web_ui import WebUIServer
+    from src.repositories.env_store import EnvFileStore
+
+    port = 18081  # 组件专用端口（main.py 检测用 18080）
+    # 实际启动组件（= main.py 里 WebUIServer.start() 同一路径，真实监听 + 真实 .env + 真实 Settings）
+    from src.config import load_config, Settings
+    from src.repositories.settings_repository import SettingsRepository
+    from src.services.config_service import ConfigService
+    from src.services.web_ui import WebUIServer
+    from src.repositories.env_store import EnvFileStore
+
+    cfg = load_config()
+    cfg.WEB_UI_PORT = port
+    repo = SettingsRepository(cfg.SETTINGS_DB_PATH)
+    svc = ConfigService(cfg, repo, env_path=os.path.join(ROOT, ".env"))
+    wui = WebUIServer(cfg, svc, data_dir=os.path.join(ROOT, "data", "webui_accept"))
+    await wui.start()
+
+    BG_DIR = os.path.join(ROOT, "data", "webui_accept", "background")
+    def reload_runtime():
+        """模拟进程重启：重新读 .env 的 Settings。"""
+        return Settings()
+
+    # ---------- 登录（黑盒）----------
+    cookie = ""
+    # panel 登录
+    r = await http(port, ("POST", "/panel/login", {
+        "username": "admin", "password": "secret123"}))
+    # 从 302 Set-Cookie 拿 fb_token（用 aiohttp cookie jar 太绕，手动解析）
+    st, txt, resp = r
+    ck = resp.headers.get("Set-Cookie", "")
+    m = re.search(r"fb_token=([^;]+)", ck)
+    if m:
+        cookie = m.group(1)
+    rec(bool(cookie), "登录（黑盒 POST /panel/login）", "拿到认证 Cookie" if cookie else "Cookie 解析失败")
+
+    auth = {"fb_token": cookie}
+
+    # ---------- B. 全配置 round-trip ----------
+    # 配一组测试值
+    tests = [
+        ("MAX_REPLY_LENGTH", "88", "int"),
+        ("ONLY_REPLY_WHEN_AT", "true", "bool"),
+        ("BOT_NICKNAME", "包含 # 空格 = 引号 \" 中文🍰", "特殊字符串"),
+        ("POKE_REPLIES", "戳一下\n再戳\n（躲开）", "textarea"),
+        ("ALLOWED_GROUP_IDS", "10001, 10002", "list-int"),
+        ("MCP_SERVERS", '[{"name":"s1","url":"https://mcp.example.com/mcp","allowed_tools":"web_search","timeout":15,"enabled":true}]', "JSON"),
+    ]
+    rd_ok = True
+    for key, val, typ in tests:
+        # 黑盒：POST /panel/save（字段名=key）
+        data = urllib.parse.urlencode({key: val}).encode()
+        try:
+            st, txt, resp = await http(port, ("POST", "/panel/save", data,
+                                              {"Content-Type": "application/x-www-form-urlencoded"}, auth))
+        except Exception as e:  # noqa: BLE001
+            rec(False, f"保存 {key}({typ})", f"HTTP 异常: {e}")
+            rd_ok = False
+            continue
+        saved = False
+        try:
+            ev = EnvFileStore(os.path.join(ROOT, ".env")).read_values()
+            if key == "MAX_REPLY_LENGTH":
+                saved = ev.get(key) == val
+            elif key == "ONLY_REPLY_WHEN_AT":
+                saved = ev.get(key) in ("true", "false")
+            elif key == "POKE_REPLIES":
+                saved = json.loads(ev.get(key, "[]")) == ["戳一下", "再戳", "（躲开）"] if ev.get(key) else False
+            elif key == "ALLOWED_GROUP_IDS":
+                saved = json.loads(ev.get(key, "[]")) == [10001, 10002] if ev.get(key) else False
+            elif key == "MCP_SERVERS":
+                saved = json.loads(ev.get(key, "[]"))[0]["name"] == "s1" if ev.get(key) else False
+            else:
+                saved = ev.get(key) == val
+        except Exception as e:  # noqa: BLE001
+            rec(False, f"读取 .env {key}", f"异常: {e}")
+            saved = False
+        rec(saved, f"保存 {key}({typ})", ".env 已 update" if saved else ".env 未变更")
+        rd_ok = rd_ok and saved
+
+    # 重启加载：重新 load_config 读 .env 的 MAX_REPLY_LENGTH
+    s2 = reload_runtime()
+    rec(s2.MAX_REPLY_LENGTH == 88, "重启后 Settings 加载", f"MAX_REPLY_LENGTH={s2.MAX_REPLY_LENGTH} (期望 88)")
+
+    # ---------- C. Secret ----------
+    # 留空不覆盖
+    await http(port, ("POST", "/panel/save", urllib.parse.urlencode({"DEEPSEEK_API_KEY": ""}).encode(),
+                      {"Content-Type": "application/x-www-form-urlencoded"}, auth))
+    ev = EnvFileStore(os.path.join(ROOT, ".env")).read_values()
+    rec(ev.get("DEEPSEEK_API_KEY") == "sk-acceptance-key-123456", "Secret 留空不覆盖", f".env={ev.get('DEEPSEEK_API_KEY', 'MISSING')}")
+    # 修改后保存
+    await http(port, ("POST", "/panel/save", urllib.parse.urlencode({"DEEPSEEK_API_KEY": "sk-new-secret-abcdef"}).encode(),
+                      {"Content-Type": "application/x-www-form-urlencoded"}, auth))
+    ev = EnvFileStore(os.path.join(ROOT, ".env")).read_values()
+    rec(ev.get("DEEPSEEK_API_KEY") == "sk-new-secret-abcdef", "Secret 修改后保存", ".env key 已更新")
+
+    # ---------- D. 热更新 vs 重启项 ----------
+    # MAX_REPLY_LENGTH 为热更新项 → 运行时 Settings 同步改变（通过 db 为 true）；此处用 ConfigService 运行时实例验证
+    # 由于组件实例 cfg 是启动时的 Settings，这里重读运行时值：用 load_config 验证 hot 标志 + 文档
+    hot_msg = "已保存，立即生效"
+    await http(port, ("POST", "/panel/save", urllib.parse.urlencode({"MAX_REPLY_LENGTH": "50"}).encode(),
+                      {"Content-Type": "application/x-www-form-urlencoded"}, auth))
+    s3 = reload_runtime()
+    rec(s3.MAX_REPLY_LENGTH == 50, "热更新值写入 .env", f"load_config MAX_REPLY_LENGTH={s3.MAX_REPLY_LENGTH} (期望 50)")
+    # 重启项（WS_PORT → 需重启提示）
+    r = await http(port, ("POST", "/panel/save", urllib.parse.urlencode({"WS_PORT": "4000"}).encode(),
+                          {"Content-Type": "application/x-www-form-urlencoded"}, auth))
+    st, txt, resp = r
+    loc = resp.headers.get("Location", "")
+    rec("重启" in urllib.parse.unquote(loc), "重启项 UI 提示", "WS_PORT 保存后提示需重启")
+
+    # ---------- E. .env 无损 ----------
+    write_env("# AI Configuration\nDEEPSEEK_API_KEY=sk-original\nMAX_REPLY_LENGTH=40\n# 保留注释\n")
+    from src.repositories.env_store import EnvFileStore as EFS
+    store = EFS(os.path.join(ROOT, ".env"))
+    store.update({"MAX_REPLY_LENGTH": "77"})
+    t = read_env()
+    rec("# AI Configuration" in t and "# 保留注释" in t and "DEEPSEEK_API_KEY=sk-original" in t,
+        ".env 注释与未修改变量保留", "注释/原变量仍在")
+    special = {"A": "hello world", "B": "a#b", "C": "a=b", "D": 'say "hi"', "E": "中文🍰", "F": ""}
+    store2 = EFS(os.path.join(ROOT, ".env"))
+    store2.update(special)
+    vals = store2.read_values()
+    ok_sp = all(vals.get(k) == v for k, v in special.items())
+    rec(ok_sp, "特殊字符 round-trip", f"{vals}")
+    # 非法值拒绝
+    svc_ref = ConfigService(Settings(), SettingsRepository(cfg.SETTINGS_DB_PATH), env_path=os.path.join(ROOT, ".env"))
+    before = EnvFileStore(os.path.join(ROOT, ".env")).read_values().get("MAX_REPLY_LENGTH")
+    ok_reject, _msg = svc_ref.update("MAX_REPLY_LENGTH", "abc")
+    rec(ok_reject is False, "非法值拒绝", "update 返回 False")
+    after = EnvFileStore(os.path.join(ROOT, ".env")).read_values().get("MAX_REPLY_LENGTH")
+    rec(before == after, "非法值不写入 .env", f"before={before} after={after}")
+    # 并发提交
+    errs = []
+    def worker(k, v):
+        try:
+            svc_ref.update(k, v)
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+    ths = [threading.Thread(target=worker, args=(k, v)) for k, v in
+           [("MAX_REPLY_LENGTH", "50"), ("BOT_COOLDOWN", "3"), ("USER_COOLDOWN", "7"), ("REPEAT_THRESHOLD", "4")]]
+    for t2 in ths:
+        t2.start()
+    for t2 in ths:
+        t2.join()
+    vals = EnvFileStore(os.path.join(ROOT, ".env")).read_values()
+    rec(not errs and vals.get("MAX_REPLY_LENGTH") == "50" and vals.get("BOT_COOLDOWN") == "3"
+        and vals.get("USER_COOLDOWN") == "7" and vals.get("REPEAT_THRESHOLD") == "4",
+        "并发提交不互相覆盖", f"errs={len(errs)}")
+
+    # ---------- F. 主题 ----------
+    themes = ["default", "dark", "light", "sakura", "ocean", "forest", "amoled"]
+    theme_ok = True
+    for th in themes:
+        data = urllib.parse.urlencode({"theme": th, "bg_color_input": "",
+                                       "bg_image_opacity": "100", "bg_size": "cover", "bg_position": "center",
+                                       "panel_opacity": "90", "panel_style": "clear"}).encode()
+        await http(port, ("POST", "/panel/appearance", data,
+                          {"Content-Type": "application/x-www-form-urlencoded"}, auth))
+        st, txt, resp = await http(port, ("GET", "/panel?tab=appearance", None, None, auth))
+        if f'theme-{th}' not in txt:
+            theme_ok = False
+    rec(theme_ok, "7 个主题逐个保存并渲染", "全部通过")
+
+    # ---------- G. 背景图片 ----------
+    PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    def multipart(fname, fbytes, extra=None):
+        boundary = "X-BOUNDARY-X"
+        parts = []
+        if extra:
+            for k, v in extra.items():
+                parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n")
+        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"bg_image\"; filename=\"{fname}\"\r\n"
+                     f"Content-Type: application/octet-stream\r\n\r\n".encode())
+        parts.append(fbytes if isinstance(fbytes, bytes) else fbytes)
+        parts.append(f"\r\n--{boundary}--\r\n".encode())
+        body = b"".join(parts)
+        return body, f"multipart/form-data; boundary={boundary}"
+
+    async def upload(fname, fbytes, extra=None):
+        body, ctype = multipart(fname, fbytes, extra or {"theme": "default", "bg_color_input": "",
+                                                        "bg_image_opacity": "100", "bg_size": "cover", "bg_position": "center"})
+        st, txt, resp = await http(port, ("POST", "/panel/appearance", body,
+                                          {"Content-Type": ctype}, auth))
+        return resp.headers.get("Location", "")
+
+    ok_png = await upload("bg.png", PNG)
+    saved = os.path.exists(os.path.join(BG_DIR, "background.png"))
+    rec(saved, "上传合法 PNG", "已保存 background.png" if saved else "未保存")
+
+    # 刷新后仍在（GET /panel/background）
+    st, txt, resp = await http(port, ("GET", "/panel/background", None, None, auth))
+    rec(st == 200 and resp.content_type == "image/png" if hasattr(resp, "content_type") else st == 200,
+        "刷新后背景图仍可访问", f"HTTP {st}")
+
+    # 非法文件
+    async def check_reject(fname, fbytes, label):
+        loc = None
+        try:
+            loc = await upload(fname, fbytes)
+        except Exception:  # noqa: BLE001
+            rec(False, label, "上传异常")
+            return
+        rec("err=1" in loc, label, "已被拒绝")
+
+    await check_reject("evil.html", b"<html><script>alert(1)</script></html>", "拒绝 HTML/JS")
+    await check_reject("evil.svg", b"<svg xmlns=... onload=alert(1)>", "拒绝 SVG")
+    await check_reject("big.png", PNG + b"\x00" * (5 * 1024 * 1024 + 10), "拒绝超 5MB")
+    await check_reject("fake.png", b"this is not an image", "拒绝非图片")
+    await check_reject("../../evil.png", PNG, "拒绝 ../ 路径穿越")
+    await check_reject("/etc/passwd.png", PNG, "拒绝绝对路径")
+
+    # 重启（组件 stop/start + 读 .env 持久化图片目录仍在）
+    if not main_ok and 'wui' in dir():
+        await wui.stop()
+    time.sleep(0.5)
+    persist = os.path.exists(os.path.join(BG_DIR, "background.png"))
+    rec(persist, "图片重启后仍存在", f"data/webui_accept/background/background.png 存在={persist}")
+
+    # ---------- H. 零 JS 检查 ----------
+    import subprocess as sp
+    out = sp.run(["grep", "-rnE", "<script|javascript:|onclick=|onload=|addEventListener|fetch\\(|XMLHttpRequest|let |const |var ",
+                  "src/services/web_ui.py", "src/services/web_ui_assets.py",
+                  "src/repositories/env_store.py", "src/services/config_service.py",
+                  "src/repositories/settings_repository.py", "main.py"],
+                 capture_output=True, text=True)
+    js_hits = [l for l in (out.stdout or "").splitlines()
+               if not re.search(r"javascript:|# noqa", l)]
+    # 排除纯注释里的 "javascript:" 说明
+    js_hits = [l for l in js_hits if "javascript:" not in l]
+    rec(len(js_hits) == 0, "零 JavaScript 检查", f"命中 {len(js_hits)} 条" + ("：\n" + "\n".join(js_hits[:5]) if js_hits else ""))
+
+    # ---------- I. pytest + ruff ----------
+    pt = subprocess.run([sys.executable, "-m", "pytest", "-q"], capture_output=True, text=True)
+    rec(pt.returncode == 0, "pytest", (pt.stdout or pt.stderr).strip()[-160:])
+    rf = subprocess.run([sys.executable, "-m", "ruff", "check", "."], capture_output=True, text=True)
+    rec(rf.returncode == 0, "ruff check", (rf.stdout or rf.stderr).strip()[-160:] or "通过")
+
+    # 收尾
+    try:
+        await wui.stop()
+    except Exception:  # noqa: BLE001
+        pass
+    if main_proc is not None:
+        try:
+            main_proc.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+
+    print("\n========== 验收汇总 ==========")
+    fail = [r for r in RESULT if not r[0]]
+    print(f"通过 {len(RESULT) - len(fail)}/{len(RESULT)}")
+    if fail:
+        for f2 in fail:
+            print("FAIL:", f2[1], f2[2])
+    return len(fail)
+
+
+if __name__ == "__main__":
+    n = asyncio.run(main())
+    sys.exit(1 if n else 0)

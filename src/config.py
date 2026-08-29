@@ -124,7 +124,7 @@ class Settings(BaseSettings):
     MCP_SERVERS: str = ""               # 多 server JSON：[{"name","url","allowed_tools"?,"timeout"?,"enabled"?}, ...]
     MCP_TIMEOUT: int = 15               # 单次工具调用超时（秒，多 server 未单独指定时用此值）
     MCP_MAX_TOOL_CALLS: int = 5         # 单轮对话工具调用次数上限（所有 server 合计）
-    MCP_ALLOWED_TOOLS: str = ""         # 逗号分隔的工具 allowlist（空=不允许任何工具；多 server 未单独指定时用此值）
+    MCP_ALLOWED_TOOLS: str = ""         # 逗号分隔的工具 allowlist（空=放行所有工具；多 server 未单独指定时用此值）
     MCP_ALLOWED_HOSTS: Optional[List[str]] = None  # 显式放行的本地/内网主机白名单（逗号分隔；仅这些地址可绕过回环/私网拒绝）
     MCP_CIRCUIT_FAILURES: int = 5       # MCP 独立熔断：连续失败阈值（每个 server 各自独立）
     MCP_CIRCUIT_PAUSE_SECONDS: int = 60 # MCP 熔断冷却

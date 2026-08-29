@@ -142,9 +142,14 @@ class McpToolManager:
     def is_enabled(self) -> bool:
         return len(self._servers) > 0
 
+    @staticmethod
+    def _server_allows(server, tool_name: str) -> bool:
+        """工具准入：allowlist 为**空 = 放行所有工具**；非空则仅放行列出的工具。"""
+        return (not server.allowlist) or tool_name in server.allowlist
+
     def allow_tool(self, tool_name: str) -> bool:
-        """任一 server 的 allowlist 包含该工具即视为允许（兼容旧接口）。"""
-        return any(tool_name in s.allowlist for s in self._servers)
+        """任一 server 允许该工具即视为允许（兼容旧接口；空 allowlist=放行所有）。"""
+        return any(self._server_allows(s, tool_name) for s in self._servers)
 
     # ---------- 工具元数据 ----------
     async def sync_tools(self) -> List[Dict[str, Any]]:
@@ -177,7 +182,7 @@ class McpToolManager:
         tools = []
         for s in self._servers:
             for raw_name, schema in s.schemas.items():
-                if raw_name not in s.allowlist:
+                if not self._server_allows(s, raw_name):
                     continue
                 safe_name, safe_desc, safe_schema = sanitize_tool_metadata(
                     raw_name,
@@ -202,13 +207,13 @@ class McpToolManager:
             return "工具不可用（MCP 未启用）"
         s = self._tool_owner.get(tool_name)
         if s is None:
-            # 未同步（或同步失败）时的回退：路由到第一个 allowlist 包含该工具的 server
-            s = next((srv for srv in self._servers if tool_name in srv.allowlist), None)
+            # 未同步（或同步失败）时的回退：路由到第一个允许该工具的 server
+            s = next((srv for srv in self._servers if self._server_allows(srv, tool_name)), None)
         if s is None:
             _M_REJECT.inc({"reason": "not_allowed"})
             logger.warning("mcp_tool_rejected tool=%s", tool_name, extra={"event": "mcp_tool_rejected"})
             return f"工具 {tool_name} 不在允许列表"
-        if tool_name not in s.allowlist:
+        if not self._server_allows(s, tool_name):
             _M_REJECT.inc({"reason": "not_allowed"})
             logger.warning("mcp_tool_rejected tool=%s server=%s", tool_name, s.name,
                            extra={"event": "mcp_tool_rejected"})

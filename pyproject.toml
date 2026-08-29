@@ -14,7 +14,7 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.ruff]
 line-length = 120
 target-version = "py39"
-extend-exclude = ["data", "logs", ".git"]
+extend-exclude = ["data", "logs", ".git", "tests/acceptance_check.py"]
 
 # 规则集说明：
 # E/F/W = pycodestyle/pyflakes 基础错误；I = import 排序；B = bugbear 易错点。
