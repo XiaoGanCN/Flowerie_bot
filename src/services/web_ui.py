@@ -295,6 +295,8 @@ class WebUIServer:
         app.router.add_post("/panel/appearance/restore", self._handle_panel_appearance_restore)
         app.router.add_post("/panel/appearance/delete-image", self._handle_panel_appearance_delete_image)
         app.router.add_get("/panel/background", self._handle_panel_background)
+        # MCP server 结构化编辑（添加/编辑/删除，零 JS 表单）
+        app.router.add_post("/panel/mcp/edit", self._handle_panel_mcp_edit)
         # JSON API（保留，供脚本/自动化使用）
         app.router.add_post("/api/login", self._handle_login)
         app.router.add_post("/api/register", self._handle_register)
@@ -326,6 +328,7 @@ class WebUIServer:
             "bg_image": self._pref("bg_image", ""),
             "opacity": max(0, min(100, opacity)),
             "panel_opacity": self._pref("panel_opacity", ""),
+            "panel_style": self._pref("panel_style", "clear"),
             "size": self._pref("bg_size", "cover"),
             "position": self._pref("bg_position", "center"),
         }
@@ -424,12 +427,13 @@ class WebUIServer:
         msg_html = ""
         if msg:
             msg_html = f'<div class="msg {"ok" if not err else "err"}">{_html.escape(msg)}</div>'
+        panel_style = "glass" if str(prefs.get("panel_style", "")) == "glass" else "clear"
         if tab == "appearance":
             body_html = render_appearance(
                 theme, bg_color, int(prefs["opacity"]),
                 str(prefs["size"]), str(prefs["position"]),
                 bool(prefs["bg_image"]), image_url,
-                panel_opacity=panel_opacity,
+                panel_opacity=panel_opacity, panel_style=panel_style,
             )
         elif tab == "logs":
             logs = "\n".join(get_recent_logs(200))
@@ -443,6 +447,7 @@ class WebUIServer:
             body_html=body_html,
             active_tab=tab,
             panel_bg_css=panel_bg_css,
+            glass=(panel_style == "glass"),
         )
 
     async def _handle_panel_login(self, request: web.Request) -> web.Response:
@@ -594,6 +599,10 @@ class WebUIServer:
         self._set_pref("bg_size", size)
         self._set_pref("bg_position", position)
         self._set_pref("panel_opacity", str(panel_opacity))
+        panel_style = str(form.get("panel_style", "") or "clear").strip()
+        if panel_style not in ("glass", "clear"):
+            panel_style = "clear"
+        self._set_pref("panel_style", panel_style)
         message = "外观设置已保存"
         if upload_data is not None:
             ok, file_msg = self._save_background_image(upload_data, upload_hint)
@@ -612,6 +621,7 @@ class WebUIServer:
             if k.startswith("bg_color__"):
                 self.config_service.repository.delete_pref(k)
         self._set_pref("panel_opacity", "")
+        self._set_pref("panel_style", "clear")
         self._set_pref("bg_image_opacity", "100")
         self._set_pref("bg_size", "cover")
         self._set_pref("bg_position", "center")
@@ -641,6 +651,81 @@ class WebUIServer:
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["Cache-Control"] = "private, max-age=3600"
         return resp
+
+    # ---------- MCP server 结构化编辑（添加/编辑/删除，零 JS 表单） ----------
+    def _read_mcp_servers(self) -> List[dict]:
+        raw = self.config_service.get_value("MCP_SERVERS") or ""
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+
+    def _save_mcp_servers(self, servers: List[dict]) -> Tuple[bool, str]:
+        js = json.dumps(servers, ensure_ascii=False, separators=(",", ":"))
+        ok, msg = self.config_service.update("MCP_SERVERS", js)
+        return ok, msg
+
+    @staticmethod
+    def _mcp_server_error(name: str, url: str, tools: str) -> str:
+        if not name:
+            return "名称必填"
+        if not re.fullmatch(r"[A-Za-z0-9_.\-]+", name):
+            return "名称只能含字母/数字/点/横线/下划线"
+        if not url:
+            return "地址必填"
+        if not re.match(r"^(https?|sse)://", url):
+            return "地址需以 http:// https:// 或 sse:// 开头"
+        for token in (t.strip() for t in tools.split(",") if t.strip()):
+            if not re.fullmatch(r"[A-Za-z0-9_.\-]+", token):
+                return f"工具名非法: {token}"
+        return ""
+
+    async def _handle_panel_mcp_edit(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        action = str(form.get("mcp_action", "") or "save").strip()
+        servers = self._read_mcp_servers()
+        try:
+            index = int(form.get("mcp_index", ""))
+        except (TypeError, ValueError):
+            index = None
+        redirect = web.HTTPFound("/panel?cat=MCP")
+        if action == "delete":
+            if index is not None and 0 <= index < len(servers):
+                servers.pop(index)
+            ok, msg = self._save_mcp_servers(servers)
+            return web.HTTPFound(f"/panel?cat=MCP&msg={quote(msg)}&err={'1' if not ok else ''}")
+        # 添加 / 保存
+        name = str(form.get("mcp_name", "") or "").strip()
+        url = str(form.get("mcp_url", "") or "").strip()
+        tools = ",".join(t.strip() for t in str(form.get("mcp_tools", "") or "").split(",") if t.strip())
+        try:
+            timeout = int(form.get("mcp_timeout", "15") or 15)
+            if timeout < 1:
+                timeout = 15
+        except (TypeError, ValueError):
+            timeout = 15
+        enabled = bool(form.get("mcp_enabled", "")) if not hasattr(form, "getall") else "1" in form.getall("mcp_enabled")
+        err = self._mcp_server_error(name, url, tools)
+        if err:
+            return web.HTTPFound(f"/panel?cat=MCP&msg={quote(err)}&err=1")
+        new_srv = {"name": name, "url": url, "allowed_tools": tools, "timeout": timeout, "enabled": enabled}
+        if action in ("save", "edit") and index is not None and 0 <= index < len(servers):
+            servers[index] = new_srv
+            local_msg = f"MCP 服务器「{name}」已更新（重启后生效）"
+        else:
+            if any(s.get("name") == name for s in servers):
+                return web.HTTPFound(f"/panel?cat=MCP&msg={quote('名称已存在：' + name)}&err=1")
+            servers.append(new_srv)
+            local_msg = f"已添加 MCP 服务器「{name}」（重启后生效）"
+        ok, msg = self._save_mcp_servers(servers)
+        if not ok:
+            return web.HTTPFound(f"/panel?cat=MCP&msg={quote(msg)}&err=1")
+        return web.HTTPFound(f"/panel?cat=MCP&msg={quote(local_msg)}")
 
     # ---------- 生命周期 ----------
     @staticmethod

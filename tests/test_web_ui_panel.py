@@ -1,3 +1,4 @@
+import json
 """Web UI 无 JS 面板测试：全量配置表单 / 分组保存 / 主题 / 背景颜色/图片 / 图片安全。
 
 覆盖任务要求：
@@ -197,6 +198,30 @@ async def test_panel_opacity_saves_and_renders():
         assert 'style="--panel-bg:rgba(255,255,255,0.40)"' in text  # sakura rgb 白 + 40%
         assert 'name="panel_opacity"' in text  # 滑块存在
         assert 'value="40"' in text
+
+
+async def test_panel_style_glass_toggle():
+    """卡片效果：选液态玻璃加入 body.pglass（磨砂）；纯透明则不加。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, repo, _, server = _make_stack(td)
+        cookie = await _login(server)
+        # 纯透明（默认 clear）→ body 无 pglass
+        form = FakeMulti([("theme", "sakura"), ("panel_style", "clear"),
+                          ("bg_image_opacity", "100"), ("bg_size", "cover"), ("bg_position", "center")])
+        await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form))
+        assert repo.get_pref("panel_style") == "clear"
+        r1 = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"tab": "appearance"}))
+        assert 'class="theme-sakura"' in _resp_text(r1)
+        assert " pglass" not in _resp_text(r1)
+        # 液态玻璃 → body 加 pglass + radio 选中玻璃
+        form2 = FakeMulti([("theme", "sakura"), ("panel_style", "glass"),
+                           ("bg_image_opacity", "100"), ("bg_size", "cover"), ("bg_position", "center")])
+        await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form2))
+        assert repo.get_pref("panel_style") == "glass"
+        r2 = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"tab": "appearance"}))
+        text2 = _resp_text(r2)
+        assert 'class="theme-sakura pglass"' in text2
+        assert 'value="glass" checked' in text2
 
 
 async def test_panel_topbar_opaque_over_background():
@@ -514,6 +539,49 @@ async def test_background_image_survives_restart():
         assert resp.status == 200
         assert resp.content_type == "image/png"
         repo2.close()
+
+
+async def test_mcp_server_editor_add_delete():
+    """MCP server 结构化编辑器：添加/编辑/删除，服务端组装 MCP_SERVERS JSON。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, repo, _, server = _make_stack(td)
+        cookie = await _login(server)
+        # 添加
+        form = FakeMulti([("mcp_action", "add"), ("mcp_index", ""), ("mcp_name", "github"),
+                          ("mcp_url", "http://127.0.0.1:3000/mcp"), ("mcp_tools", "web_search"),
+                          ("mcp_timeout", "60"), ("mcp_enabled", "1")])
+        await server._handle_panel_mcp_edit(FakeRequest(cookies={"fb_token": cookie}, form=form))
+        servers = json.loads(repo.get_config("MCP_SERVERS"))
+        assert len(servers) == 1 and servers[0]["name"] == "github" and servers[0]["enabled"] is True
+        # 编辑 index0（禁用）
+        form2 = FakeMulti([("mcp_action", "save"), ("mcp_index", "0"), ("mcp_name", "github"),
+                           ("mcp_url", "http://127.0.0.1:3000/mcp"), ("mcp_tools", "web_search"),
+                           ("mcp_timeout", "30"), ("mcp_enabled", "")])
+        await server._handle_panel_mcp_edit(FakeRequest(cookies={"fb_token": cookie}, form=form2))
+        s2 = json.loads(repo.get_config("MCP_SERVERS"))
+        assert s2[0]["timeout"] == 30 and s2[0]["enabled"] is False
+        # 重名拒绝
+        form3 = FakeMulti([("mcp_action", "add"), ("mcp_index", ""), ("mcp_name", "github"),
+                           ("mcp_url", "http://x/mcp"), ("mcp_tools", ""), ("mcp_timeout", "15"), ("mcp_enabled", "1")])
+        r3 = await server._handle_panel_mcp_edit(FakeRequest(cookies={"fb_token": cookie}, form=form3))
+        assert "err=1" in r3.headers.get("Location", "")
+        # 删除
+        form4 = FakeMulti([("mcp_action", "delete"), ("mcp_index", "0")])
+        await server._handle_panel_mcp_edit(FakeRequest(cookies={"fb_token": cookie}, form=form4))
+        assert json.loads(repo.get_config("MCP_SERVERS") or "[]") == []
+
+
+async def test_mcp_editor_renders_in_config_page():
+    """MCP 分类不再渲染成 textarea 的 MCP_SERVERS，而渲染结构化编辑器。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, _, _, server = _make_stack(td)
+        cookie = await _login(server)
+        resp = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"cat": "MCP"}))
+        text = _resp_text(resp)
+        assert 'action="/panel/mcp/edit"' in text
+        assert 'name="mcp_name"' in text
+        assert 'name="mcp_url"' in text
+        assert '添加服务器' in text
 
 
 async def test_old_single_key_form_still_works():

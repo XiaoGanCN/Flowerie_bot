@@ -261,7 +261,9 @@ font-size:13.5px;border:1px solid transparent;transition:all .18s ease}
 .msg.ok{background:rgba(63,185,80,.12);color:var(--ok);border:1px solid rgba(63,185,80,.35)}
 .msg.err{background:rgba(248,81,73,.12);color:var(--err);border:1px solid rgba(248,81,73,.35)}
 .group{background:var(--panel-bg);border:1px solid var(--panel-border);border-radius:14px;
-box-shadow:var(--shadow);padding:16px 18px 18px;margin-bottom:18px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+box-shadow:var(--shadow);padding:16px 18px 18px;margin-bottom:18px}
+/* 卡片效果：body.pglass=液态玻璃（磨砂），否则=纯透明（淡入淡出，直接透出背景） */
+.pglass .group,.pglass .auth-card{backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 .group legend{font-size:14px;font-weight:600;color:var(--accent);padding:0 8px;letter-spacing:.5px}
 .row{display:flex;gap:14px;align-items:flex-start;padding:11px 4px;border-bottom:1px dashed var(--panel-border)}
 .row:last-of-type{border-bottom:none}
@@ -282,6 +284,8 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
 input[type=color]{width:64px;height:38px;padding:3px;cursor:pointer;border-radius:9px}
 input[type=text].color-text{flex:0 1 180px;width:180px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
 .color-swatch{width:34px;height:34px;border-radius:8px;border:1px solid var(--panel-border);flex-shrink:0;display:inline-block}
+.opt{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--text);cursor:pointer}
+.opt input{accent-color:var(--accent)}
 .row-control code{background:var(--accent-soft);padding:1px 5px;border-radius:5px;color:var(--accent);font-size:11.5px}
 .masked{font-size:12px;color:var(--text-muted)}
 .hint{font-size:11.5px;color:var(--text-muted);line-height:1.5}
@@ -314,7 +318,7 @@ border-radius:11px;cursor:pointer;transition:border-color .15s,background .15s}
 .log{background:var(--input-bg);border:1px solid var(--panel-border);border-radius:10px;padding:14px;
 font-size:12px;overflow-x:auto;line-height:1.7;white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace}
 .auth-card{max-width:430px;margin:9vh auto;background:var(--panel-bg);border:1px solid var(--panel-border);
-border-radius:16px;box-shadow:var(--shadow);padding:30px 32px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+border-radius:16px;box-shadow:var(--shadow);padding:30px 32px}
 .auth-card h2{margin:0 0 6px;font-size:18px;color:var(--heading)}
 .auth-card .sub{color:var(--text-muted);font-size:12.5px;margin:0 0 18px}
 .auth-card label{display:block;font-size:12.5px;color:var(--text-muted);margin:12px 0 5px}
@@ -384,7 +388,7 @@ def render_register_page(msg: str = "", ok: bool = True) -> str:
 
 
 def render_panel_page(*, theme_class: str, bg_rules: str, msg_html: str,
-                      body_html: str, active_tab: str, panel_bg_css: str = "") -> str:
+                      body_html: str, active_tab: str, panel_bg_css: str = "", glass: bool = False) -> str:
     tabs = [
         ("config", "/panel", "配置"),
         ("appearance", "/panel?tab=appearance", "外观"),
@@ -398,12 +402,13 @@ def render_panel_page(*, theme_class: str, bg_rules: str, msg_html: str,
     title = titles.get(active_tab, "配置管理")
     # panel_bg_css：服务端算好的具体 rgba(r,g,b,a) 卡片背景（保证兼容）；为空则由 CSS 主题接管
     inline_style = f' style="--panel-bg:{panel_bg_css}"' if panel_bg_css else ""
+    body_class = theme_class + (" pglass" if glass else "")
     return (
         '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<title>花璃 · 管理后台</title>'
         f'<style>{PANEL_CSS}</style><style>{bg_rules}</style></head>'
-        f'<body class="{theme_class}"{inline_style}><div class="bg-layer" aria-hidden="true"></div><div class="wrap">'
+        f'<body class="{body_class}"{inline_style}><div class="bg-layer" aria-hidden="true"></div><div class="wrap">'
         '<header class="topbar">'
         '<div class="brand">花璃<small>· 管理后台</small></div>'
         f'<nav class="tabs">{tab_html}'
@@ -432,15 +437,79 @@ def render_config_sections(configs, active_cat: str = "all") -> str:
     sections = []
     for cat in shown_cats:
         label = ConfigService.CATEGORY_LABELS.get(cat, cat)
-        rows = "".join(_render_config_row(c) for c in by_cat[cat])
         action = f"/panel/save?cat={_esc(active_cat)}" if active_cat in by_cat else "/panel/save"
-        sections.append(
+        mcp_raw = None
+        rows_html = []
+        for c in by_cat[cat]:
+            if c["key"] == "MCP_SERVERS":
+                mcp_raw = c.get("current", "")  # MCP_SERVERS 单独渲染为表单编辑器
+                continue
+            rows_html.append(_render_config_row(c))
+        section = (
             f'<fieldset class="group"><legend>{_esc(label)}</legend>'
-            f'<form method="post" action="{action}">{rows}'
+            f'<form method="post" action="{action}">{"".join(rows_html)}'
             '<div class="group-actions"><button type="submit" class="btn">保存本组</button></div>'
-            '</form></fieldset>'
+            '</form>'
+            + (render_mcp_editor(mcp_raw) if mcp_raw is not None else "")
+            + '</fieldset>'
         )
+        sections.append(section)
     return nav + "\n" + "\n".join(sections)
+
+
+def render_mcp_editor(raw: str, default_timeout: int = 15) -> str:
+    """把 MCP_SERVERS 的 JSON 渲染成结构化编辑器（每个 server 一个独立表单，零 JS）。
+
+    支持逐条添加 / 编辑 / 删除，服务端组装回 MCP_SERVERS JSON 数组。
+    """
+    import json
+    servers = []
+    raw = (raw or "").strip()
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                servers = [x for x in data if isinstance(x, dict)]
+        except json.JSONDecodeError:
+            servers = []
+    blocks = []
+    for i, s in enumerate(servers):
+        blocks.append(_mcp_server_form(i, s, "编辑"))
+    blocks.append(_mcp_server_form(None, {}, "添加", default_timeout))
+    return '<div class="mcp-editor">' + "".join(blocks) + "</div>"
+
+
+def _mcp_server_form(index, s, title, default_timeout: int = 15) -> str:
+    idx = "" if index is None else str(index)
+    name = _esc(s.get("name", ""))
+    url = _esc(s.get("url", ""))
+    tools = _esc(s.get("allowed_tools", ""))
+    timeout = _esc(s.get("timeout", default_timeout))
+    checked = " checked" if s.get("enabled", True) else ""
+    hint = '<span class="hint">名称唯一；地址支持 http(s)/SSE；工具白名单逗号分隔（空=不在此 server 放行）；超时秒</span>'
+    delete_btn = (f'<button type="submit" name="mcp_action" value="delete" class="btn danger">删除</button>'
+                  if index is not None else "")
+    submit_label = "保存" if index is not None else "添加服务器"
+    return (
+        f'<fieldset class="group"><legend>{_esc(title)} MCP 服务器</legend>'
+        f'<form method="post" action="/panel/mcp/edit">'
+        f'<input type="hidden" name="mcp_index" value="{idx}">'
+        '<div class="row"><label class="row-info"><span class="row-title">名称</span><span class="row-key">name</span></label>'
+        f'<div class="row-control"><input type="text" name="mcp_name" value="{name}" placeholder="如 github" required></div></div>'
+        '<div class="row"><label class="row-info"><span class="row-title">地址</span><span class="row-key">url</span></label>'
+        f'<div class="row-control"><input type="text" name="mcp_url" value="{url}" placeholder="https://mcp.example.com/mcp" required></div></div>'
+        '<div class="row"><label class="row-info"><span class="row-title">工具白名单</span><span class="row-key">allowed_tools</span></label>'
+        f'<div class="row-control"><input type="text" name="mcp_tools" value="{tools}" placeholder="web_search, fetch_page（逗号分隔，空=不放行）"></div></div>'
+        f'<div class="row"><label class="row-info"><span class="row-title">超时（秒）</span><span class="row-key">timeout</span></label>'
+        f'<div class="row-control"><div class="range-row"><input type="number" name="mcp_timeout" min="1" max="3600" value="{timeout}" style="max-width:140px"></div></div></div>'
+        '<div class="row"><label class="row-info"><span class="row-title">启用</span><span class="row-key">enabled</span></label>'
+        f'<div class="row-control"><input type="checkbox" name="mcp_enabled" value="1"{checked}></div></div>'
+        f'<p class="hint">{hint}</p>'
+        '<div class="group-actions">'
+        f'<button type="submit" name="mcp_action" value="save" class="btn">{submit_label}</button>'
+        + delete_btn +
+        '</div></form></fieldset>'
+    )
 
 
 def _render_cat_nav(active: str, cats, labels) -> str:
@@ -504,7 +573,8 @@ def _render_config_row(c: dict) -> str:
 
 
 def render_appearance(theme: str, bg_color: str, opacity: int, size: str, position: str,
-                      has_bg_image: bool, image_url: str = "", panel_opacity: int = 90) -> str:
+                      has_bg_image: bool, image_url: str = "", panel_opacity: int = 90,
+                      panel_style: str = "clear") -> str:
     cards = []
     for name in THEME_ORDER:
         t = THEMES.get(name)
@@ -549,6 +619,12 @@ def render_appearance(theme: str, bg_color: str, opacity: int, size: str, positi
         f'<div class="range-row"><input type="range" name="panel_opacity" min="0" max="100" value="{max(0,min(100,int(panel_opacity)))}">'
         f'<output>{max(0,min(100,int(panel_opacity)))}%</output></div>'
         '<span class="hint">面板/卡片越透明，越能透出背景图片与主题底色；100% 完全不透明</span>'
+        '<div class="row"><label class="row-info"><span class="row-title">卡片效果</span>'
+        '<span class="row-key">panel_style</span></label>'
+        '<div class="row-control" style="flex-direction:row;gap:18px;flex-wrap:wrap">'
+        f'<label class="opt"><input type="radio" name="panel_style" value="clear"{" checked" if panel_style=="clear" else ""}> 纯透明（淡入淡出）</label>'
+        f'<label class="opt"><input type="radio" name="panel_style" value="glass"{" checked" if panel_style=="glass" else ""}> 液态玻璃（磨砂）</label>'
+        '</div></div>' 
         '</div></div></fieldset>'
 
         '<fieldset class="group"><legend>背景颜色（跟主题绑定）</legend>'
