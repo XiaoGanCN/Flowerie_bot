@@ -135,6 +135,7 @@ def render_knowledge_tab(group_id, rows, search="", count=0, max_memes=500,
         config_block = (
             '<fieldset class="group"><legend>群聊知识配置</legend>'
             '<form method="post" action="/panel/knowledge/config">'
+            + (f'<input type="hidden" name="gid" value="{_esc(group_id)}">' if group_id else '')
             + rows_html +
             '<div class="group-actions"><button type="submit" class="btn">保存知识配置</button></div>'
             '</form></fieldset>'

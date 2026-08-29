@@ -50,7 +50,8 @@ class KnowledgePanelMixin:
                     "MEME_MIN_MESSAGES_PER_SUMMARY", "MEME_MAX_SUMMARY_CANDIDATES")
                    if name in form}
         ok, message = self.config_service.update_many(updates)
-        gid_q = f"&gid={request.query.get('gid', '')}" if request.query.get("gid", "").isdigit() else ""
+        gid_raw = str(form.get("gid", "") or "").strip()
+        gid_q = f"&gid={gid_raw}" if gid_raw.isdigit() else ""
         return web.HTTPFound(f"/panel?tab=knowledge{gid_q}&msg={quote(message)}&err={'1' if not ok else ''}")
 
     async def _handle_panel_knowledge_view(self, request: web.Request) -> web.Response:

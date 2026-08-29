@@ -39,7 +39,7 @@ class AiGateway:
         动态读取宿主（MessageRouter）当前属性，支持测试/运行期热替换。"""
         self.config = config
         self._ai_client = ai_client if callable(ai_client) else (lambda: ai_client)
-        self.budget = budget
+        self._budget = budget if callable(budget) else (lambda: budget)
         self._prompt_manager = prompt_manager if callable(prompt_manager) else (lambda: prompt_manager)
         self._tool_manager = tool_manager if callable(tool_manager) else (lambda: tool_manager)
         self._persona_manager = persona_manager if callable(persona_manager) else (lambda: persona_manager)
@@ -60,6 +60,10 @@ class AiGateway:
     @property
     def ai_client(self):
         return self._ai_client()
+
+    @property
+    def budget(self):
+        return self._budget()
 
     @property
     def prompt_manager(self):

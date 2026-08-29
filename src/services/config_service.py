@@ -246,9 +246,10 @@ class ConfigService:
         except Exception:  # noqa: BLE001
             pass
         logger.info("web_ui account unregistered", extra={"event": "config_reload"})
+        note = "；注意：若 WEB_UI_ENABLED=true，需在 .env 重新配置 WEB_UI_PASSWORD 或重新注册后才能登录"
         if removed_db:
-            return True, "管理员账号已注销（仅清除账号与密码，其他配置未动）"
-        return True, "管理员账号已注销（settings.db 中无持久化凭据，已清除 .env 相关项）"
+            return True, "管理员账号已注销（仅清除账号与密码，其他配置未动）" + note
+        return True, "管理员账号已注销（settings.db 中无持久化凭据，已清除 .env 相关项）" + note
 
     def migrate_plaintext_password(self, username: str, plaintext: str) -> bool:
         """把 settings.db 中的旧版**明文**密码迁移为 scrypt 哈希（登录成功后调用）。

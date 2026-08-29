@@ -603,3 +603,32 @@ async def test_unregister_requires_current_password():
         text = _resp_text(page)
         assert "登录后管理全部配置" not in text
         assert "注销管理员账号" in text
+
+
+# ---------- 第五轮 review 回归：knowledge 配置保存保留群号 / 注销提示 ----------
+async def test_knowledge_config_keeps_gid_after_save():
+    """知识配置保存后重定向仍带 gid（表单隐藏域 + 服务端 form 读取）。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, _, svc, server, _, _ = _make_stack(td)
+        cookie = await _login(server)
+        resp = await server._handle_panel_knowledge_config(FakeRequest(
+            form={"gid": "100", "MAX_GROUP_MEMES": "222"}, cookies={"fb_token": cookie}))
+        assert resp.status == 302
+        assert "gid=100" in str(resp.headers.get("Location", ""))
+        assert svc.config.MAX_GROUP_MEMES == 222
+
+
+async def test_unregister_message_mentions_restart_note():
+    """注销提示包含 WEB_UI_ENABLED 启动说明。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, _, svc, server, _, _ = _make_stack(td)
+        svc.register_user("admin2", "pass123")
+        resp = await server._handle_panel_login(FakeRequest(
+            form={"username": "admin2", "password": "pass123"}))
+        cookie = resp.cookies.get("fb_token").value
+        resp = await server._handle_panel_unregister(FakeRequest(
+            form={"password": "pass123"}, cookies={"fb_token": cookie}))
+        loc = str(resp.headers.get("Location", ""))
+        import urllib.parse
+        msg = urllib.parse.parse_qs(urllib.parse.urlparse(loc).query).get("msg", [""])[0]
+        assert "WEB_UI_ENABLED" in msg

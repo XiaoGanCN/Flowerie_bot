@@ -92,7 +92,7 @@ class MessageRouter:
         # 可变依赖以 provider 传入：gateway 动态读取 router 当前属性
         # （测试常直接替换 router.ai_client / router.tool_manager，快照会失效）
         self.ai_gateway = AiGateway(
-            config, lambda: self.ai_client, self.budget,
+            config, lambda: self.ai_client, lambda: self.budget,
             prompt_manager=lambda: self.prompt_manager,
             tool_manager=lambda: self.tool_manager,
             persona_manager=lambda: self.persona_manager,

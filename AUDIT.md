@@ -330,3 +330,32 @@ guarded_chat(group_id, user_id, ...)
 - MCP 安全边界：总结任务复用 McpToolManager（allowlist/熔断/SSRF/结果清洗/quota）✅
 - 群数据/Persona/Memory/Context 串线：全部按 group_id 作用域 + 双条件编辑 + 隔离测试 ✅
 - Web UI 零 JS：新页签经黑盒与渲染级扫描（`<script`/onclick/onchange/oninput/fetch/XMLHttpRequest 全无）✅
+
+# 第五轮：架构拆分专项审计（上帝类 / .env 防覆盖 / 注销 / 配置移页）
+
+> 审计对象：webui_panels / webui_render / ai_gateway / prompt_builder / vision /
+> toxic_detector / config_schema 拆分、.env 较新优先、注销账号、配置移页
+> 审计方式：AST 结构检查 + 行数门禁 + 委托链核对 + 边界场景推演；结论：全绿。
+
+## 发现并修复的问题
+
+| # | 问题 | 风险 | 修复 |
+| :--- | :--- | :--- | :--- |
+| 1 | AiGateway 的 **budget 仍是构造时快照**（ai_client/tool_manager 已是 provider）——测试会直接替换 `router.budget`，当前因 BudgetManager 无内部状态而侥幸等价，但属隐患 | 中 | budget 同样改为 provider 动态读取 |
+| 2 | 群聊知识配置保存后 **gid 丢失**（handler 读 query 而非 form，表单无隐藏域） | 低 | 表单加 `gid` 隐藏域 + handler 从 form 读取 |
+| 3 | 注销成功后若 `WEB_UI_ENABLED=true` 且 .env 密码被清除，**重启会被启动校验拒绝**（无密码不允许裸奔）——提示缺失会让用户困惑 | 低 | 注销返回消息补充说明（需重新配置密码或注册） |
+| 4 | 拆分时 @staticmethod 装饰器丢失 ×5、方法首行缩进丢失导致方法悬在类外（vision/gateway）——已在前轮修复并由 `test_split_modules_keep_class_structure` 防回归 | 已修复 | — |
+
+## 专项核验（本轮）
+
+- MRO：WebUI 全部 mixin 无重复方法定义 ✅
+- 行数门禁：web_ui 339 / web_ui_assets 43 / ai_client 353 / config_service 503 / message_router 568，全在限内 ✅
+- 委托链：router.guarded_chat/_ai_allowed/guarded_is_toxic/_get_group_breaker → AiGateway；AIClient → VisionService/ToxicDetector/PromptBuilder，provider 动态读取 ✅
+- .env 防覆盖：env_values 读取 → mtime 比较 → db 同步 → 应用，顺序正确 ✅
+- 注销：密码验证（失败计入限流）、成功清 db+.env 凭据（仅这两个 key）、强制登出、其他配置保留 ✅
+- SCHEMA 引用兼容：ConfigService.SCHEMA 类属性别名保留（测试 15 处引用全部兼容）✅
+
+## 新增测试（第五轮）
+
+- `test_knowledge_config_keeps_gid_after_save`：配置保存后仍停留在原群
+- `test_unregister_message_mentions_restart_note`：注销提示含启动说明
