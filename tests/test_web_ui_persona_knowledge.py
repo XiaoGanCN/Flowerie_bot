@@ -244,7 +244,7 @@ async def test_persona_and_knowledge_pages_are_js_free():
 async def test_html_only_interaction_forms_present():
     """操作全部为服务端表单：POST 提交 + 303/302 重定向回页面。"""
     with tempfile.TemporaryDirectory() as td:
-        _, _, _, server, pmgr, _ = _make_stack(td)
+        _, _, _, server, pmgr, mmgr = _make_stack(td)
         cookie = await _login(server)
         page = await server._handle_panel(FakeRequest(query={"tab": "persona"},
                                                      cookies={"fb_token": cookie}))
@@ -268,10 +268,17 @@ async def test_html_only_interaction_forms_present():
         edit_zone = text3[form_start:form_end]
         assert 'action="/panel/persona/save"' in edit_zone
         assert 'action="/panel/persona/delete"' not in edit_zone
+        # 未指定群：只有「查看」表单
         page = await server._handle_panel(FakeRequest(query={"tab": "knowledge"},
                                                      cookies={"fb_token": cookie}))
         text = _resp_text(page)
+        assert 'action="/panel/knowledge/view"' in text
+        # 指定群（含知识条目）：新增/编辑/删除/清空表单齐全
+        mmgr.add_knowledge(100, "测试梗", "含义")
+        page2 = await server._handle_panel(FakeRequest(query={"tab": "knowledge", "gid": "100"},
+                                                      cookies={"fb_token": cookie}))
+        text2 = _resp_text(page2)
         for action in ("/panel/knowledge/view", "/panel/knowledge/add",
                        "/panel/knowledge/save", "/panel/knowledge/delete",
                        "/panel/knowledge/clear"):
-            assert f'action="{action}"' in text
+            assert f'action="{action}"' in text2
