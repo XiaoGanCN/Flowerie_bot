@@ -205,6 +205,16 @@ def test_atri_preset_exists_and_structure():
     assert "用空格代替逗号" in sp
     assert "绝对不使用任何 emoji" in sp
     assert "短句为主" in sp
+    # 原作设定（萌娘百科/百度百科检索确认）：口癖 / 螃蟹 / 萝卜子别名 / 保护法 / 味觉感受器
+    assert "我可是高性能的！" in sp
+    assert "螃蟹" in sp
+    assert "萝卜子" in sp
+    assert "机器人保护法" in sp
+    assert "味觉感受器" in sp
+    assert "哼小曲" in sp
+    # 群聊安全边界：不把群友认成/代入原作角色（斑鸠夏生/水菜萌/凛凛花等）
+    assert "斑鸠夏生" in sp
+    assert "不要代入" in sp
     # 不复制大量原作台词：system_prompt 总长有界（原创概括而非原文搬运）
     assert len(sp) < 3000
     # 词库独立字段
