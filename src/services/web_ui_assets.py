@@ -12,22 +12,22 @@ import html as _html
 THEMES = {
     "default": {
         "label": "默认",
-        "desc": "深色石板风，花璃默认配色",
-        "bg": "#1e2229",
+        "desc": "明亮清爽的默认配色",
+        "bg": "#F4F6FB",
         "vars": {
-            "--panel-bg": "rgba(38, 43, 51, 0.88)",
-            "--panel-border": "#363d48",
-            "--text": "#d7dde6",
-            "--text-muted": "#8b96a5",
-            "--heading": "#e6ebf2",
-            "--accent": "#5b8def",
-            "--accent-hover": "#4a7ae0",
-            "--accent-soft": "rgba(91, 141, 239, 0.14)",
-            "--input-bg": "#2d333d",
-            "--input-border": "#3a424e",
-            "--ok": "#3fb950",
-            "--err": "#f85149",
-            "--shadow": "0 10px 30px rgba(0,0,0,.35)",
+            "--panel-bg": "rgba(255, 255, 255, 0.9)",
+            "--panel-border": "#E3E7EF",
+            "--text": "#3A4456",
+            "--text-muted": "#7C8798",
+            "--heading": "#1F2637",
+            "--accent": "#5B8DEF",
+            "--accent-hover": "#4A7AE0",
+            "--accent-soft": "rgba(91, 141, 239, 0.12)",
+            "--input-bg": "#FFFFFF",
+            "--input-border": "#D9DEEA",
+            "--ok": "#1A7F37",
+            "--err": "#CF222E",
+            "--shadow": "0 10px 30px rgba(50, 60, 90, .12)",
         },
     },
     "dark": {
@@ -212,7 +212,7 @@ PANEL_CSS = """
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Roboto,"Noto Sans SC",sans-serif;
-color:var(--text,#d7dde6);min-height:100vh;-webkit-font-smoothing:antialiased;line-height:1.5}
+color:var(--text,#3A4456);min-height:100vh;-webkit-font-smoothing:antialiased;line-height:1.5}
 """ + theme_css_block() + """
 .wrap{max-width:1080px;margin:0 auto;padding:16px 20px 72px}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
@@ -269,7 +269,7 @@ cursor:pointer;transition:background .18s ease;font-family:inherit}
 border-radius:11px;cursor:pointer;transition:border-color .15s,background .15s}
 .theme-card:hover{border-color:var(--accent);background:var(--accent-soft)}
 .theme-card input{accent-color:var(--accent);margin:0}
-.theme-swatch{width:36px;height:36px;border-radius:8px;border:1px solid rgba(255,255,255,.2);flex-shrink:0}
+.theme-swatch{width:36px;height:36px;border-radius:8px;border:1px solid var(--panel-border);flex-shrink:0}
 .theme-meta{display:flex;flex-direction:column;gap:1px}
 .theme-meta b{font-size:13px;color:var(--text)}
 .theme-meta small{font-size:11px;color:var(--text-muted);line-height:1.4}
@@ -278,7 +278,7 @@ border-radius:11px;cursor:pointer;transition:border-color .15s,background .15s}
 .range-row output{font-size:12.5px;color:var(--text-muted);min-width:44px;text-align:right}
 .inline-form{display:inline-block}
 .actions-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
-.log{background:rgba(0,0,0,.28);border:1px solid var(--panel-border);border-radius:10px;padding:14px;
+.log{background:var(--input-bg);border:1px solid var(--panel-border);border-radius:10px;padding:14px;
 font-size:12px;overflow-x:auto;line-height:1.7;white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace}
 .auth-card{max-width:430px;margin:9vh auto;background:var(--panel-bg);border:1px solid var(--panel-border);
 border-radius:16px;box-shadow:var(--shadow);padding:30px 32px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
@@ -313,7 +313,7 @@ def render_login_page(msg: str = "") -> str:
         '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<title>花璃 · 管理后台</title><style>' + PANEL_CSS + '</style></head>'
-        '<body class="theme-default" style="background-color:#1e2229">'
+        '<body class="theme-default" style="background-color:#F4F6FB">'
         '<div class="auth-card"><h2>花璃 · 管理后台</h2>'
         '<p class="sub">登录后管理全部配置、外观美化与日志</p>'
         + msg_html +
@@ -336,7 +336,7 @@ def render_register_page(msg: str = "", ok: bool = True) -> str:
         '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<title>花璃 · 注册</title><style>' + PANEL_CSS + '</style></head>'
-        '<body class="theme-default" style="background-color:#1e2229">'
+        '<body class="theme-default" style="background-color:#F4F6FB">'
         '<div class="auth-card"><h2>注册管理员账号</h2>'
         '<p class="sub">账号密码将安全保存在服务器（scrypt 哈希），登录不再依赖 .env</p>'
         + msg_html +
