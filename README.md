@@ -161,7 +161,7 @@ Web UI「群聊知识」页管理；详细设计见 [docs/knowledge.md](docs/kno
 
 ```bash
 pip install -r requirements-dev.txt
-pytest              # 全部测试（含 Persona / Meme / Web UI 新套件）
+pytest              # 507 个测试（含 Persona / Meme / Web UI 新套件）
 ruff check .        # 代码检查
 ```
 

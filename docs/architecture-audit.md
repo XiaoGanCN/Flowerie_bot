@@ -13,7 +13,7 @@
 > - **第四轮收尾**：MCP 工具额度按次硬上限、持久化配置启动合并、MCP SSRF 加固 + 工具结果不可信处理、
 >   MCP 插件式多 server（`MCP_SERVERS`）、Web UI 改为无 JS 服务端渲染面板（`/panel`，支持注册，账号持久化 `settings.db`）—— ✅ 完成
 >
-> **当前基线**：测试 **326** 个（pytest + ruff 全过，CI Python 3.9 / 3.12 全绿）。
+> **当前基线**：测试 **507** 个（pytest + ruff 全过，CI Python 3.9 / 3.12 全绿）。
 
 > 审计对象：Flowerie_bot（NapCat 版，`/storage/emulated/0/Flowerie_bot/`）
 > 审计时间：2026-08-27
