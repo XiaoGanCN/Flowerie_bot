@@ -944,7 +944,7 @@ def render_persona_tab(personas, global_id, bindings, edit_persona=None, new=Fal
         '<input type="hidden" name="action" value="set">'
         '<button type="submit" class="btn small">绑定</button></div>'
         '<span class="hint">优先级：本群人格 &gt; 全局人格 &gt; 内置默认；解除绑定自动回退</span>'
-        '</div></div></form>'
+        '</div></form>'
         '<div class="row"><label class="row-info"><span class="row-title">当前绑定</span>'
         '<span class="row-key">bindings</span></label>'
         '<div class="row-control">' + bind_rows + '</div></div>'
@@ -971,7 +971,7 @@ def render_knowledge_tab(group_id, rows, search="", count=0, max_memes=500,
         + (f' value="{_esc(group_id)}"' if group_id else '') + '>'
         '<button type="submit" class="btn small">查看</button></div>'
         '<span class="hint">知识按群完全隔离：查看/编辑/删除都只作用于输入的群，其他群的数据不可见</span>'
-        '</div></div></form>'
+        '</div></form>'
         + (f'<div class="mcp-card-meta">当前群 {_esc(group_id)}：共 {count} 条（上限 {max_memes}）</div>' if group_id else '')
         + '</fieldset>'
     )
@@ -1011,7 +1011,7 @@ def render_knowledge_tab(group_id, rows, search="", count=0, max_memes=500,
         '<label class="opt"><input type="radio" name="confidence" value="low"> 低</label>'
         '<label class="opt"><input type="radio" name="confidence" value="medium" checked> 中</label>'
         '<label class="opt"><input type="radio" name="confidence" value="high"> 高</label></div>'
-        '<span class="hint">知识只是「群聊知识」不是绝对事实；高可信需群内长期使用/多来源验证</span></div></div>'
+        '<span class="hint">知识只是「群聊知识」不是绝对事实；高可信需群内长期使用/多来源验证</span></div>'
         '<div class="group-actions"><button type="submit" class="btn">添加知识</button></div>'
         '</form></fieldset>'
     )

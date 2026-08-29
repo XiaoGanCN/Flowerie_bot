@@ -400,3 +400,29 @@ async def test_default_persona_hot_update():
         page = await server._handle_panel(FakeRequest(query={"tab": "persona"},
                                                      cookies={"fb_token": cookie}))
         assert 'value="atri" selected' in _resp_text(page)
+
+
+# ---------- HTML 结构配对（防 DOM 错乱回归） ----------
+async def test_html_structure_balanced():
+    """所有渲染页面标签配对（div/form/fieldset/details/summary/select/textarea）。
+
+    回归防护：曾因多余 </div> 导致页面 DOM 结构错乱、布局全乱。
+    """
+    from src.services.web_ui_assets import render_login_page, render_register_page
+
+    with tempfile.TemporaryDirectory() as td:
+        _, _, _, server, _, _ = _make_stack(td)
+        cookie = await _login(server)
+        pages = []
+        for query in ({"tab": "persona"}, {"tab": "persona", "edit": "atri"},
+                      {"tab": "persona", "new": "1"}, {"tab": "persona", "prompt_gid": "100"},
+                      {"tab": "knowledge"}, {"tab": "knowledge", "gid": "100"}):
+            resp = await server._handle_panel(FakeRequest(query=query, cookies={"fb_token": cookie}))
+            pages.append(_resp_text(resp))
+        pages.append(render_login_page())
+        pages.append(render_register_page())
+        for i, text in enumerate(pages):
+            for tag in ("div", "form", "fieldset", "details", "summary", "select", "textarea"):
+                o = text.count(f"<{tag}")
+                c = text.count(f"</{tag}>")
+                assert o == c, f"页面{i} 标签 <{tag}> 不配对：开{o} 闭{c}"
