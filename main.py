@@ -94,7 +94,7 @@ async def main():
             web_ui = WebUIServer(
                 config, config_service, status_provider=_status_provider,
                 tool_manager=tool_manager, persona_manager=persona_manager,
-                meme_manager=meme_manager,
+                meme_manager=meme_manager, prompt_manager=prompt_manager,
             )
         file_parser = FileParser(config)
         policy_engine = PolicyEngine(config, memory_manager)

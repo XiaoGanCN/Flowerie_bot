@@ -734,13 +734,76 @@ def render_appearance(theme: str, bg_color: str, opacity: int, size: str, positi
 
 # ---------------------------------------------------------------- Persona 管理页
 def render_persona_tab(personas, global_id, bindings, edit_persona=None, new=False,
-                       enabled=True) -> str:
-    """人格管理页（零 JS）：全局人格 / 人格列表 / 编辑表单 / 群聊人格绑定。"""
+                       enabled=True, default_persona_id="flowerie", default_persona_name="",
+                       global_prompt="", group_prompt="", prompt_gid=None) -> str:
+    """人格管理页（零 JS）：默认人格 / 全局人格 / 人格列表 / 编辑表单 / 群聊人格绑定 /
+    群聊自定义 Prompt（<details> 原生折叠，无 JS）。"""
     if not enabled:
         return '<div class="msg err">人格系统未接入（persona_manager 未注入）</div>'
     if not personas:
         return '<div class="msg err">人格库为空（内置预设播种失败）</div>'
     name_of = {p["id"]: p.get("name", p["id"]) for p in personas}
+
+    # ---- 默认人格说明（写清楚默认人格 id） ----
+    def_name = default_persona_name or name_of.get(default_persona_id, default_persona_id)
+    default_block = (
+        '<fieldset class="group"><legend>默认人格（Default Persona）</legend>'
+        '<div class="row"><label class="row-info"><span class="row-title">兜底人格</span>'
+        '<span class="row-key">PERSONA_DEFAULT</span></label>'
+        '<div class="row-control"><code>'
+        f'{_esc(default_persona_id)}（{_esc(def_name)}）</code>'
+        '<span class="hint">没有设置全局人格、且该群没有群聊人格时，使用此兜底人格；'
+        '可在 .env 的 <code>PERSONA_DEFAULT</code> 修改（需重启）</span>'
+        '</div></div></fieldset>'
+    )
+
+    # ---- 群聊自定义 Prompt 管理（按群读写；<details> 原生折叠，零 JS） ----
+    gid_esc = _esc(prompt_gid) if prompt_gid else ""
+    gid_placeholder = f' value="{gid_esc}"' if prompt_gid else ""
+    global_prompt_esc = _esc(global_prompt)
+    group_prompt_esc = _esc(group_prompt)
+    prompt_block = (
+        '<fieldset class="group"><legend>群聊自定义 Prompt（按群读写）</legend>'
+        '<p class="hint">自定义 Prompt 作为人格补充注入（优先级低于安全规则）；'
+        '群 Prompt &gt; 全局 Prompt &gt; 人格自带设定。与 /prompt 命令同一存储，管理员可读写</p>'
+        '<details>'
+        '<summary>全局自定义 Prompt'
+        + (f'（{len(global_prompt)} 字）' if global_prompt else '（未设置）')
+        + '</summary>'
+        '<form method="post" action="/panel/prompt/global">'
+        '<div class="row"><label class="row-info"><span class="row-title">内容</span>'
+        '<span class="row-key">global_prompt</span></label>'
+        f'<div class="row-control"><textarea name="content" rows="6">{global_prompt_esc}</textarea></div></div>'
+        '<div class="group-actions">'
+        '<button type="submit" name="action" value="set" class="btn">保存全局 Prompt</button>'
+        '<button type="submit" name="action" value="reset" class="btn danger">重置（恢复默认）</button>'
+        '</div></form></details>'
+        '<details open>'
+        '<summary>按群 Prompt'
+        + (f'（群 {gid_esc}：{len(group_prompt)} 字）' if prompt_gid else '（输入群号后读写）')
+        + '</summary>'
+        '<form method="get" action="/panel">'
+        '<input type="hidden" name="tab" value="persona">'
+        '<div class="row"><label class="row-info"><span class="row-title">查看某群 Prompt</span>'
+        '<span class="row-key">group_id</span></label>'
+        '<div class="row-control" style="flex-direction:row;gap:10px">'
+        f'<input type="text" name="prompt_gid" placeholder="群号" required style="max-width:200px"{gid_placeholder}>'
+        '<button type="submit" class="btn small">查看</button></div></div></form>'
+        '<form method="post" action="/panel/prompt/group">'
+        '<div class="row"><label class="row-info"><span class="row-title">群号</span>'
+        '<span class="row-key">group_id</span></label>'
+        f'<div class="row-control"><input type="text" name="group_id" placeholder="群号" required style="max-width:200px"{gid_placeholder}></div></div>'
+        '<div class="row"><label class="row-info"><span class="row-title">内容</span>'
+        '<span class="row-key">group_prompt</span></label>'
+        f'<div class="row-control"><textarea name="content" rows="6">{group_prompt_esc}</textarea>'
+        '<span class="hint">先在上方输入群号点「查看」载入该群当前 Prompt 再编辑；'
+        '保存/重置只作用于填写的群，与其他群完全隔离</span></div></div>'
+        '<div class="group-actions">'
+        '<button type="submit" name="action" value="set" class="btn">保存本群 Prompt</button>'
+        '<button type="submit" name="action" value="reset" class="btn danger">重置本群</button>'
+        '</div></form></details>'
+        '</fieldset>'
+    )
 
     # ---- 全局人格 ----
     opts = "".join(
@@ -883,7 +946,7 @@ def render_persona_tab(personas, global_id, bindings, edit_persona=None, new=Fal
         '</fieldset>'
     )
 
-    return global_block + edit_block + list_block + group_block
+    return default_block + global_block + prompt_block + edit_block + list_block + group_block
 
 
 # ---------------------------------------------------------------- 群聊知识管理页

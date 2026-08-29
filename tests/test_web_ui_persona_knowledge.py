@@ -26,8 +26,10 @@ def _make_stack(tmp):
     pmgr = PersonaManager(repo)
     mrepo = MemeKnowledgeRepository(os.path.join(tmp, "knowledge.db"))
     mmgr = MemeKnowledgeManager(mrepo)
+    from src.services.prompt_manager import PromptManager
+    prompt_mgr = PromptManager(repo)
     server = WebUIServer(config, svc, data_dir=os.path.join(tmp, "webui"),
-                         persona_manager=pmgr, meme_manager=mmgr)
+                         persona_manager=pmgr, meme_manager=mmgr, prompt_manager=prompt_mgr)
     return config, repo, svc, server, pmgr, mmgr
 
 
@@ -282,3 +284,91 @@ async def test_html_only_interaction_forms_present():
                        "/panel/knowledge/save", "/panel/knowledge/delete",
                        "/panel/knowledge/clear"):
             assert f'action="{action}"' in text2
+
+
+# ---------- 群聊自定义 Prompt 管理（按群读写 + 折叠 + 默认人格 id） ----------
+async def test_prompt_management_global_set_reset():
+    with tempfile.TemporaryDirectory() as td:
+        _, _, _, server, _, _ = _make_stack(td)
+        cookie = await _login(server)
+        # 设置全局 Prompt
+        resp = await server._handle_panel_prompt_global(FakeRequest(
+            form={"action": "set", "content": "你是话痨小助手"},
+            cookies={"fb_token": cookie}))
+        assert resp.status == 302
+        assert server._prompt_manager.get_global_prompt() == "你是话痨小助手"
+        # 重置
+        resp = await server._handle_panel_prompt_global(FakeRequest(
+            form={"action": "reset"}, cookies={"fb_token": cookie}))
+        assert resp.status == 302
+        assert server._prompt_manager.get_global_prompt() == ""
+
+
+async def test_prompt_management_group_isolation():
+    with tempfile.TemporaryDirectory() as td:
+        _, _, _, server, _, _ = _make_stack(td)
+        cookie = await _login(server)
+        # 群 100 写 Prompt
+        resp = await server._handle_panel_prompt_group(FakeRequest(
+            form={"action": "set", "group_id": "100", "content": "本群专属"},
+            cookies={"fb_token": cookie}))
+        assert resp.status == 302
+        assert server._prompt_manager.get_group_prompt(100) == "本群专属"
+        assert server._prompt_manager.get_group_prompt(200) == ""  # 群隔离
+        # 重置群 200（无内容）不影响群 100
+        resp = await server._handle_panel_prompt_group(FakeRequest(
+            form={"action": "reset", "group_id": "200"}, cookies={"fb_token": cookie}))
+        assert resp.status == 302
+        assert server._prompt_manager.get_group_prompt(100) == "本群专属"
+        # 重置群 100
+        resp = await server._handle_panel_prompt_group(FakeRequest(
+            form={"action": "reset", "group_id": "100"}, cookies={"fb_token": cookie}))
+        assert resp.status == 302
+        assert server._prompt_manager.get_group_prompt(100) == ""
+        # 非法群号拒绝
+        resp = await server._handle_panel_prompt_group(FakeRequest(
+            form={"action": "set", "group_id": "abc", "content": "x"},
+            cookies={"fb_token": cookie}))
+        assert "err=1" in str(resp.headers.get("Location", ""))
+
+
+async def test_prompt_management_renders_details_and_default_id():
+    """人格页：<details> 原生折叠（零 JS）、默认人格 id 明确显示、按群 Prompt 载入。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, _, _, server, _, _ = _make_stack(td)
+        cookie = await _login(server)
+        server._prompt_manager.set_global_prompt("全局测试")
+        server._prompt_manager.set_group_prompt(100, "群100测试")
+        # 页面含折叠元素与默认人格 id
+        page = await server._handle_panel(FakeRequest(query={"tab": "persona"},
+                                                     cookies={"fb_token": cookie}))
+        text = _resp_text(page)
+        assert "<details" in text and "<summary>" in text       # 原生折叠，无 JS
+        assert "PERSONA_DEFAULT" in text
+        assert "flowerie" in text                                # 默认人格 id 写清楚
+        assert "全局测试" in text
+        assert 'action="/panel/prompt/global"' in text
+        assert 'action="/panel/prompt/group"' in text
+        # 按群载入：prompt_gid=100 时 textarea 带出群 100 的 Prompt
+        page2 = await server._handle_panel(FakeRequest(query={"tab": "persona", "prompt_gid": "100"},
+                                                      cookies={"fb_token": cookie}))
+        text2 = _resp_text(page2)
+        assert "群100测试" in text2
+        assert 'name="group_id" placeholder="群号" required style="max-width:200px" value="100"' in text2
+        # 群 200 不出现群 100 的内容（群隔离）
+        page3 = await server._handle_panel(FakeRequest(query={"tab": "persona", "prompt_gid": "200"},
+                                                      cookies={"fb_token": cookie}))
+        text3 = _resp_text(page3)
+        assert "群100测试" not in text3
+
+
+async def test_prompt_management_requires_auth():
+    with tempfile.TemporaryDirectory() as td:
+        _, _, _, server, _, _ = _make_stack(td)
+        r1 = await server._handle_panel_prompt_global(FakeRequest(form={"action": "set", "content": "x"}))
+        assert r1.status == 302
+        assert server._prompt_manager.get_global_prompt() == ""
+        r2 = await server._handle_panel_prompt_group(FakeRequest(
+            form={"action": "set", "group_id": "1", "content": "x"}))
+        assert r2.status == 302
+        assert server._prompt_manager.get_group_prompt(1) == ""

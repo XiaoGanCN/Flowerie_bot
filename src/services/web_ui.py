@@ -113,7 +113,7 @@ def normalize_color(value: str) -> Optional[str]:
 class WebUIServer:
     def __init__(self, config: Settings, config_service: ConfigService, status_provider=None,
                  data_dir: str = "./data/webui", tool_manager=None,
-                 persona_manager=None, meme_manager=None):
+                 persona_manager=None, meme_manager=None, prompt_manager=None):
         self.config = config
         self.config_service = config_service
         # status_provider: 可调用，返回状态 dict（ws_connected/uptime 等），由 main 注入
@@ -127,9 +127,10 @@ class WebUIServer:
         self._data_dir = str(data_dir)
         # 运行中 MCP 工具管理器（读取各 server 已同步工具数，用于卡片显示真实数量）
         self._tool_manager = tool_manager
-        # 人格系统 / 群聊知识（Web UI 管理页数据源；未注入时对应 tab 提示不可用）
+        # 人格系统 / 群聊知识 / 自定义 Prompt（Web UI 管理页数据源；未注入时对应区块提示不可用）
         self._persona_manager = persona_manager
         self._meme_manager = meme_manager
+        self._prompt_manager = prompt_manager
 
     # ---------- 认证 ----------
     def _issue_token(self) -> str:
@@ -310,6 +311,9 @@ class WebUIServer:
         app.router.add_post("/panel/persona/save", self._handle_panel_persona_save)
         app.router.add_post("/panel/persona/delete", self._handle_panel_persona_delete)
         app.router.add_post("/panel/persona/group", self._handle_panel_persona_group)
+        # 群聊自定义 Prompt 管理（零 JS 表单：全局 / 按群读写，按群隔离）
+        app.router.add_post("/panel/prompt/global", self._handle_panel_prompt_global)
+        app.router.add_post("/panel/prompt/group", self._handle_panel_prompt_group)
         # 群聊知识管理（零 JS 表单：查看 / 新增 / 编辑 / 删除，严格按群隔离）
         app.router.add_post("/panel/knowledge/view", self._handle_panel_knowledge_view)
         app.router.add_post("/panel/knowledge/add", self._handle_panel_knowledge_add)
@@ -424,15 +428,22 @@ class WebUIServer:
         if gid_raw.isdigit():
             gid = int(gid_raw)
         q = request.query.get("q", "")
+        # 群聊 Prompt 管理：prompt_gid 参数指定要读写哪个群的 Prompt（仅数字）
+        prompt_gid_raw = request.query.get("prompt_gid", "")
+        prompt_gid: Optional[int] = None
+        if prompt_gid_raw.isdigit():
+            prompt_gid = int(prompt_gid_raw)
         return web.Response(
             text=self._panel_page(msg, err, tab, cat, mcp_edit, edit_id=edit_id,
-                                  new_persona=new_persona, gid=gid, search=q),
+                                  new_persona=new_persona, gid=gid, search=q,
+                                  prompt_gid=prompt_gid),
             content_type="text/html", charset="utf-8",
         )
 
     def _panel_page(self, msg: str = "", err: bool = False, tab: str = "config", cat: str = "",
                     mcp_edit=None, edit_id: str = "", new_persona: bool = False,
-                    gid: Optional[int] = None, search: str = "") -> str:
+                    gid: Optional[int] = None, search: str = "",
+                    prompt_gid: Optional[int] = None) -> str:
         prefs = self._get_prefs()
         theme = str(prefs["theme"])
         if theme not in THEMES:
@@ -475,7 +486,7 @@ class WebUIServer:
             logs = "\n".join(get_recent_logs(200))
             body_html = f'<pre class="log">{_html.escape(logs)}</pre>'
         elif tab == "persona":
-            body_html = self._render_persona_page(edit_id, new_persona)
+            body_html = self._render_persona_page(edit_id, new_persona, prompt_gid)
         elif tab == "knowledge":
             body_html = self._render_knowledge_page(gid, search)
         else:
@@ -831,8 +842,53 @@ class WebUIServer:
             return web.HTTPFound(f"/panel?cat=MCP&msg={quote(msg)}&err=1")
         return web.HTTPFound(f"/panel?cat=MCP&msg={quote(local_msg)}")
 
+    # ---------- 群聊自定义 Prompt 管理（按群隔离，零 JS） ----------
+    async def _handle_panel_prompt_global(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        if self._prompt_manager is None:
+            return web.HTTPFound("/panel?tab=persona&msg=" + quote("自定义 Prompt 功能未启用") + "&err=1")
+        action = str(form.get("action", "") or "set").strip()
+        if action == "reset":
+            self._prompt_manager.reset_global_prompt()
+            msg = "全局 Prompt 已重置（回退到内置人格）"
+        else:
+            content = str(form.get("content", "") or "")
+            try:
+                self._prompt_manager.set_global_prompt(content)
+                msg = "全局 Prompt 已保存，立即生效"
+            except ValueError as e:
+                return web.HTTPFound(f"/panel?tab=persona&msg={quote(str(e))}&err=1")
+        return web.HTTPFound(f"/panel?tab=persona&msg={quote(msg)}")
+
+    async def _handle_panel_prompt_group(self, request: web.Request) -> web.Response:
+        """按群读写 Prompt：group_id 强制数字校验，保存/重置只作用于该群（群隔离）。"""
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        if self._prompt_manager is None:
+            return web.HTTPFound("/panel?tab=persona&msg=" + quote("自定义 Prompt 功能未启用") + "&err=1")
+        gid_raw = str(form.get("group_id", "") or "").strip()
+        if not gid_raw.isdigit():
+            return web.HTTPFound("/panel?tab=persona&msg=" + quote("群号必须是数字") + "&err=1")
+        group_id = int(gid_raw)
+        action = str(form.get("action", "") or "set").strip()
+        if action == "reset":
+            self._prompt_manager.reset_group_prompt(group_id)
+            msg = f"群 {group_id} 的 Prompt 已重置（回退到全局/内置）"
+        else:
+            content = str(form.get("content", "") or "")
+            try:
+                self._prompt_manager.set_group_prompt(group_id, content)
+                msg = f"群 {group_id} 的 Prompt 已保存，立即生效"
+            except ValueError as e:
+                return web.HTTPFound(f"/panel?tab=persona&prompt_gid={group_id}&msg={quote(str(e))}&err=1")
+        return web.HTTPFound(f"/panel?tab=persona&prompt_gid={group_id}&msg={quote(msg)}")
+
     # ---------- 人格管理页（零 JS） ----------
-    def _render_persona_page(self, edit_id: str = "", new_persona: bool = False) -> str:
+    def _render_persona_page(self, edit_id: str = "", new_persona: bool = False,
+                            prompt_gid: Optional[int] = None) -> str:
         if self._persona_manager is None:
             return render_persona_tab([], "", [], enabled=False)
         personas = self._persona_manager.list_personas()
@@ -842,8 +898,23 @@ class WebUIServer:
         edit_persona = None
         if edit_id and not new_persona:
             edit_persona = self._persona_manager.get_persona(edit_id)
-        return render_persona_tab(personas, global_id, bindings,
-                                  edit_persona=edit_persona, new=new_persona, enabled=True)
+        # 默认人格 id（写清楚）：来自 PERSONA_DEFAULT 配置
+        default_id = str(getattr(self.config, "PERSONA_DEFAULT", "flowerie") or "flowerie")
+        default_p = self._persona_manager.get_persona(default_id)
+        default_name = (default_p or {}).get("name", "") if default_p else ""
+        # 自定义 Prompt（全局 / 按群读写；prompt_manager 未注入时留空并提示）
+        global_prompt = ""
+        group_prompt = ""
+        if self._prompt_manager is not None:
+            global_prompt = self._prompt_manager.get_global_prompt()
+            if prompt_gid is not None:
+                group_prompt = self._prompt_manager.get_group_prompt(prompt_gid)
+        return render_persona_tab(
+            personas, global_id, bindings,
+            edit_persona=edit_persona, new=new_persona, enabled=True,
+            default_persona_id=default_id, default_persona_name=default_name,
+            global_prompt=global_prompt, group_prompt=group_prompt, prompt_gid=prompt_gid,
+        )
 
     async def _handle_panel_persona_global(self, request: web.Request) -> web.Response:
         if not self._check_token(request):
