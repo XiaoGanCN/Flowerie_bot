@@ -281,6 +281,7 @@ input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent);cursor:po
 input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
 input[type=color]{width:64px;height:38px;padding:3px;cursor:pointer;border-radius:9px}
 input[type=text].color-text{flex:0 1 180px;width:180px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+.color-swatch{width:34px;height:34px;border-radius:8px;border:1px solid var(--panel-border);flex-shrink:0;display:inline-block}
 .row-control code{background:var(--accent-soft);padding:1px 5px;border-radius:5px;color:var(--accent);font-size:11.5px}
 .masked{font-size:12px;color:var(--text-muted)}
 .hint{font-size:11.5px;color:var(--text-muted);line-height:1.5}
@@ -551,15 +552,13 @@ def render_appearance(theme: str, bg_color: str, opacity: int, size: str, positi
         '</div></div></fieldset>'
 
         '<fieldset class="group"><legend>背景颜色（跟主题绑定）</legend>'
-        f'<input type="hidden" name="color_for_theme" value="{_esc(theme)}">'
         '<div class="row"><div class="row-control" style="flex-direction:row;align-items:center;gap:14px;flex-wrap:wrap">'
-        f'<input type="color" name="bg_color" value="{_esc(bg_color)}" title="取色器">'
-        f'<input type="text" name="bg_color_input" value="{_esc(bg_color)}" '
-        'placeholder="#FDEEF3 或 253,238,243" class="color-text" '
-        'title="可粘贴 #RRGGBB 或输入 R,G,B / rgb(r,g,b)">'
-        '<span class="hint">背景颜色已随所选主题自动带好（切换主题即整套换肤）；'
-        '想微调就用取色器或输入 <code>#RRGGBB</code> / <code>253,238,243</code>，'
-        '只改当前主题，不影响其他主题预览</span>'
+        f'<span class="color-swatch" style="background:{_esc(bg_color)}" title="当前主题背景色"></span>'
+        f'<input type="text" name="bg_color_input" value="" '
+        'placeholder="#RRGGBB 或 253,238,243，留空=用主题默认" class="color-text" '
+        'title="留空=用当前主题默认背景；想自定义填入 #RRGGBB 或 R,G,B / rgb(r,g,b)">'
+        '<span class="hint">背景颜色已随所选主题自动带好（切换主题即整套换肤，选黑色主题自动变黑）；'
+        '留空用主题默认；<code>#RRGGBB</code> / <code>253,238,243</code> 输入只改当前主题</span>'
         '</div></div></fieldset>'
 
         '<fieldset class="group"><legend>背景图片</legend>'

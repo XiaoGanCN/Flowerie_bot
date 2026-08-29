@@ -532,23 +532,18 @@ class WebUIServer:
         theme = str(form.get("theme", "") or "")
         if theme and theme not in THEMES:
             errors.append("主题无效")
-        # 背景颜色：跟主题走。颜色字段默认回显"当前主题"的实际背景；提交时只有当
-        # 颜色属于当前正在看的主题（color_for_theme 与所选 theme 一致）才生效；
-        # 切到别的主题时忽略旧颜色、用新主题默认，避免主题互相污染。
+        # 背景颜色：严格跟主题走。**只有用户在文本输入框明确填写**才算自定义，
+        # 且保存为该主题的自定义背景；文本输入框留空 = 清除该主题自定义、用主题默认色。
+        # 不读取色器值（无 JS 下切主题时取色器会残留旧主题色，不能作为保存信号），
+        # 这样"选黑色主题背景就该是黑"、且能清掉以前残留的浅色。
         color_text = str(form.get("bg_color_input", "") or "").strip()
-        color_picker = str(form.get("bg_color", "") or "").strip()
-        color_for_theme = str(form.get("color_for_theme", "") or "").strip()
-        same_theme = (color_for_theme == theme)
-        custom_text = normalize_color(color_text)
-        custom_picker = normalize_color(color_picker) if same_theme else None
-        if (color_text and custom_text is None) or (same_theme and color_picker and custom_picker is None):
-            errors.append("背景颜色格式无效（支持 #RRGGBB 或 R,G,B 或 rgb(r,g,b)）")
-        if custom_text:
-            bg_color = custom_text  # 手动文本优先（明确意图）
-        elif custom_picker:
-            bg_color = custom_picker  # 同主题下的取色器
+        if color_text:
+            bg_color = normalize_color(color_text)
+            if bg_color is None:
+                errors.append("背景颜色格式无效（支持 #RRGGBB 或 R,G,B 或 rgb(r,g,b)）")
+                bg_color = ""
         else:
-            bg_color = ""  # 用该主题默认背景（含切换主题时忽略旧色）
+            bg_color = ""  # 用该主题默认背景
         opacity_raw = str(form.get("bg_image_opacity", "") or "100")
         try:
             opacity = int(opacity_raw)

@@ -166,7 +166,7 @@ async def test_appearance_theme_save_and_render():
     with tempfile.TemporaryDirectory() as td:
         _, repo, _, server = _make_stack(td)
         cookie = await _login(server)
-        form = FakeMulti([("theme", "sakura"), ("color_for_theme", "sakura"), ("bg_color", "#ff7eb3"),
+        form = FakeMulti([("theme", "sakura"), ("color_for_theme", "sakura"), ("bg_color_input", "#ff7eb3"),
                           ("bg_image_opacity", "70"), ("bg_size", "cover"), ("bg_position", "center")])
         resp = await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form))
         assert resp.status == 302
@@ -228,6 +228,42 @@ async def test_sakura_theme_default_light_pink_background():
         assert 'class="theme-sakura"' in text
 
 
+async def test_dark_themed_black_and_stale_color_cleared():
+    """深色主题无自定义背景 = 黑色；且保存（文本留空）会清掉以前残留的浅色。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, repo, _, server = _make_stack(td)
+        cookie = await _login(server)
+        # 模拟历史残留：深色主题被存过浅色
+        repo.set_pref("theme", "dark")
+        repo.set_pref("bg_color__dark", "#F4F6FB")
+        # 深色主题下保存、背景颜色文本留空 → 用主题默认黑，残留被清除
+        form = FakeMulti([("theme", "dark"), ("bg_color_input", ""),
+                          ("bg_image_opacity", "100"), ("bg_size", "cover"), ("bg_position", "center")])
+        resp = await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form))
+        assert resp.status == 302
+        assert repo.get_pref("bg_color__dark") in (None, "")
+        resp2 = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"tab": "appearance"}))
+        text = _resp_text(resp2)
+        assert "background-color: #121417" in text  # 深色主题背景为黑
+
+
+async def test_background_color_uses_text_input_only():
+    """背景颜色只认文本输入框；外观页不再有 type=color 取色器，只留色块预览 + 留空文本。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, _, _, server = _make_stack(td)
+        cookie = await _login(server)
+        repo = server.config_service.repository
+        form = FakeMulti([("theme", "sakura"), ("bg_color_input", "#FDEEF3"),
+                          ("bg_image_opacity", "100"), ("bg_size", "cover"), ("bg_position", "center")])
+        await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form))
+        assert repo.get_pref("bg_color__sakura") == "#FDEEF3"
+        resp = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"tab": "appearance"}))
+        text = _resp_text(resp)
+        assert 'name="bg_color_input"' in text
+        assert 'class="color-swatch"' in text
+        assert 'type="color"' not in text  # 取色器已改为色块预览
+
+
 async def test_appearance_custom_rgb_input():
     """手动输入 RGB（253,238,243）应归一化为 #FDEEF3 并持久化。"""
     with tempfile.TemporaryDirectory() as td:
@@ -279,7 +315,7 @@ async def test_appearance_persists_across_restart():
     with tempfile.TemporaryDirectory() as td:
         _, _, _, server = _make_stack(td)
         cookie = await _login(server)
-        form = FakeMulti([("theme", "ocean"), ("color_for_theme", "ocean"), ("bg_color", "#0ea5e9"),
+        form = FakeMulti([("theme", "ocean"), ("color_for_theme", "ocean"), ("bg_color_input", "#0ea5e9"),
                           ("bg_image_opacity", "50"), ("bg_size", "contain"), ("bg_position", "top")])
         await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form))
         # 模拟重启：同 settings.db + 同 data 目录的新 server
@@ -300,7 +336,7 @@ async def test_appearance_invalid_color_rejected():
     with tempfile.TemporaryDirectory() as td:
         _, repo, _, server = _make_stack(td)
         cookie = await _login(server)
-        form = FakeMulti([("theme", "sakura"), ("color_for_theme", "sakura"), ("bg_color", "not-a-color"),
+        form = FakeMulti([("theme", "sakura"), ("color_for_theme", "sakura"), ("bg_color_input", "not-a-color"),
                           ("bg_image_opacity", "100"), ("bg_size", "cover"), ("bg_position", "center")])
         resp = await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form))
         assert resp.status == 302
@@ -312,7 +348,7 @@ async def test_appearance_restore_default():
     with tempfile.TemporaryDirectory() as td:
         _, repo, _, server = _make_stack(td)
         cookie = await _login(server)
-        form = FakeMulti([("theme", "amoled"), ("color_for_theme", "amoled"), ("bg_color", "#000000"),
+        form = FakeMulti([("theme", "amoled"), ("color_for_theme", "amoled"), ("bg_color_input", "#000000"),
                           ("bg_image_opacity", "10"), ("bg_size", "contain"), ("bg_position", "bottom")])
         await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form))
         resp = await server._handle_panel_appearance_restore(FakeRequest(cookies={"fb_token": cookie}))
