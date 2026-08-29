@@ -31,7 +31,8 @@ def rec(ok, title, note=""):
     print(("[PASS] " if ok else "[FAIL] ") + title + ((" — " + note) if note else ""))
 
 
-SESS = None  # 持久 aiohttp ClientSession（自动管理登录 cookie）
+SESS = None  # 持久 aiohttp ClientSession
+TOKEN = ""  # 显式保存 login 返回的 fb_token，逐请求携带（不依赖 aiohttp 自动 cookie）
 
 async def http(port, req):
     """req: (method, path, data=None, headers=None, cookies=None) → (status, text, resp)
@@ -50,7 +51,9 @@ async def http(port, req):
             kw["data"] = d
     if len(req) > 3 and req[3]:
         kw.setdefault("headers", {}).update(req[3])
-    # req[4]=cookies 由 SESS 自动管理，忽略
+    # 显式携带登录 token（不依赖 aiohttp 自动跟随 3xx 的 cookie 行为）
+    if TOKEN:
+        kw["cookies"] = {"fb_token": TOKEN}
     async with SESS.request(method, url, **kw) as resp:
         return resp.status, await resp.text(), resp
 
@@ -153,12 +156,20 @@ async def main():
         return Settings()
 
     # ---------- 登录（黑盒）----------
-    await http(port, ("POST", "/panel/login", {"username": "admin", "password": "secret123"}))
+    global TOKEN
+    async with SESS.post(f"http://127.0.0.1:{port}/panel/login",
+                         data=urllib.parse.urlencode({"username": "admin", "password": "secret123"}).encode(),
+                         headers={"Content-Type": "application/x-www-form-urlencoded"},
+                         allow_redirects=False) as resp:
+        ck = resp.headers.get("Set-Cookie", "")
+        m = re.search(r"fb_token=([^;]+)", ck)
+        if m:
+            TOKEN = m.group(1)
     st, txt, resp = await http(port, ("GET", "/panel"))
     cookie_ok = (st == 200 and "配置管理" in txt)
     rec(cookie_ok, "登录（黑盒 POST /panel/login 后 GET /panel）",
-        "认证成功（SESS 自动携带 cookie）" if cookie_ok else f"认证失败 HTTP {st}")
-    auth = None  # http() 忽略 cookies（SESS 自动），此处仅为兼容调用处参数
+        "认证成功（显式携带 fb_token）" if cookie_ok else f"认证失败 HTTP {st}")
+    auth = None  # 兼容调用处参数（http 已用 TOKEN）
 
     # ---------- B. 全配置 round-trip ----------
     # 配一组测试值
@@ -290,16 +301,15 @@ async def main():
     PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
     def multipart(fname, fbytes, extra=None):
         boundary = "X-BOUNDARY-X"
-        parts = []
+        body = bytearray()
         if extra:
             for k, v in extra.items():
-                parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n")
-        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"bg_image\"; filename=\"{fname}\"\r\n"
-                     f"Content-Type: application/octet-stream\r\n\r\n".encode())
-        parts.append(fbytes if isinstance(fbytes, bytes) else fbytes)
-        parts.append(f"\r\n--{boundary}--\r\n".encode())
-        body = b"".join(parts)
-        return body, f"multipart/form-data; boundary={boundary}"
+                body += f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"bg_image\"; filename=\"{fname}\"\r\n"
+                 f"Content-Type: application/octet-stream\r\n\r\n").encode()
+        body += (fbytes if isinstance(fbytes, bytes) else fbytes.encode())
+        body += f"\r\n--{boundary}--\r\n".encode()
+        return bytes(body), f"multipart/form-data; boundary={boundary}"
 
     async def upload(fname, fbytes, extra=None):
         body, ctype = multipart(fname, fbytes, extra or {"theme": "default", "bg_color_input": "",
