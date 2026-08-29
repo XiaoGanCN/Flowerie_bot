@@ -343,8 +343,18 @@ async def main():
     await check_reject("evil.svg", b"<svg xmlns=... onload=alert(1)>", "拒绝 SVG")
     await check_reject("big.png", PNG + b"\x00" * (5 * 1024 * 1024 + 10), "拒绝超 5MB")
     await check_reject("fake.png", b"this is not an image", "拒绝非图片")
-    await check_reject("../../evil.png", PNG, "拒绝 ../ 路径穿越")
-    await check_reject("/etc/passwd.png", PNG, "拒绝绝对路径")
+    async def check_traversal(fname, fbytes, label):
+        await upload(fname, fbytes)
+        leaked = (os.path.exists(os.path.join(BG_DIR, "..", "evil.png"))
+                  or os.path.exists("/etc/passwd.png")
+                  or os.path.exists(os.path.join(ROOT, "evil.png"))
+                  or os.path.exists(os.path.join(ROOT, "passwd.png")))
+        saved_fixed = os.path.exists(os.path.join(BG_DIR, "background.png"))
+        rec((not leaked) and saved_fixed, label,
+            "未发生路径穿越（固定名保存）" if not leaked else "存在穿越文件！")
+
+    await check_traversal("../../evil.png", PNG, "路径穿越 ../ 被安全化")
+    await check_traversal("/etc/passwd.png", PNG, "绝对路径被安全化")
 
     # 重启（组件 stop/start + 读 .env 持久化图片目录仍在）
     if not main_ok and 'wui' in dir():
