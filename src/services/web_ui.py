@@ -53,6 +53,14 @@ _LOGIN_FAIL_WINDOW = 60
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5MB
 _ALLOWED_IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "gif"}
 _EXT_MAP = {"png": "png", "jpeg": "jpg", "webp": "webp", "gif": "gif"}
+# 固定文件名扩展名 → Content-Type（不依赖系统 mimetypes 猜测）
+_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
 
 
 def detect_image_type(data: bytes) -> Optional[str]:
@@ -541,13 +549,18 @@ class WebUIServer:
         return web.HTTPFound(f"/panel?tab=appearance&msg={quote('背景图片已删除')}")
 
     async def _handle_panel_background(self, request: web.Request) -> web.Response:
-        """提供已上传的背景图片（仅管理员 token，nosniff）。"""
+        """提供已上传的背景图片（仅管理员 token，显式 Content-Type，nosniff）。"""
         if not self._check_token(request):
             return web.Response(status=403, text="Forbidden")
         path = self._background_path()
         if path is None:
             return web.Response(status=404, text="Not Found")
-        resp = web.FileResponse(path)
+        try:
+            data = path.read_bytes()
+        except OSError:  # noqa: BLE001
+            return web.Response(status=404, text="Not Found")
+        content_type = _CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+        resp = web.Response(body=data, content_type=content_type)
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["Cache-Control"] = "private, max-age=3600"
         return resp
