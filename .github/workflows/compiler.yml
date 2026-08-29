@@ -8,18 +8,33 @@ jobs:
   build:
     strategy:
       matrix:
-        os:
-          - windows-latest
-          - ubuntu-latest
-          - macos-latest
+        include:
+
+          - os: ubuntu-latest
+            arch: x64
+
+          - os: ubuntu-24.04-arm
+            arch: arm64
+
+          - os: windows-latest
+            arch: x64
+
+          - os: windows-11-arm
+            arch: arm64
+
+          - os: macos-latest
+            arch: arm64
+
+          - os: macos-13
+            arch: x64
 
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Install Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: "3.12"
 
