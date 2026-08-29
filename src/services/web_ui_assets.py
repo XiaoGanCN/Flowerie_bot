@@ -744,17 +744,22 @@ def render_persona_tab(personas, global_id, bindings, edit_persona=None, new=Fal
         return '<div class="msg err">人格库为空（内置预设播种失败）</div>'
     name_of = {p["id"]: p.get("name", p["id"]) for p in personas}
 
-    # ---- 默认人格说明（写清楚默认人格 id） ----
-    def_name = default_persona_name or name_of.get(default_persona_id, default_persona_id)
+    # ---- 默认人格（写清楚默认人格 id + 可热更新修改） ----
+    def_opts = "".join(
+        f'<option value="{_esc(p["id"])}"{" selected" if p["id"] == default_persona_id else ""}>{_esc(p.get("name"))}</option>'
+        for p in personas
+    )
     default_block = (
         '<fieldset class="group"><legend>默认人格（Default Persona）</legend>'
+        '<form method="post" action="/panel/persona/default">'
         '<div class="row"><label class="row-info"><span class="row-title">兜底人格</span>'
         '<span class="row-key">PERSONA_DEFAULT</span></label>'
-        '<div class="row-control"><code>'
-        f'{_esc(default_persona_id)}（{_esc(def_name)}）</code>'
+        f'<div class="row-control"><select name="persona_id">{def_opts}</select>'
         '<span class="hint">没有设置全局人格、且该群没有群聊人格时，使用此兜底人格；'
-        '可在 .env 的 <code>PERSONA_DEFAULT</code> 修改（需重启）</span>'
-        '</div></div></fieldset>'
+        '保存后<strong>立即生效</strong>（热更新，无需重启），并写入 .env 的 <code>PERSONA_DEFAULT</code></span>'
+        '</div></div>'
+        '<div class="group-actions"><button type="submit" class="btn">保存默认人格</button></div>'
+        '</form></fieldset>'
     )
 
     # ---- 群聊自定义 Prompt 管理（按群读写；<details> 原生折叠，零 JS） ----

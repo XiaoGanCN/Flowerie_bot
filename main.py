@@ -65,6 +65,7 @@ async def main():
             settings_repo,
             default_persona_id=getattr(config, "PERSONA_DEFAULT", "flowerie"),
             max_system_prompt_length=getattr(config, "MAX_PERSONA_PROMPT_LENGTH", 8000),
+            config=config,  # 动态读取 PERSONA_DEFAULT：Web UI 热更新立即生效
         )
         # 群聊梗知识（独立库，按群隔离）+ 每日总结任务
         meme_repo = MemeKnowledgeRepository(config.MEME_KNOWLEDGE_DB_PATH)

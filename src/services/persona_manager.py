@@ -31,9 +31,13 @@ class PersonaManager:
     """人格管理：内置预设播种 / CRUD / 全局与群聊绑定 / 生效解析 / Prompt 组装。"""
 
     def __init__(self, repository: SettingsRepository, default_persona_id: str = DEFAULT_PERSONA_ID,
-                 max_system_prompt_length: int = 8000, max_persona_count: int = 200):
+                 max_system_prompt_length: int = 8000, max_persona_count: int = 200,
+                 config: Optional[object] = None):
         self.repository = repository
         self.default_persona_id = default_persona_id or DEFAULT_PERSONA_ID
+        # config 注入后动态读取 PERSONA_DEFAULT（Web UI 热更新立即生效，无需重启）；
+        # 未注入（测试/旧调用）时使用构造时快照值
+        self.config = config
         self.max_system_prompt_length = max(500, int(max_system_prompt_length))
         self.max_persona_count = max(1, int(max_persona_count or 200))
         self._reserved_ids = {p["id"] for p in BUILTIN_PERSONAS}
@@ -57,7 +61,11 @@ class PersonaManager:
 
     # ---------- 生效解析（动态决定，不写入任何长期存储） ----------
     def resolve_persona(self, group_id: Optional[int] = None) -> Optional[dict]:
-        """解析某群当前生效人格（Group > Global > 内置默认）。"""
+        """解析某群当前生效人格（Group > Global > 内置默认）。
+
+        默认人格 id 动态读取：注入 config 时以 PERSONA_DEFAULT 当前值为准
+        （Web UI 热更新立即生效），否则用构造时快照。
+        """
         if group_id is not None:
             pid = self.repository.get_group_persona_id(group_id)
             if pid:
@@ -69,7 +77,10 @@ class PersonaManager:
             persona = self.repository.get_persona(gid)
             if persona:
                 return persona
-        persona = self.repository.get_persona(self.default_persona_id)
+        default_id = self.default_persona_id
+        if self.config is not None:
+            default_id = str(getattr(self.config, "PERSONA_DEFAULT", "") or default_id)
+        persona = self.repository.get_persona(default_id)
         if persona:
             return persona
         # 兜底：任何内置预设

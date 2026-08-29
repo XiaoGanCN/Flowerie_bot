@@ -306,7 +306,8 @@ class WebUIServer:
         app.router.add_get("/panel/background", self._handle_panel_background)
         # MCP server 结构化编辑（添加/编辑/删除，零 JS 表单）
         app.router.add_post("/panel/mcp/edit", self._handle_panel_mcp_edit)
-        # 人格管理（零 JS 表单：全局 / 列表 CRUD / 群绑定）
+        # 人格管理（零 JS 表单：默认 / 全局 / 列表 CRUD / 群绑定）
+        app.router.add_post("/panel/persona/default", self._handle_panel_persona_default)
         app.router.add_post("/panel/persona/global", self._handle_panel_persona_global)
         app.router.add_post("/panel/persona/save", self._handle_panel_persona_save)
         app.router.add_post("/panel/persona/delete", self._handle_panel_persona_delete)
@@ -886,6 +887,23 @@ class WebUIServer:
                 return web.HTTPFound(f"/panel?tab=persona&prompt_gid={group_id}&msg={quote(str(e))}&err=1")
         return web.HTTPFound(f"/panel?tab=persona&prompt_gid={group_id}&msg={quote(msg)}")
 
+    async def _handle_panel_persona_default(self, request: web.Request) -> web.Response:
+        """设置默认（兜底）人格：校验存在 → 走 ConfigService 热更新
+        （写 .env + settings.db + 运行时 Settings，立即生效，无需重启）。"""
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        if self._persona_manager is None:
+            return web.HTTPFound("/panel?tab=persona&msg=" + quote("人格系统未启用") + "&err=1")
+        persona_id = str(form.get("persona_id", "") or "").strip()
+        if self._persona_manager.get_persona(persona_id) is None:
+            return web.HTTPFound("/panel?tab=persona&msg=" + quote("人格不存在：" + persona_id) + "&err=1")
+        ok, message = self.config_service.update("PERSONA_DEFAULT", persona_id)
+        if not ok:
+            return web.HTTPFound(f"/panel?tab=persona&msg={quote(message)}&err=1")
+        name = (self._persona_manager.get_persona(persona_id) or {}).get("name", persona_id)
+        return web.HTTPFound(f"/panel?tab=persona&msg={quote('默认人格已设为「' + name + '」，立即生效（无需重启）')}")
+
     # ---------- 人格管理页（零 JS） ----------
     def _render_persona_page(self, edit_id: str = "", new_persona: bool = False,
                             prompt_gid: Optional[int] = None) -> str:
@@ -898,7 +916,7 @@ class WebUIServer:
         edit_persona = None
         if edit_id and not new_persona:
             edit_persona = self._persona_manager.get_persona(edit_id)
-        # 默认人格 id（写清楚）：来自 PERSONA_DEFAULT 配置
+        # 默认人格 id（写清楚）：来自 PERSONA_DEFAULT 配置当前值（热更新后立即反映）
         default_id = str(getattr(self.config, "PERSONA_DEFAULT", "flowerie") or "flowerie")
         default_p = self._persona_manager.get_persona(default_id)
         default_name = (default_p or {}).get("name", "") if default_p else ""

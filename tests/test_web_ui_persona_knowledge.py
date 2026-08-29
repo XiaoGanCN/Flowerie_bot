@@ -372,3 +372,31 @@ async def test_prompt_management_requires_auth():
             form={"action": "set", "group_id": "1", "content": "x"}))
         assert r2.status == 302
         assert server._prompt_manager.get_group_prompt(1) == ""
+
+
+# ---------- 默认人格热更新（Web UI 修改立即生效，无需重启） ----------
+async def test_default_persona_hot_update():
+    with tempfile.TemporaryDirectory() as td:
+        _, _, svc, server, pmgr, _ = _make_stack(td)
+        cookie = await _login(server)
+        # 初始默认 = flowerie
+        assert svc.config.PERSONA_DEFAULT == "flowerie"
+        # 设为 atri → ConfigService 热更新（.env + settings.db + 运行时 Settings）
+        resp = await server._handle_panel_persona_default(FakeRequest(
+            form={"persona_id": "atri"}, cookies={"fb_token": cookie}))
+        assert resp.status == 302
+        assert svc.config.PERSONA_DEFAULT == "atri"
+        assert svc.repository.get_config("PERSONA_DEFAULT") == "atri"
+        # PersonaManager 动态读取 config → resolve 使用新默认
+        pmgr.config = svc.config
+        assert pmgr.resolve_persona_id() == "atri"
+        assert pmgr.resolve_persona_id(999) == "atri"   # 无群/全局设置时用新默认
+        # 不存在的 id 拒绝
+        resp = await server._handle_panel_persona_default(FakeRequest(
+            form={"persona_id": "not_exist"}, cookies={"fb_token": cookie}))
+        assert "err=1" in str(resp.headers.get("Location", ""))
+        assert svc.config.PERSONA_DEFAULT == "atri"
+        # 页面显示当前默认
+        page = await server._handle_panel(FakeRequest(query={"tab": "persona"},
+                                                     cookies={"fb_token": cookie}))
+        assert 'value="atri" selected' in _resp_text(page)

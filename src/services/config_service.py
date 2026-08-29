@@ -197,7 +197,7 @@ class ConfigService:
         # ---------- 数据路径 ----------
         "SETTINGS_DB_PATH": ("Paths", "str", False, False, "设置库路径（需重启，谨慎修改）"),
         # ---------- Persona（人格系统） ----------
-        "PERSONA_DEFAULT": ("Persona", "str", False, False, "默认人格 id（兜底，需重启）"),
+        "PERSONA_DEFAULT": ("Persona", "str", False, True, "默认人格 id（兜底，立即生效）"),
         "MAX_PERSONA_PROMPT_LENGTH": ("Persona", "int", False, False, "人格 system_prompt 最大长度（需重启）"),
         "PERSONA_MAX_COUNT": ("Persona", "int", False, True, "自定义人格总数上限（内置不计）"),
         # ---------- 群聊知识（Meme Knowledge） ----------
