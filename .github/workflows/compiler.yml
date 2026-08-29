@@ -94,19 +94,18 @@ jobs:
     - name: Prepare Termux package
       run: |
 
-        mkdir -p ../termux-package
+        mkdir -p termux-package/Flowerie_bot
 
         rsync -a \
           --exclude ".git" \
           --exclude ".github" \
           ./ \
-          ../termux-package/Flowerie_bot/
+          termux-package/Flowerie_bot/
 
-
-        cd ../termux-package
 
         tar -czf \
-          ../Flowerie_bot-termux-arm64.tar.gz \
+          Flowerie_bot-termux-arm64.tar.gz \
+          -C termux-package \
           Flowerie_bot
 
 
