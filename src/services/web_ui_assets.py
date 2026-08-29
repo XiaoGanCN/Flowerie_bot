@@ -548,7 +548,7 @@ def render_appearance(theme: str, bg_color: str, opacity: int, size: str, positi
         f'<div class="range-row"><input type="range" name="panel_opacity" min="0" max="100" value="{max(0,min(100,int(panel_opacity)))}">'
         f'<output>{max(0,min(100,int(panel_opacity)))}%</output></div>'
         '<span class="hint">面板/卡片越透明，越能透出背景图片与主题底色；100% 完全不透明</span>'
-        '</div></div></fieldset>' 
+        '</div></div></fieldset>'
 
         '<fieldset class="group"><legend>背景颜色（跟主题绑定）</legend>'
         f'<input type="hidden" name="color_for_theme" value="{_esc(theme)}">'
