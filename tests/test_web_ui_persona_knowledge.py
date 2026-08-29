@@ -600,12 +600,13 @@ async def test_unregister_requires_current_password():
         resp = await server._handle_panel_unregister(FakeRequest(
             form={"password": "wrong-pass"}, cookies={"fb_token": cookie}))
         assert "err=1" in str(resp.headers.get("Location", ""))
-        # 凭据未被清除，token 仍有效（面板页可见；登录页有专属标语，面板页没有）
+        # 凭据未被清除，token 仍有效（用户状态页可见；登录页有专属标语，面板页没有）
         assert svc.repository.get_config("WEB_UI_USERNAME") == "admin2"
-        page = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}))
+        page = await server._handle_panel(FakeRequest(query={"tab": "account"},
+                                                     cookies={"fb_token": cookie}))
         text = _resp_text(page)
         assert "登录后管理全部配置" not in text
-        assert "注销管理员账号" in text
+        assert "注销账号" in text
 
 
 # ---------- 第五轮 review 回归：knowledge 配置保存保留群号 / 注销提示 ----------
