@@ -31,22 +31,28 @@ def rec(ok, title, note=""):
     print(("[PASS] " if ok else "[FAIL] ") + title + ((" — " + note) if note else ""))
 
 
+SESS = None  # 持久 aiohttp ClientSession（自动管理登录 cookie）
+
 async def http(port, req):
-    """req: (method, path, data=None, headers=None, cookies=None, is_multipart=False) → (status, text, resp)"""
-    import aiohttp
+    """req: (method, path, data=None, headers=None, cookies=None) → (status, text, resp)
+    使用全局 SESS，登录 cookie 自动保存/携带；data 字典自动 urlencode。"""
     method, path = req[0], req[1]
     url = f"http://127.0.0.1:{port}{path}"
     kw = {}
     if len(req) > 2 and req[2] is not None:
-        kw["data"] = req[2]
+        d = req[2]
+        if isinstance(d, bytes):
+            kw["data"] = d
+        elif isinstance(d, dict):
+            kw["data"] = urllib.parse.urlencode(d).encode()
+            kw.setdefault("headers", {})["Content-Type"] = "application/x-www-form-urlencoded"
+        else:
+            kw["data"] = d
     if len(req) > 3 and req[3]:
-        kw["headers"] = req[3]
-    if len(req) > 4 and req[4]:
-        kw["cookies"] = req[4]
-    async with aiohttp.ClientSession() as sess:
-        async with sess.request(method, url, **kw) as resp:
-            text = await resp.text()
-            return resp.status, text, resp
+        kw.setdefault("headers", {}).update(req[3])
+    # req[4]=cookies 由 SESS 自动管理，忽略
+    async with SESS.request(method, url, **kw) as resp:
+        return resp.status, await resp.text(), resp
 
 
 def make_env(**over):
@@ -85,7 +91,10 @@ def read_env():
 
 async def main():
     # ---------- A. 实际启动 main.py（尝试）----------
-    rec(True, "验收环境", f"python {sys.version.split()[0]} / {sys.platform}")
+    global SESS
+    import aiohttp
+    SESS = aiohttp.ClientSession()
+    rec(True, "验收环境", f"python {sys.version.split()[0]} / {sys.platform} / aiohttp 实际启动")
     write_env(make_env())
     # 尝试启动 main.py（后台），看能否监听 web_ui 端口
     main_proc = None
@@ -144,19 +153,12 @@ async def main():
         return Settings()
 
     # ---------- 登录（黑盒）----------
-    cookie = ""
-    # panel 登录
-    r = await http(port, ("POST", "/panel/login", {
-        "username": "admin", "password": "secret123"}))
-    # 从 302 Set-Cookie 拿 fb_token（用 aiohttp cookie jar 太绕，手动解析）
-    st, txt, resp = r
-    ck = resp.headers.get("Set-Cookie", "")
-    m = re.search(r"fb_token=([^;]+)", ck)
-    if m:
-        cookie = m.group(1)
-    rec(bool(cookie), "登录（黑盒 POST /panel/login）", "拿到认证 Cookie" if cookie else "Cookie 解析失败")
-
-    auth = {"fb_token": cookie}
+    await http(port, ("POST", "/panel/login", {"username": "admin", "password": "secret123"}))
+    st, txt, resp = await http(port, ("GET", "/panel"))
+    cookie_ok = (st == 200 and "配置管理" in txt)
+    rec(cookie_ok, "登录（黑盒 POST /panel/login 后 GET /panel）",
+        "认证成功（SESS 自动携带 cookie）" if cookie_ok else f"认证失败 HTTP {st}")
+    auth = None  # http() 忽略 cookies（SESS 自动），此处仅为兼容调用处参数
 
     # ---------- B. 全配置 round-trip ----------
     # 配一组测试值
@@ -228,11 +230,11 @@ async def main():
     r = await http(port, ("POST", "/panel/save", urllib.parse.urlencode({"WS_PORT": "4000"}).encode(),
                           {"Content-Type": "application/x-www-form-urlencoded"}, auth))
     st, txt, resp = r
-    loc = resp.headers.get("Location", "")
-    rec("重启" in urllib.parse.unquote(loc), "重启项 UI 提示", "WS_PORT 保存后提示需重启")
+    rec("重启" in txt, "重启项 UI 提示", "WS_PORT 保存后页面提示'部分配置需重启生效'" if "重启" in txt else "未提示")
 
     # ---------- E. .env 无损 ----------
-    write_env("# AI Configuration\nDEEPSEEK_API_KEY=sk-original\nMAX_REPLY_LENGTH=40\n# 保留注释\n")
+    write_env("# AI Configuration\nDEEPSEEK_API_KEY=sk-original\nBOT_QQ=10001\nWS_PORT=3001\n"
+              "WEB_UI_PASSWORD=secret123\nMAX_REPLY_LENGTH=40\n# 保留注释\n")
     from src.repositories.env_store import EnvFileStore as EFS
     store = EFS(os.path.join(ROOT, ".env"))
     store.update({"MAX_REPLY_LENGTH": "77"})
@@ -304,7 +306,7 @@ async def main():
                                                         "bg_image_opacity": "100", "bg_size": "cover", "bg_position": "center"})
         st, txt, resp = await http(port, ("POST", "/panel/appearance", body,
                                           {"Content-Type": ctype}, auth))
-        return resp.headers.get("Location", "")
+        return str(resp.url)
 
     ok_png = await upload("bg.png", PNG)
     saved = os.path.exists(os.path.join(BG_DIR, "background.png"))
@@ -359,6 +361,10 @@ async def main():
     rec(rf.returncode == 0, "ruff check", (rf.stdout or rf.stderr).strip()[-160:] or "通过")
 
     # 收尾
+    try:
+        await SESS.close()
+    except Exception:  # noqa: BLE001
+        pass
     try:
         await wui.stop()
     except Exception:  # noqa: BLE001
