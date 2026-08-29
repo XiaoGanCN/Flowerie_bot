@@ -215,6 +215,9 @@ def test_atri_preset_exists_and_structure():
     # 群聊安全边界：不把群友认成/代入原作角色（斑鸠夏生/水菜萌/凛凛花等）
     assert "斑鸠夏生" in sp
     assert "不要代入" in sp
+    # 禁止称呼任何人为'主人'（不论管理员还是群友），且无残留允许规则
+    assert "绝对不要称呼群里的任何人为'主人'" in sp
+    assert "可以用'主人'" not in sp
     # 不复制大量原作台词：system_prompt 总长有界（原创概括而非原文搬运）
     assert len(sp) < 3000
     # 词库独立字段
