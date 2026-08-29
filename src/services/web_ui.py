@@ -80,6 +80,33 @@ def validate_hex_color(value: str) -> bool:
     return bool(re.fullmatch(r"#[0-9a-fA-F]{6}", value or ""))
 
 
+_HEX6_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
+_RGB_RE = re.compile(r"^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$", re.I)
+_RGBA_RE = re.compile(r"^rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*[\d.]+\s*\)$", re.I)
+_RGB3_RE = re.compile(r"^\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*$")
+
+
+def normalize_color(value: str) -> Optional[str]:
+    """把用户输入的颜色解析成标准 `#RRGGBB`。支持多种写法：
+    - `#FDEEF3` / `FDEEF3`
+    - `253,238,243` / `253, 238, 243`
+    - `rgb(253,238,243)` / `rgba(253,238,243,0.5)`
+    非法返回 None。
+    """
+    v = (value or "").strip()
+    if not v:
+        return None
+    m = _HEX6_RE.match(v)
+    if m:
+        return "#" + m.group(1).upper()
+    m = _RGB_RE.match(v) or _RGBA_RE.match(v) or _RGB3_RE.match(v)
+    if m:
+        nums = [int(x) for x in m.groups() if x is not None]
+        if len(nums) == 3 and all(0 <= x <= 255 for x in nums):
+            return "#%02X%02X%02X" % (nums[0], nums[1], nums[2])
+    return None
+
+
 class WebUIServer:
     def __init__(self, config: Settings, config_service: ConfigService, status_provider=None,
                  data_dir: str = "./data/webui"):
@@ -352,10 +379,13 @@ class WebUIServer:
         tab = request.query.get("tab", "")
         if tab not in ("appearance", "logs"):
             tab = "config"
-        return web.Response(text=self._panel_page(msg, err, tab),
+        cat = request.query.get("cat", "")
+        if cat not in ("all", "") and cat not in ConfigService.CATEGORY_ORDER:
+            cat = ""
+        return web.Response(text=self._panel_page(msg, err, tab, cat),
                             content_type="text/html", charset="utf-8")
 
-    def _panel_page(self, msg: str = "", err: bool = False, tab: str = "config") -> str:
+    def _panel_page(self, msg: str = "", err: bool = False, tab: str = "config", cat: str = "") -> str:
         prefs = self._get_prefs()
         theme = str(prefs["theme"])
         if theme not in THEMES:
@@ -384,7 +414,7 @@ class WebUIServer:
             logs = "\n".join(get_recent_logs(200))
             body_html = f'<pre class="log">{_html.escape(logs)}</pre>'
         else:
-            body_html = render_config_sections(self.config_service.list_configs())
+            body_html = render_config_sections(self.config_service.list_configs(), active_cat=cat)
         return render_panel_page(
             theme_class=theme_body_class(theme),
             bg_rules=bg_rules,
@@ -437,12 +467,16 @@ class WebUIServer:
         """
         if not self._check_token(request):
             return web.HTTPFound("/panel")
+        cat = request.query.get("cat", "")
+        if cat not in ConfigService.CATEGORY_ORDER:
+            cat = ""
+        _catq = f"&cat={quote(cat)}" if cat else ""
         form = await request.post()
         if "key" in form and "value" in form:
             key = str(form.get("key", ""))
             value = str(form.get("value", ""))
             ok, message = self.config_service.update(key, value)
-            return web.HTTPFound(f"/panel?msg={quote(message)}&err={'1' if not ok else ''}")
+            return web.HTTPFound(f"/panel?msg={quote(message)}&err={'1' if not ok else ''}{_catq}")
         updates: Dict[str, str] = {}
         for name in form.keys():
             if name not in self.config_service.SCHEMA:
@@ -453,7 +487,7 @@ class WebUIServer:
             else:
                 updates[name] = str(form.get(name, ""))
         ok, message = self.config_service.update_many(updates)
-        return web.HTTPFound(f"/panel?msg={quote(message)}&err={'1' if not ok else ''}")
+        return web.HTTPFound(f"/panel?msg={quote(message)}&err={'1' if not ok else ''}{_catq}")
 
     async def _handle_panel_logout(self, request: web.Request) -> web.Response:
         token = request.cookies.get("fb_token", "")
@@ -479,9 +513,16 @@ class WebUIServer:
         theme = str(form.get("theme", "") or "")
         if theme and theme not in THEMES:
             errors.append("主题无效")
-        bg_color = str(form.get("bg_color", "") or "")
-        if bg_color and not validate_hex_color(bg_color):
-            errors.append("背景颜色格式无效")
+        # 背景颜色：优先手动输入的文本（#RRGGBB / R,G,B / rgb()），取色器作为兜底
+        color_text = str(form.get("bg_color_input", "") or "").strip()
+        color_picker = str(form.get("bg_color", "") or "").strip()
+        bg_color = ""
+        if color_text or color_picker:
+            parsed = normalize_color(color_text) or normalize_color(color_picker)
+            if parsed is None:
+                errors.append("背景颜色格式无效（支持 #RRGGBB 或 R,G,B 或 rgb(r,g,b)）")
+            else:
+                bg_color = parsed
         opacity_raw = str(form.get("bg_image_opacity", "") or "100")
         try:
             opacity = int(opacity_raw)

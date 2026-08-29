@@ -171,14 +171,78 @@ async def test_appearance_theme_save_and_render():
         resp = await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form))
         assert resp.status == 302
         assert repo.get_pref("theme") == "sakura"
-        assert repo.get_pref("bg_color") == "#ff7eb3"
+        assert repo.get_pref("bg_color") == "#FF7EB3"  # 归一化大写
         assert repo.get_pref("bg_image_opacity") == "70"
         # 渲染：body class + 选中态 + 颜色
         resp2 = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"tab": "appearance"}))
         text = _resp_text(resp2)
         assert 'class="theme-sakura"' in text
         assert 'value="sakura" checked' in text
-        assert "background-color: #ff7eb3" in text
+        assert "background-color: #FF7EB3" in text
+
+
+async def test_sakura_theme_default_light_pink_background():
+    """Sakura 主题默认背景应为明亮浅粉 #FDEEF3（不设自定义颜色时）。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, repo, _, server = _make_stack(td)
+        cookie = await _login(server)
+        # 只选 sakura，不设背景颜色
+        form = FakeMulti([("theme", "sakura"), ("bg_color", ""),
+                          ("bg_image_opacity", "100"), ("bg_size", "cover"), ("bg_position", "center")])
+        resp = await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form))
+        assert resp.status == 302
+        assert repo.get_pref("theme") == "sakura"
+        # 渲染：无自定义颜色时用主题默认浅粉
+        resp2 = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"tab": "appearance"}))
+        text = _resp_text(resp2)
+        assert "background-color: #FDEEF3" in text
+        assert 'class="theme-sakura"' in text
+
+
+async def test_appearance_custom_rgb_input():
+    """手动输入 RGB（253,238,243）应归一化为 #FDEEF3 并持久化。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, repo, _, server = _make_stack(td)
+        cookie = await _login(server)
+        form = FakeMulti([("theme", "default"), ("bg_color_input", "253,238,243"),
+                          ("bg_image_opacity", "100"), ("bg_size", "cover"), ("bg_position", "center")])
+        resp = await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form))
+        assert resp.status == 302
+        assert repo.get_pref("bg_color") == "#FDEEF3"
+        resp2 = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"tab": "appearance"}))
+        assert "background-color: #FDEEF3" in _resp_text(resp2)
+
+
+async def test_appearance_invalid_rgb_input_rejected():
+    with tempfile.TemporaryDirectory() as td:
+        _, repo, _, server = _make_stack(td)
+        cookie = await _login(server)
+        form = FakeMulti([("theme", "default"), ("bg_color_input", "999,238,243"),
+                          ("bg_image_opacity", "100"), ("bg_size", "cover"), ("bg_position", "center")])
+        resp = await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form))
+        assert resp.status == 302
+        assert "err=1" in str(resp.headers.get("Location", ""))
+        assert repo.get_pref("bg_color") is None  # 未保存
+
+
+async def test_config_category_navigation():
+    """配置页分类导航：点 MCP 只显示 MCP，保存后回到原分类。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, _, _, server = _make_stack(td)
+        cookie = await _login(server)
+        # 默认"全部"：含分类导航 + 全部配置键
+        resp = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={}))
+        text = _resp_text(resp)
+        assert 'class="cat active" href="/panel?cat=all"' in text
+        assert 'href="/panel?cat=MCP"' in text
+        assert 'href="/panel?cat=Bot"' in text
+        # 只看 MCP 分类
+        resp2 = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"cat": "MCP"}))
+        text2 = _resp_text(resp2)
+        assert 'class="cat active" href="/panel?cat=MCP"' in text2
+        assert 'name="MCP_ENABLED"' in text2
+        assert 'name="BOT_NICKNAME"' not in text2  # 别类不显示
+        assert 'action="/panel/save?cat=MCP"' in text2  # 保存回 MCP
 
 
 async def test_appearance_persists_across_restart():
@@ -199,7 +263,7 @@ async def test_appearance_persists_across_restart():
         resp = await server2._handle_panel(FakeRequest(cookies={"fb_token": cookie2}, query={"tab": "appearance"}))
         text = _resp_text(resp)
         assert 'class="theme-ocean"' in text
-        assert "background-color: #0ea5e9" in text
+        assert "background-color: #0EA5E9" in text
         repo2.close()
 
 

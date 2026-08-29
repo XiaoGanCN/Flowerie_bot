@@ -72,22 +72,22 @@ THEMES = {
     },
     "sakura": {
         "label": "Sakura",
-        "desc": "樱花粉，少女心",
-        "bg": "#2a2126",
+        "desc": "樱花粉，明亮的浅粉少女系",
+        "bg": "#FDEEF3",
         "vars": {
-            "--panel-bg": "rgba(48, 34, 42, 0.88)",
-            "--panel-border": "#55404c",
-            "--text": "#f0dfe6",
-            "--text-muted": "#b79aa6",
-            "--heading": "#ffe4ec",
-            "--accent": "#ff7eb3",
-            "--accent-hover": "#f06ba0",
-            "--accent-soft": "rgba(255, 126, 179, 0.15)",
-            "--input-bg": "#3a2a33",
-            "--input-border": "#5a4552",
-            "--ok": "#7fd88a",
-            "--err": "#ff6b6b",
-            "--shadow": "0 10px 30px rgba(0,0,0,.4)",
+            "--panel-bg": "rgba(255, 255, 255, 0.82)",
+            "--panel-border": "#f4d8e2",
+            "--text": "#7a4b5e",
+            "--text-muted": "#b08a98",
+            "--heading": "#5a2e42",
+            "--accent": "#e75480",
+            "--accent-hover": "#d64072",
+            "--accent-soft": "rgba(231, 84, 128, 0.14)",
+            "--input-bg": "#ffffff",
+            "--input-border": "#f4d8e2",
+            "--ok": "#1a7f37",
+            "--err": "#cf222e",
+            "--shadow": "0 10px 30px rgba(231, 84, 128, 0.2)",
         },
     },
     "ocean": {
@@ -248,8 +248,15 @@ textarea{resize:vertical;line-height:1.55;font-family:ui-monospace,Menlo,Consola
 input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent);cursor:pointer}
 input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
 input[type=color]{width:64px;height:38px;padding:3px;cursor:pointer;border-radius:9px}
+input[type=text].color-text{flex:0 1 180px;width:180px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+.row-control code{background:var(--accent-soft);padding:1px 5px;border-radius:5px;color:var(--accent);font-size:11.5px}
 .masked{font-size:12px;color:var(--text-muted)}
 .hint{font-size:11.5px;color:var(--text-muted);line-height:1.5}
+.cats{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}
+.cat{display:inline-block;padding:6px 13px;border-radius:999px;border:1px solid var(--panel-border);
+background:var(--panel-bg);color:var(--text-muted);font-size:12.5px;text-decoration:none;transition:all .15s ease;white-space:nowrap}
+.cat:hover{border-color:var(--accent);color:var(--text)}
+.cat.active{background:var(--accent);border-color:var(--accent);color:#fff}
 .group-actions{display:flex;justify-content:flex-end;margin-top:12px;padding-top:13px;border-top:1px solid var(--panel-border)}
 .btn{background:var(--accent);color:#fff;border:none;border-radius:9px;padding:9px 22px;font-size:13.5px;
 cursor:pointer;transition:background .18s ease;font-family:inherit}
@@ -372,26 +379,43 @@ def render_panel_page(*, theme_class: str, bg_rules: str, msg_html: str,
     )
 
 
-def render_config_sections(configs) -> str:
-    """按分类渲染配置分组表单（fieldset + 单组表单，纯 HTML 提交）。"""
+def render_config_sections(configs, active_cat: str = "all") -> str:
+    """按分类渲染配置分组表单，顶部带分类导航（点某个分类只看那一类，避免全部堆在一屏）。
+
+    active_cat: "all" 显示全部分类；否则只显示该分类。纯 HTML + 链接跳转，零 JS。
+    """
     from src.services.config_service import ConfigService
     by_cat: dict = {}
     for c in configs:
         by_cat.setdefault(c["category"], []).append(c)
+    # 有内容的分类（按固定顺序）
+    cats = [cat for cat in ConfigService.CATEGORY_ORDER if by_cat.get(cat)]
+    if active_cat not in ("all", "") and active_cat not in by_cat:
+        active_cat = "all"
+    nav = _render_cat_nav(active_cat, cats, ConfigService.CATEGORY_LABELS)
+    shown_cats = [active_cat] if active_cat in by_cat else cats
     sections = []
-    for cat in ConfigService.CATEGORY_ORDER:
-        items = by_cat.get(cat)
-        if not items:
-            continue
+    for cat in shown_cats:
         label = ConfigService.CATEGORY_LABELS.get(cat, cat)
-        rows = "".join(_render_config_row(c) for c in items)
+        rows = "".join(_render_config_row(c) for c in by_cat[cat])
+        action = f"/panel/save?cat={_esc(active_cat)}" if active_cat in by_cat else "/panel/save"
         sections.append(
             f'<fieldset class="group"><legend>{_esc(label)}</legend>'
-            f'<form method="post" action="/panel/save">{rows}'
+            f'<form method="post" action="{action}">{rows}'
             '<div class="group-actions"><button type="submit" class="btn">保存本组</button></div>'
             '</form></fieldset>'
         )
-    return "\n".join(sections)
+    return nav + "\n" + "\n".join(sections)
+
+
+def _render_cat_nav(active: str, cats, labels) -> str:
+    """顶部分类导航（pill 链接，响应式换行）。"""
+    links = [f'<a class="cat{" active" if active in ("all", "") else ""}" href="/panel?cat=all">全部</a>']
+    for cat in cats:
+        label = labels.get(cat, cat)
+        active_cls = " active" if cat == active else ""
+        links.append(f'<a class="cat{active_cls}" href="/panel?cat={_esc(cat)}">{_esc(label)}</a>')
+    return '<nav class="cats">' + "".join(links) + '</nav>'
 
 
 def _render_config_row(c: dict) -> str:
@@ -486,10 +510,14 @@ def render_appearance(theme: str, bg_color: str, opacity: int, size: str, positi
         '<p class="hint">主题通过服务端渲染切换（body class），不依赖任何脚本</p></fieldset>'
 
         '<fieldset class="group"><legend>背景颜色</legend>'
-        '<div class="row"><div class="row-control" style="flex-direction:row;align-items:center;gap:14px">'
-        f'<input type="color" name="bg_color" value="{_esc(bg_color)}">'
-        '<span class="hint">自定义背景颜色：与背景图片透明度共同组成最终背景视觉，'
-        '提交后刷新 / 重启服务器均保留</span></div></div></fieldset>'
+        '<div class="row"><div class="row-control" style="flex-direction:row;align-items:center;gap:14px;flex-wrap:wrap">'
+        f'<input type="color" name="bg_color" value="{_esc(bg_color)}" title="取色器">'
+        f'<input type="text" name="bg_color_input" value="{_esc(bg_color)}" '
+        'placeholder="#FDEEF3 或 253,238,243" class="color-text" '
+        'title="可粘贴 #RRGGBB 或输入 R,G,B / rgb(r,g,b)">'
+        '<span class="hint">支持十六进制或 RGB 手动输入（如 <code>253,238,243</code>）；'
+        '与背景图片透明度共同组成最终背景视觉，提交后刷新 / 重启服务器均保留</span>'
+        '</div></div></fieldset>'
 
         '<fieldset class="group"><legend>背景图片</legend>'
         '<div class="row"><div class="row-control">'

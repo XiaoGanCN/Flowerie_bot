@@ -116,9 +116,8 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 
 `/panel` 面板的三个页签全部**纯 HTML + CSS + 服务端渲染，零 JavaScript**：
 
-- **配置页**：全部 **97 个配置变量**按 19 个功能分组展示（AI / 基础 / 连接 /
-  行为 / 稳定性 / 记忆 / 表情包 / MCP / Web UI / 日志 / 预算 / 主动聊天 /
-  复读 / 戳戳 / 文件解析 / 安全 / 白名单 / 存档 / 数据路径），每组一个表单保存。
+- **配置页**：全部 **97 个配置变量**按 19 个功能分组展示，**顶部提供分类导航**
+  （点击只看某一类，如 MCP / 发言设置 / 稳定性……各自一屏，避免拥挤），每组一个表单保存。
   控件按类型自动选择：bool→checkbox、int/float→number（含 min/max/step）、
   secret→password（只显示掩码，留空不覆盖）、枚举→select（日志级别/格式）、
   多行/JSON→textarea、列表→逗号分隔文本框。
@@ -128,7 +127,7 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
   同时热更新运行中的配置（部分需重启的项在页面上明确标注）。
 - **外观页**：7 套内置主题（`default`/`dark`/`light`/`sakura`/`ocean`/
   `forest`/`amoled`，body class 切换 + CSS variables）、自定义背景颜色
-  （`<input type="color">`）、背景图片上传（PNG/JPEG/WEBP/GIF，≤5MB，
+  （`<input type="color">` + 手动输入框，支持 `#RRGGBB` / `R,G,B` / `rgb(r,g,b)`）、背景图片上传（PNG/JPEG/WEBP/GIF，≤5MB，
   服务端魔数校验、固定文件名 `background.<ext>` 存于 `data/webui/background/`，
   无路径穿越）、图片透明度（0~100%）、显示方式（cover/contain + 位置），
   以及「恢复默认主题」「删除背景图片」。
