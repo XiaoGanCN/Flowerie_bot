@@ -26,8 +26,8 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from src.services.ai_client import AIClient
-from src.services.meme_knowledge_manager import MemeKnowledgeManager
 from src.services.mcp_tool_manager import McpToolManager
+from src.services.meme_knowledge_manager import MemeKnowledgeManager
 from src.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)

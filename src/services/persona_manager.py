@@ -15,7 +15,7 @@
 """
 import re
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from src.repositories.settings_repository import SettingsRepository
 from src.services.persona_presets import BUILTIN_PERSONAS, DEFAULT_PERSONA_ID

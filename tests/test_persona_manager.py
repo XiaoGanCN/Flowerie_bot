@@ -289,7 +289,11 @@ async def test_router_persona_and_meme_injection():
     from src.repositories.meme_knowledge_repository import MemeKnowledgeRepository
     from src.services.meme_knowledge_manager import MemeKnowledgeManager
     from tests.test_router_regression import (
-        FakeAIClient, FakeFileParser, FakeMemoryManager, FakeSender, make_config,
+        FakeAIClient,
+        FakeFileParser,
+        FakeMemoryManager,
+        FakeSender,
+        make_config,
     )
 
     tmp = tempfile.TemporaryDirectory()

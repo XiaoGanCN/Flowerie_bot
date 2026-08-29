@@ -9,7 +9,6 @@ import asyncio
 import json
 import tempfile
 
-
 from src.repositories.meme_knowledge_repository import MemeKnowledgeRepository
 from src.services.meme_knowledge_manager import MemeKnowledgeManager
 from src.services.meme_summary import MemeSummaryService

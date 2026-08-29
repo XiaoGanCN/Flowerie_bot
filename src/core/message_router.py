@@ -13,7 +13,10 @@ from src.models import GroupMessage
 from src.services.ai_client import AIClient
 from src.services.file_parser import FileParser
 from src.services.mcp_tool_manager import McpToolManager
+from src.services.meme_knowledge_manager import MemeKnowledgeManager
+from src.services.meme_summary import MemeSummaryService
 from src.services.memory_manager import MemoryManager
+from src.services.persona_manager import PersonaManager
 from src.services.prompt_manager import PromptManager
 from src.services.sender import Sender
 from src.services.sticker_manager import StickerManager
