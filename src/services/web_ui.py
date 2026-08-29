@@ -443,7 +443,8 @@ class WebUIServer:
             logs = "\n".join(get_recent_logs(200))
             body_html = f'<pre class="log">{_html.escape(logs)}</pre>'
         else:
-            body_html = render_config_sections(self.config_service.list_configs(), active_cat=cat, mcp_edit=mcp_edit)
+            body_html = render_config_sections(self.config_service.list_configs(), active_cat=cat,
+                                               mcp_edit=mcp_edit, mcp_test_status=self._get_mcp_test_status())
         return render_panel_page(
             theme_class=theme_body_class(theme),
             bg_rules=bg_rules,
@@ -672,6 +673,16 @@ class WebUIServer:
         ok, msg = self.config_service.update("MCP_SERVERS", js)
         return ok, msg
 
+    def _get_mcp_test_status(self) -> Dict[str, tuple]:
+        """{server_name: (ok, msg)} 最近一次测试结果（用于卡片显示）。"""
+        out: Dict[str, tuple] = {}
+        for k, v in self.config_service.repository.list_prefs():
+            if k.startswith("mcp_test_"):
+                name = k[len("mcp_test_"):]
+                ok_str, _, msg = v.partition("|")
+                out[name] = (ok_str == "ok", msg)
+        return out
+
     @staticmethod
     def _mcp_server_error(name: str, url: str, tools: str) -> str:
         if not name:
@@ -739,6 +750,8 @@ class WebUIServer:
             if index is not None and 0 <= index < len(servers):
                 tgt = servers[index]
                 ok, msg = await self._mcp_ping(str(tgt.get("url", "")), int(tgt.get("timeout", 15) or 15))
+                # 保存测试结果，卡片上直接显示（连接成功/失败）
+                self._set_pref(f"mcp_test_{tgt.get('name', index)}", ("ok" if ok else "err") + "|" + msg)
                 return web.HTTPFound(f"/panel?cat=MCP&msg={quote(msg)}&err={'1' if not ok else ''}")
             return web.HTTPFound("/panel?cat=MCP&msg=" + quote("未找到该服务器") + "&err=1")
         # 添加 / 保存

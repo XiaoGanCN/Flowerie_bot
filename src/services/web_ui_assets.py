@@ -319,6 +319,9 @@ border-radius:11px;cursor:pointer;transition:border-color .15s,background .15s}
 .mcp-card-head b{color:var(--heading)}
 .mcp-card-meta{font-size:12px;color:var(--text-muted);margin:6px 0 2px}
 .mcp-card-url{font-size:12px;color:var(--text-muted);font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all;margin-bottom:10px}
+.mcp-card-test{font-size:12px;margin:4px 0 8px;padding:5px 10px;border-radius:7px;word-break:break-all}
+.mcp-card-test.ok{color:var(--ok);background:rgba(63,185,80,.1)}
+.mcp-card-test.err{color:var(--err);background:rgba(248,81,73,.1)}
 .actions-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
 .log{background:var(--input-bg);border:1px solid var(--panel-border);border-radius:10px;padding:14px;
 font-size:12px;overflow-x:auto;line-height:1.7;white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace}
@@ -424,7 +427,7 @@ def render_panel_page(*, theme_class: str, bg_rules: str, msg_html: str,
     )
 
 
-def render_config_sections(configs, active_cat: str = "all", mcp_edit=None) -> str:
+def render_config_sections(configs, active_cat: str = "all", mcp_edit=None, mcp_test_status=None) -> str:
     """按分类渲染配置分组表单，顶部带分类导航（点某个分类只看那一类，避免全部堆在一屏）。
 
     active_cat: "all" 显示全部分类；否则只显示该分类。纯 HTML + 链接跳转，零 JS。
@@ -455,14 +458,14 @@ def render_config_sections(configs, active_cat: str = "all", mcp_edit=None) -> s
             f'<form method="post" action="{action}">{"".join(rows_html)}'
             '<div class="group-actions"><button type="submit" class="btn">保存本组</button></div>'
             '</form>'
-            + (render_mcp_editor(mcp_raw, edit_index=mcp_edit) if mcp_raw is not None else "")
+            + (render_mcp_editor(mcp_raw, edit_index=mcp_edit, mcp_test_status=mcp_test_status) if mcp_raw is not None else "")
             + '</fieldset>'
         )
         sections.append(section)
     return nav + "\n" + "\n".join(sections)
 
 
-def render_mcp_editor(raw: str, default_timeout: int = 15, edit_index=None) -> str:
+def render_mcp_editor(raw: str, default_timeout: int = 15, edit_index=None, mcp_test_status=None) -> str:
     """把 MCP_SERVERS 的 JSON 渲染成卡片式列表（每个 server 一张卡，零 JS）。
 
     默认显示摘要卡 + 按钮（启用/停用、测试、编辑、删除）；点"编辑"（?cat=MCP&edit=i）
@@ -483,16 +486,17 @@ def render_mcp_editor(raw: str, default_timeout: int = 15, edit_index=None) -> s
         if edit_index is not None and i == edit_index:
             blocks.append(_mcp_server_form(i, s, "编辑", default_timeout))
         else:
-            blocks.append(_mcp_server_card(i, s))
+            blocks.append(_mcp_server_card(i, s, (mcp_test_status or {}).get(s.get("name"))))
     blocks.append(_mcp_server_form(None, {}, "添加", default_timeout))
     return '<div class="mcp-editor">' + "".join(blocks) + "</div>"
 
 
-def _mcp_server_card(i, s) -> str:
+def _mcp_server_card(i, s, test_status=None) -> str:
     """服务器摘要卡 + 操作按钮（启用/停用、测试、编辑、删除）。"""
     name = _esc(s.get("name", ""))
     url = _esc(s.get("url", ""))
-    tools_count = len([t for t in str(s.get("allowed_tools", "") or "").split(",") if t.strip()])
+    tools_allow = str(s.get("allowed_tools", "") or "").strip()
+    tools_count = "全部工具" if not tools_allow else str(len([t for t in tools_allow.split(",") if t.strip()])) + " 个工具"
     transport = "sse" if url.lower().startswith("sse://") or "/sse" in url.lower() else "streamable-http"
     enabled = bool(s.get("enabled", True))
     status = '<span class="badge">已启用</span>' if enabled else '<span class="badge warn">已停用</span>'
@@ -500,9 +504,10 @@ def _mcp_server_card(i, s) -> str:
     return (
         '<div class="mcp-card">'
         f'<div class="mcp-card-head"><b>{name}</b>{status}</div>'
-        f'<div class="mcp-card-meta">{transport} · {tools_count} 个工具</div>'
+        f'<div class="mcp-card-meta">{transport} · {tools_count}</div>'
         f'<div class="mcp-card-url">{url}</div>'
-        '<div class="actions-row">'
+        + (_mcp_test_status_html(test_status) if test_status else "")
+        + '<div class="actions-row">'
         f'<form method="post" action="/panel/mcp/edit" class="inline-form">'
         f'<input type="hidden" name="mcp_index" value="{i}">'
         f'<button type="submit" name="mcp_action" value="toggle" class="btn small">{toggle}</button>'
@@ -517,6 +522,13 @@ def _mcp_server_card(i, s) -> str:
     )
 
 
+def _mcp_test_status_html(test_status) -> str:
+    ok, msg = test_status
+    cls = "ok" if ok else "err"
+    mark = "✔" if ok else "✖"
+    return f'<div class="mcp-card-test {cls}">{mark} {_esc(msg)}</div>'
+
+
 def _mcp_server_form(index, s, title, default_timeout: int = 15) -> str:
     idx = "" if index is None else str(index)
     name = _esc(s.get("name", ""))
@@ -524,7 +536,7 @@ def _mcp_server_form(index, s, title, default_timeout: int = 15) -> str:
     tools = _esc(s.get("allowed_tools", ""))
     timeout = _esc(s.get("timeout", default_timeout))
     checked = " checked" if s.get("enabled", True) else ""
-    hint = '<span class="hint">名称唯一；地址支持 http(s)/SSE；工具白名单逗号分隔（空=不在此 server 放行）；超时秒</span>'
+    hint = '<span class="hint">名称唯一；地址支持 http(s)/SSE；工具白名单逗号分隔（留空=放行所有工具）；超时秒</span>'
     delete_btn = ('<button type="submit" name="mcp_action" value="delete" class="btn danger">删除</button>'
                   if index is not None else "")
     submit_label = "保存" if index is not None else "添加服务器"
@@ -537,7 +549,7 @@ def _mcp_server_form(index, s, title, default_timeout: int = 15) -> str:
         '<div class="row"><label class="row-info"><span class="row-title">地址</span><span class="row-key">url</span></label>'
         f'<div class="row-control"><input type="text" name="mcp_url" value="{url}" placeholder="https://mcp.example.com/mcp" required></div></div>'
         '<div class="row"><label class="row-info"><span class="row-title">工具白名单</span><span class="row-key">allowed_tools</span></label>'
-        f'<div class="row-control"><input type="text" name="mcp_tools" value="{tools}" placeholder="web_search, fetch_page（逗号分隔，空=不放行）"></div></div>'
+        f'<div class="row-control"><input type="text" name="mcp_tools" value="{tools}" placeholder="web_search, fetch_page（逗号分隔，留空=放行所有）"></div></div>'
         f'<div class="row"><label class="row-info"><span class="row-title">超时（秒）</span><span class="row-key">timeout</span></label>'
         f'<div class="row-control"><div class="range-row"><input type="number" name="mcp_timeout" min="1" max="3600" value="{timeout}" style="max-width:140px"></div></div></div>'
         '<div class="row"><label class="row-info"><span class="row-title">启用</span><span class="row-key">enabled</span></label>'
