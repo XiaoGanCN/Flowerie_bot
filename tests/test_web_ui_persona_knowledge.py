@@ -244,19 +244,26 @@ async def test_persona_and_knowledge_pages_are_js_free():
 async def test_html_only_interaction_forms_present():
     """操作全部为服务端表单：POST 提交 + 303/302 重定向回页面。"""
     with tempfile.TemporaryDirectory() as td:
-        _, _, _, server, _, _ = _make_stack(td)
+        _, _, _, server, pmgr, _ = _make_stack(td)
         cookie = await _login(server)
         page = await server._handle_panel(FakeRequest(query={"tab": "persona"},
                                                      cookies={"fb_token": cookie}))
         text = _resp_text(page)
         for action in ("/panel/persona/global", "/panel/persona/group"):
             assert f'action="{action}"' in text
-        # 编辑页才有 save/delete 表单（新建/编辑表单）
-        page2 = await server._handle_panel(FakeRequest(query={"tab": "persona", "edit": "atri"},
+        # 自定义人格编辑页有 save/delete 表单
+        pmgr.create_persona("custom1", "自定义", "", "你是自定义人格")
+        page2 = await server._handle_panel(FakeRequest(query={"tab": "persona", "edit": "custom1"},
                                                       cookies={"fb_token": cookie}))
         text2 = _resp_text(page2)
         for action in ("/panel/persona/save", "/panel/persona/delete"):
             assert f'action="{action}"' in text2
+        # 内置人格（atri）编辑页有 save 但无 delete（内置保护）
+        page3 = await server._handle_panel(FakeRequest(query={"tab": "persona", "edit": "atri"},
+                                                      cookies={"fb_token": cookie}))
+        text3 = _resp_text(page3)
+        assert 'action="/panel/persona/save"' in text3
+        assert 'action="/panel/persona/delete"' not in text3
         page = await server._handle_panel(FakeRequest(query={"tab": "knowledge"},
                                                      cookies={"fb_token": cookie}))
         text = _resp_text(page)
