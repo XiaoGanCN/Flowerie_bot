@@ -451,3 +451,59 @@ def test_core_modules_stay_slim():
         p = os.path.join(root, rel)
         lines = sum(1 for _ in open(p, encoding="utf-8"))
         assert lines <= limit, f"{rel} 行数 {lines} 超限 {limit}（防上帝类回归）"
+
+
+# ---------- 防拆分回归：提取模块的类结构完整（AST 级，含 @staticmethod） ----------
+def test_split_modules_keep_class_structure():
+    """拆分模块的方法必须属于类（曾因提取丢缩进变成模块级函数的隐藏 bug）。
+
+    AST 级检查（不导入业务模块）：方法归属类、@staticmethod 保留。
+    """
+    import ast
+    import glob
+    import os
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def class_methods(path):
+        tree = ast.parse(open(os.path.join(root, path), encoding="utf-8").read())
+        out = {}
+        for n in tree.body:
+            if isinstance(n, ast.ClassDef):
+                for m in n.body:
+                    if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        out[m.name] = any(
+                            isinstance(d, ast.Name) and d.id == "staticmethod"
+                            for d in m.decorator_list)
+        return out
+
+    checks = {
+        "src/services/vision.py": ("VisionService", [
+            "__init__", "client", "_url_for_log", "describe_image",
+            "_describe_image_bytes", "describe_image_file"]),
+        "src/services/toxic_detector.py": ("ToxicDetector", ["__init__", "client", "is_toxic"]),
+        "src/core/ai_gateway.py": ("AiGateway", [
+            "__init__", "guarded_chat", "_ai_allowed", "guarded_is_toxic", "_get_group_breaker"]),
+    }
+    for path, (cls_name, methods) in checks.items():
+        methods_map = class_methods(path)
+        for m in methods:
+            assert m in methods_map, f"{path} 类 {cls_name} 缺失方法 {m}"
+        print("✅", path, "结构完整")
+
+    # @staticmethod 必须保留
+    static_required = {"_url_for_log", "_bg_color_pref_key", "_mcp_server_error", "_fmt_ts",
+                       "effective_host"}
+    for path in (["src/services/vision.py", "src/services/web_ui.py"]
+                 + sorted(glob.glob("src/services/webui_panels/*.py"))):
+        methods_map = class_methods(path)
+        for m, is_static in methods_map.items():
+            if m in static_required:
+                assert is_static, f"{path} 的 {m} 丢失 @staticmethod"
+    print("✅ @staticmethod 全部保留")
+
+    # prompt_builder 的 GLOBAL_STYLE_RULES/default_persona_text/build_system_prompt 在模块层
+    tree = ast.parse(open(os.path.join(root, "src/services/prompt_builder.py"), encoding="utf-8").read())
+    top_names = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert {"default_persona_text", "build_system_prompt"} <= top_names
+    print("✅ prompt_builder 模块级函数就位")
