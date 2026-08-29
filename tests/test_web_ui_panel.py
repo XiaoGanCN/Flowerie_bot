@@ -181,6 +181,35 @@ async def test_appearance_theme_save_and_render():
         assert "background-color: #FF7EB3" in text
 
 
+async def test_panel_opacity_saves_and_renders():
+    """面板透明度设置应持久化并对 body 注入 --panel-alpha，让卡片透出背景。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, repo, _, server = _make_stack(td)
+        cookie = await _login(server)
+        form = FakeMulti([("theme", "sakura"), ("color_for_theme", "sakura"), ("bg_color", ""),
+                          ("bg_image_opacity", "100"), ("bg_size", "cover"), ("bg_position", "center"),
+                          ("panel_opacity", "40")])
+        resp = await server._handle_panel_appearance_save(FakeRequest(cookies={"fb_token": cookie}, form=form))
+        assert resp.status == 302
+        assert repo.get_pref("panel_opacity") == "40"
+        resp2 = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"tab": "appearance"}))
+        text = _resp_text(resp2)
+        assert 'style="--panel-alpha:0.40"' in text
+        assert 'name="panel_opacity"' in text  # 滑块存在
+        assert 'value="40"' in text
+
+
+async def test_panel_topbar_opaque_over_background():
+    """顶部导航栏应有不透明背景，避免背景图盖住导航栏。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, _, _, server = _make_stack(td)
+        cookie = await _login(server)
+        resp = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={}))
+        text = _resp_text(resp)
+        # PANEL_CSS 已内联到页面 <style>
+        assert "background-color:rgb(var(--panel-rgb))" in text
+
+
 async def test_sakura_theme_default_light_pink_background():
     """Sakura 主题默认背景应为明亮浅粉 #FDEEF3（不设自定义颜色时）。"""
     with tempfile.TemporaryDirectory() as td:

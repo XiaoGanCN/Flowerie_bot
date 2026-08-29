@@ -15,7 +15,8 @@ THEMES = {
         "desc": "明亮清爽的默认配色",
         "bg": "#F4F6FB",
         "vars": {
-            "--panel-bg": "rgba(255, 255, 255, 0.9)",
+            "--panel-rgb": "255,255,255",
+            "--panel-alpha": "0.9",
             "--panel-border": "#E3E7EF",
             "--text": "#3A4456",
             "--text-muted": "#7C8798",
@@ -35,7 +36,8 @@ THEMES = {
         "desc": "更深的近黑风格，护眼",
         "bg": "#121417",
         "vars": {
-            "--panel-bg": "rgba(24, 27, 31, 0.9)",
+            "--panel-rgb": "24,27,31",
+            "--panel-alpha": "0.9",
             "--panel-border": "#2a2f37",
             "--text": "#c9d1d9",
             "--text-muted": "#768390",
@@ -55,7 +57,8 @@ THEMES = {
         "desc": "明亮清爽的日间风格",
         "bg": "#eef1f6",
         "vars": {
-            "--panel-bg": "rgba(255, 255, 255, 0.9)",
+            "--panel-rgb": "255,255,255",
+            "--panel-alpha": "0.9",
             "--panel-border": "#d9dee8",
             "--text": "#333a45",
             "--text-muted": "#7a8290",
@@ -75,7 +78,8 @@ THEMES = {
         "desc": "樱花粉，明亮的浅粉少女系",
         "bg": "#FDEEF3",
         "vars": {
-            "--panel-bg": "rgba(255, 255, 255, 0.82)",
+            "--panel-rgb": "255,255,255",
+            "--panel-alpha": "0.82",
             "--panel-border": "#f4d8e2",
             "--text": "#7a4b5e",
             "--text-muted": "#b08a98",
@@ -95,7 +99,8 @@ THEMES = {
         "desc": "明亮天空蓝，清澈惬意",
         "bg": "#E7F3FC",
         "vars": {
-            "--panel-bg": "rgba(255, 255, 255, 0.88)",
+            "--panel-rgb": "255,255,255",
+            "--panel-alpha": "0.88",
             "--panel-border": "#C9E3F6",
             "--text": "#24475F",
             "--text-muted": "#6B8FA8",
@@ -115,7 +120,8 @@ THEMES = {
         "desc": "明亮草绿，清新自然",
         "bg": "#EAF6EC",
         "vars": {
-            "--panel-bg": "rgba(255, 255, 255, 0.9)",
+            "--panel-rgb": "255,255,255",
+            "--panel-alpha": "0.9",
             "--panel-border": "#CFE9D6",
             "--text": "#2F5A39",
             "--text-muted": "#7A9C82",
@@ -135,7 +141,8 @@ THEMES = {
         "desc": "纯黑，OLED 屏最省电",
         "bg": "#000000",
         "vars": {
-            "--panel-bg": "rgba(16, 16, 16, 0.92)",
+            "--panel-rgb": "16,16,16",
+            "--panel-alpha": "0.92",
             "--panel-border": "#262626",
             "--text": "#d4d4d4",
             "--text-muted": "#7a7a7a",
@@ -163,6 +170,17 @@ def theme_body_class(name: str) -> str:
 def theme_default_bg(name: str) -> str:
     t = THEMES.get(name)
     return t["bg"] if t else THEMES[DEFAULT_THEME]["bg"]
+
+
+def theme_default_alpha(name: str) -> float:
+    """主题默认的面板不透明度（0~1）。"""
+    t = THEMES.get(name)
+    if not t:
+        return 0.9
+    try:
+        return float(t["vars"].get("--panel-alpha", "0.9"))
+    except (TypeError, ValueError):
+        return 0.9
 
 
 def theme_css_block() -> str:
@@ -223,9 +241,13 @@ PANEL_CSS = """
 html{-webkit-text-size-adjust:100%}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Roboto,"Noto Sans SC",sans-serif;
 color:var(--text,#3A4456);min-height:100vh;-webkit-font-smoothing:antialiased;line-height:1.5}
+:root{--panel-rgb:255,255,255;--panel-alpha:0.9;
+--panel-bg:rgba(var(--panel-rgb),var(--panel-alpha))}
 """ + theme_css_block() + """
 .wrap{max-width:1080px;margin:0 auto;padding:16px 20px 72px}
-.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px;
+background-color:rgb(var(--panel-rgb));border-radius:12px;padding:12px 16px;box-shadow:var(--shadow);
+position:relative;z-index:1}
 .brand{font-size:19px;font-weight:700;letter-spacing:.5px}
 .brand small{color:var(--text-muted);font-size:13px;font-weight:400;margin-left:4px}
 .tabs{display:flex;gap:6px;flex-wrap:wrap}
@@ -361,7 +383,7 @@ def render_register_page(msg: str = "", ok: bool = True) -> str:
 
 
 def render_panel_page(*, theme_class: str, bg_rules: str, msg_html: str,
-                      body_html: str, active_tab: str) -> str:
+                      body_html: str, active_tab: str, panel_alpha: str = "") -> str:
     tabs = [
         ("config", "/panel", "配置"),
         ("appearance", "/panel?tab=appearance", "外观"),
@@ -373,12 +395,14 @@ def render_panel_page(*, theme_class: str, bg_rules: str, msg_html: str,
     )
     titles = {"config": "配置管理", "appearance": "外观美化", "logs": "日志"}
     title = titles.get(active_tab, "配置管理")
+    # panel_alpha：用户自定义的主题面板不透明度（0~1）；为空则用各主题默认
+    inline_style = f' style="--panel-alpha:{panel_alpha}"' if panel_alpha else ""
     return (
         '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<title>花璃 · 管理后台</title>'
         f'<style>{PANEL_CSS}</style><style>{bg_rules}</style></head>'
-        f'<body class="{theme_class}"><div class="bg-layer" aria-hidden="true"></div><div class="wrap">'
+        f'<body class="{theme_class}"{inline_style}><div class="bg-layer" aria-hidden="true"></div><div class="wrap">'
         '<header class="topbar">'
         '<div class="brand">花璃<small>· 管理后台</small></div>'
         f'<nav class="tabs">{tab_html}'
@@ -479,7 +503,7 @@ def _render_config_row(c: dict) -> str:
 
 
 def render_appearance(theme: str, bg_color: str, opacity: int, size: str, position: str,
-                      has_bg_image: bool, image_url: str = "") -> str:
+                      has_bg_image: bool, image_url: str = "", panel_opacity: int = 90) -> str:
     cards = []
     for name in THEME_ORDER:
         t = THEMES.get(name)
@@ -517,7 +541,14 @@ def render_appearance(theme: str, bg_color: str, opacity: int, size: str, positi
         '<form method="post" action="/panel/appearance" enctype="multipart/form-data">'
         '<fieldset class="group"><legend>主题</legend>'
         f'<div class="theme-grid">{"".join(cards)}</div>'
-        '<p class="hint">主题通过服务端渲染切换（body class），不依赖任何脚本</p></fieldset>'
+        '<p class="hint">主题通过服务端渲染切换（body class），不依赖任何脚本</p>'
+        '<div class="row"><label class="row-info"><span class="row-title">主题面板透明度</span>'
+        '<span class="row-key">panel_opacity</span></label>'
+        '<div class="row-control">'
+        f'<div class="range-row"><input type="range" name="panel_opacity" min="0" max="100" value="{max(0,min(100,int(panel_opacity)))}">'
+        f'<output>{max(0,min(100,int(panel_opacity)))}%</output></div>'
+        '<span class="hint">面板/卡片越透明，越能透出背景图片与主题底色；100% 完全不透明</span>'
+        '</div></div></fieldset>' 
 
         '<fieldset class="group"><legend>背景颜色（跟主题绑定）</legend>'
         f'<input type="hidden" name="color_for_theme" value="{_esc(theme)}">'

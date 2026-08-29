@@ -40,6 +40,7 @@ from src.services.web_ui_assets import (
     render_panel_page,
     render_register_page,
     theme_body_class,
+    theme_default_alpha,
     theme_default_bg,
 )
 from src.utils.logging_setup import get_logger, get_recent_logs
@@ -324,6 +325,7 @@ class WebUIServer:
             "bg_color": self._pref(f"bg_color__{theme}", ""),
             "bg_image": self._pref("bg_image", ""),
             "opacity": max(0, min(100, opacity)),
+            "panel_opacity": self._pref("panel_opacity", ""),
             "size": self._pref("bg_size", "cover"),
             "position": self._pref("bg_position", "center"),
         }
@@ -400,6 +402,15 @@ class WebUIServer:
         image_url = ""
         if prefs["bg_image"]:
             image_url = "/panel/background?v=%d" % int(time.time())
+        # 主题面板透明度：用户显式设置则用其值（覆盖所有主题的默认 alpha），否则用各主题默认
+        panel_alpha = ""
+        panel_opacity = int(round(theme_default_alpha(theme) * 100))
+        if prefs["panel_opacity"]:
+            try:
+                panel_opacity = max(0, min(100, int(prefs["panel_opacity"])))
+                panel_alpha = "%.2f" % (panel_opacity / 100.0)
+            except ValueError:
+                panel_opacity = int(round(theme_default_alpha(theme) * 100))
         bg_rules = background_rules(
             bg_color,
             image_url if prefs["bg_image"] else "",
@@ -415,6 +426,7 @@ class WebUIServer:
                 theme, bg_color, int(prefs["opacity"]),
                 str(prefs["size"]), str(prefs["position"]),
                 bool(prefs["bg_image"]), image_url,
+                panel_opacity=panel_opacity,
             )
         elif tab == "logs":
             logs = "\n".join(get_recent_logs(200))
@@ -427,6 +439,7 @@ class WebUIServer:
             msg_html=msg_html,
             body_html=body_html,
             active_tab=tab,
+            panel_alpha=panel_alpha,
         )
 
     async def _handle_panel_login(self, request: web.Request) -> web.Response:
@@ -544,6 +557,14 @@ class WebUIServer:
         except ValueError:
             errors.append("图片透明度必须是 0~100 的整数")
             opacity = 100
+        panel_opacity_raw = str(form.get("panel_opacity", "") or "").strip()
+        try:
+            panel_opacity = int(panel_opacity_raw) if panel_opacity_raw else int(round(theme_default_alpha(theme or "default") * 100))
+            if not (0 <= panel_opacity <= 100):
+                raise ValueError
+        except ValueError:
+            errors.append("主题面板透明度必须是 0~100 的整数")
+            panel_opacity = 90
         size = str(form.get("bg_size", "") or "cover")
         if size not in ("cover", "contain"):
             errors.append("图片显示方式无效")
@@ -574,6 +595,7 @@ class WebUIServer:
         self._set_pref("bg_image_opacity", str(opacity))
         self._set_pref("bg_size", size)
         self._set_pref("bg_position", position)
+        self._set_pref("panel_opacity", str(panel_opacity))
         message = "外观设置已保存"
         if upload_data is not None:
             ok, file_msg = self._save_background_image(upload_data, upload_hint)
@@ -591,6 +613,7 @@ class WebUIServer:
         for k, _ in self.config_service.repository.list_prefs():
             if k.startswith("bg_color__"):
                 self.config_service.repository.delete_pref(k)
+        self._set_pref("panel_opacity", "")
         self._set_pref("bg_image_opacity", "100")
         self._set_pref("bg_size", "cover")
         self._set_pref("bg_position", "center")
