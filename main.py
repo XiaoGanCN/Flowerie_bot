@@ -63,7 +63,7 @@ async def main():
                     "ws_connected": message_router.global_state.ws_connected,
                     "groups": len(message_router.policy_engine.groups),
                 }
-            web_ui = WebUIServer(config, config_service, status_provider=_status_provider)
+            web_ui = WebUIServer(config, config_service, status_provider=_status_provider, tool_manager=tool_manager)
         file_parser = FileParser(config)
         policy_engine = PolicyEngine(config, memory_manager)
         message_router = MessageRouter(

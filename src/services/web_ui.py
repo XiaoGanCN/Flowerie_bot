@@ -110,7 +110,7 @@ def normalize_color(value: str) -> Optional[str]:
 
 class WebUIServer:
     def __init__(self, config: Settings, config_service: ConfigService, status_provider=None,
-                 data_dir: str = "./data/webui"):
+                 data_dir: str = "./data/webui", tool_manager=None):
         self.config = config
         self.config_service = config_service
         # status_provider: 可调用，返回状态 dict（ws_connected/uptime 等），由 main 注入
@@ -122,6 +122,8 @@ class WebUIServer:
         self._started_at: float = time.time()
         # 外观资源持久化目录（背景图片），测试可注入临时目录
         self._data_dir = str(data_dir)
+        # 运行中 MCP 工具管理器（读取各 server 已同步工具数，用于卡片显示真实数量）
+        self._tool_manager = tool_manager
 
     # ---------- 认证 ----------
     def _issue_token(self) -> str:
@@ -444,7 +446,8 @@ class WebUIServer:
             body_html = f'<pre class="log">{_html.escape(logs)}</pre>'
         else:
             body_html = render_config_sections(self.config_service.list_configs(), active_cat=cat,
-                                               mcp_edit=mcp_edit, mcp_test_status=self._get_mcp_test_status())
+                                               mcp_edit=mcp_edit, mcp_test_status=self._get_mcp_test_status(),
+                                               mcp_tool_counts=self._mcp_tool_counts())
         return render_panel_page(
             theme_class=theme_body_class(theme),
             bg_rules=bg_rules,
@@ -672,6 +675,18 @@ class WebUIServer:
         js = json.dumps(servers, ensure_ascii=False, separators=(",", ":"))
         ok, msg = self.config_service.update("MCP_SERVERS", js)
         return ok, msg
+
+    def _mcp_tool_counts(self) -> Dict[str, int]:
+        """{server_name: 已同步工具数}，用于卡片显示真实工具数量。"""
+        counts: Dict[str, int] = {}
+        if self._tool_manager is None:
+            return counts
+        try:
+            for s in getattr(self._tool_manager, "_servers", []) or []:
+                counts[getattr(s, "name", "")] = len(getattr(s, "schemas", {}) or {})
+        except Exception:  # noqa: BLE001
+            pass
+        return counts
 
     def _get_mcp_test_status(self) -> Dict[str, tuple]:
         """{server_name: (ok, msg)} 最近一次测试结果（用于卡片显示）。"""

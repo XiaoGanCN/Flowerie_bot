@@ -340,6 +340,9 @@ border-radius:16px;box-shadow:var(--shadow);padding:30px 32px}
   .row-info{flex-basis:auto}
   .group-actions{justify-content:stretch}
   .btn{width:100%}
+  /* 主按钮（保存/登录）全宽；卡片与操作的 .btn.small 按钮保持自适应，避免竖排撑满 */
+  .btn.small,.actions-row .btn,.actions-row .inline-form{width:auto}
+  .actions-row .inline-form{display:inline-flex;align-items:center}
   .theme-grid{grid-template-columns:1fr 1fr}
   .auth-card{margin:4vh 12px;padding:24px 20px}
 }
@@ -427,7 +430,7 @@ def render_panel_page(*, theme_class: str, bg_rules: str, msg_html: str,
     )
 
 
-def render_config_sections(configs, active_cat: str = "all", mcp_edit=None, mcp_test_status=None) -> str:
+def render_config_sections(configs, active_cat: str = "all", mcp_edit=None, mcp_test_status=None, mcp_tool_counts=None) -> str:
     """按分类渲染配置分组表单，顶部带分类导航（点某个分类只看那一类，避免全部堆在一屏）。
 
     active_cat: "all" 显示全部分类；否则只显示该分类。纯 HTML + 链接跳转，零 JS。
@@ -458,14 +461,14 @@ def render_config_sections(configs, active_cat: str = "all", mcp_edit=None, mcp_
             f'<form method="post" action="{action}">{"".join(rows_html)}'
             '<div class="group-actions"><button type="submit" class="btn">保存本组</button></div>'
             '</form>'
-            + (render_mcp_editor(mcp_raw, edit_index=mcp_edit, mcp_test_status=mcp_test_status) if mcp_raw is not None else "")
+            + (render_mcp_editor(mcp_raw, edit_index=mcp_edit, mcp_test_status=mcp_test_status, mcp_tool_counts=mcp_tool_counts) if mcp_raw is not None else "")
             + '</fieldset>'
         )
         sections.append(section)
     return nav + "\n" + "\n".join(sections)
 
 
-def render_mcp_editor(raw: str, default_timeout: int = 15, edit_index=None, mcp_test_status=None) -> str:
+def render_mcp_editor(raw: str, default_timeout: int = 15, edit_index=None, mcp_test_status=None, mcp_tool_counts=None) -> str:
     """把 MCP_SERVERS 的 JSON 渲染成卡片式列表（每个 server 一张卡，零 JS）。
 
     默认显示摘要卡 + 按钮（启用/停用、测试、编辑、删除）；点"编辑"（?cat=MCP&edit=i）
@@ -486,17 +489,16 @@ def render_mcp_editor(raw: str, default_timeout: int = 15, edit_index=None, mcp_
         if edit_index is not None and i == edit_index:
             blocks.append(_mcp_server_form(i, s, "编辑", default_timeout))
         else:
-            blocks.append(_mcp_server_card(i, s, (mcp_test_status or {}).get(s.get("name"))))
+            blocks.append(_mcp_server_card(i, s, (mcp_test_status or {}).get(s.get("name")), tool_count=(mcp_tool_counts or {}).get(s.get("name"))))
     blocks.append(_mcp_server_form(None, {}, "添加", default_timeout))
     return '<div class="mcp-editor">' + "".join(blocks) + "</div>"
 
 
-def _mcp_server_card(i, s, test_status=None) -> str:
+def _mcp_server_card(i, s, test_status=None, tool_count=None) -> str:
     """服务器摘要卡 + 操作按钮（启用/停用、测试、编辑、删除）。"""
     name = _esc(s.get("name", ""))
     url = _esc(s.get("url", ""))
-    tools_allow = str(s.get("allowed_tools", "") or "").strip()
-    tools_count = "全部工具" if not tools_allow else str(len([t for t in tools_allow.split(",") if t.strip()])) + " 个工具"
+    tools_label = (f"{tool_count} 个工具" if tool_count is not None else "<span class='hint'>工具数未知</span>")
     transport = "sse" if url.lower().startswith("sse://") or "/sse" in url.lower() else "streamable-http"
     enabled = bool(s.get("enabled", True))
     status = '<span class="badge">已启用</span>' if enabled else '<span class="badge warn">已停用</span>'
@@ -504,7 +506,7 @@ def _mcp_server_card(i, s, test_status=None) -> str:
     return (
         '<div class="mcp-card">'
         f'<div class="mcp-card-head"><b>{name}</b>{status}</div>'
-        f'<div class="mcp-card-meta">{transport} · {tools_count}</div>'
+        f'<div class="mcp-card-meta">{transport} · {tools_label}</div>'
         f'<div class="mcp-card-url">{url}</div>'
         + (_mcp_test_status_html(test_status) if test_status else "")
         + '<div class="actions-row">'
