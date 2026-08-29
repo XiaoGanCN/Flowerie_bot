@@ -34,12 +34,28 @@ class PersonaPanelMixin:
             global_prompt = self._prompt_manager.get_global_prompt()
             if prompt_gid is not None:
                 group_prompt = self._prompt_manager.get_group_prompt(prompt_gid)
+        # 人格配置（PERSONA_*，从配置页移入本页管理）
+        persona_configs = [c for c in self.config_service.list_configs()
+                           if c["key"] in ("PERSONA_DEFAULT", "MAX_PERSONA_PROMPT_LENGTH",
+                                           "PERSONA_MAX_COUNT")]
         return render_persona_tab(
             personas, global_id, bindings,
             edit_persona=edit_persona, new=new_persona, enabled=True,
             default_persona_id=default_id, default_persona_name=default_name,
             global_prompt=global_prompt, group_prompt=group_prompt, prompt_gid=prompt_gid,
+            persona_configs=persona_configs,
         )
+
+    async def _handle_panel_persona_config(self, request: web.Request) -> web.Response:
+        """保存人格配置（PERSONA_*，复用 ConfigService 双写 + 热更新）。"""
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        updates = {name: str(form.get(name, "")) for name in
+                   ("PERSONA_DEFAULT", "MAX_PERSONA_PROMPT_LENGTH", "PERSONA_MAX_COUNT")
+                   if name in form}
+        ok, message = self.config_service.update_many(updates)
+        return web.HTTPFound(f"/panel?tab=persona&msg={quote(message)}&err={'1' if not ok else ''}")
 
     async def _handle_panel_persona_default(self, request: web.Request) -> web.Response:
         """设置默认（兜底）人格：校验存在 → 走 ConfigService 热更新

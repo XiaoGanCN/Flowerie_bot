@@ -25,8 +25,11 @@ class KnowledgePanelMixin:
         for idx, r in enumerate(rows):
             r["updated_at"] = self._fmt_ts(r.get("updated_at"))
             rows[idx] = r
+        meme_configs = [c for c in self.config_service.list_configs()
+                        if c["key"].startswith("MEME_") or c["key"] == "MAX_GROUP_MEMES"]
         return render_knowledge_tab(gid, rows, search=search or "", count=count,
-                                    max_memes=self._meme_manager.max_memes_per_group, enabled=True)
+                                    max_memes=self._meme_manager.max_memes_per_group, enabled=True,
+                                    meme_configs=meme_configs)
 
     @staticmethod
     def _fmt_ts(ts) -> str:
@@ -34,6 +37,21 @@ class KnowledgePanelMixin:
             return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(ts)))
         except (TypeError, ValueError):
             return ""
+
+    async def _handle_panel_knowledge_config(self, request: web.Request) -> web.Response:
+        """保存群聊知识配置（MEME_*，复用 ConfigService 双写 + 热更新）。"""
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        updates = {name: str(form.get(name, "")) for name in
+                   ("MEME_LEARNING_ENABLED", "MEME_KNOWLEDGE_DB_PATH",
+                    "MEME_SUMMARY_INTERVAL_HOURS", "MAX_GROUP_MEMES",
+                    "MEME_BUFFER_PER_GROUP", "MEME_MAX_GROUPS_PER_RUN",
+                    "MEME_MIN_MESSAGES_PER_SUMMARY", "MEME_MAX_SUMMARY_CANDIDATES")
+                   if name in form}
+        ok, message = self.config_service.update_many(updates)
+        gid_q = f"&gid={request.query.get('gid', '')}" if request.query.get("gid", "").isdigit() else ""
+        return web.HTTPFound(f"/panel?tab=knowledge{gid_q}&msg={quote(message)}&err={'1' if not ok else ''}")
 
     async def _handle_panel_knowledge_view(self, request: web.Request) -> web.Response:
         if not self._check_token(request):

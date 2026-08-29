@@ -41,6 +41,51 @@ class EnvFileStore:
             return {}
         return dict(dotenv_values(self._path, interpolate=False))
 
+    # ---------- 删除（注销账号用：只移除指定 key 的行，其他行与注释保留） ----------
+    def delete(self, keys: List[str]) -> None:
+        """从 .env 中移除指定键（整行删除，含其行内注释）；其余行逐字节保留。
+
+        用于注销管理员账号：只清除 WEB_UI_USERNAME / WEB_UI_PASSWORD，
+        不影响 DEEPSEEK_API_KEY 等其他环境配置。
+        """
+        if not keys:
+            return
+        with self._lock:
+            content = self._read_text()
+            if content == "":
+                return
+            newline = self._detect_newline(content)
+            lines = content.split("\n")
+            had_trailing = content.endswith("\n")
+            if had_trailing:
+                lines = lines[:-1]
+            target = set(keys)
+            out: List[str] = []
+            i, n = 0, len(lines)
+            while i < n:
+                raw = lines[i]
+                body = raw[:-1] if raw.endswith("\r") else raw
+                m = _LINE_RE.match(body)
+                if not m:
+                    out.append(body if newline == "\r\n" else raw)
+                    i += 1
+                    continue
+                key = m.group(3)
+                if key in target:
+                    # 跳过整行（含多行引号值的后续行）
+                    end_i, _comment = self._entry_span(m.group(4), lines, i)
+                    i = end_i + 1
+                    continue
+                out.append(body if newline == "\r\n" else raw)
+                i += 1
+            if not out:
+                self._atomic_write("")
+                return
+            text = newline.join(out)
+            if had_trailing:
+                text += newline
+            self._atomic_write(text)
+
     # ---------- 更新 ----------
     def update(self, updates: Dict[str, str]) -> None:
         """增量更新：只改 updates 中的键，其余行（注释/空行/其他变量）逐字节保留。

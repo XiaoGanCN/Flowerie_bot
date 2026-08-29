@@ -223,6 +223,33 @@ class ConfigService:
         logger.info("web_ui account registered user=%s", username, extra={"event": "config_reload"})
         return True, "注册成功，请用新账号登录"
 
+    def unregister_account(self) -> Tuple[bool, str]:
+        """注销管理员账号：只清除管理凭据（settings.db + .env 的
+        WEB_UI_USERNAME / WEB_UI_PASSWORD），**其他环境配置一律不动**。
+
+        调用方必须已经校验当前密码（防误触/防劫持）。注销后回到未注册状态：
+        登录回退到 .env 的 WEB_UI_USERNAME / WEB_UI_PASSWORD（若 .env 原配置
+        已被清除则需重新注册或配置）。
+        """
+        removed_db = 0
+        for key in ("WEB_UI_USERNAME", "WEB_UI_PASSWORD"):
+            if self.repository.delete_config(key):
+                removed_db += 1
+        if self.env_store is not None:
+            try:
+                self.env_store.delete(["WEB_UI_USERNAME", "WEB_UI_PASSWORD"])
+            except Exception:  # noqa: BLE001 - .env 删除失败不阻断（db 已清）
+                logger.warning("env unregister 删除失败（db 凭据已清除）")
+        try:
+            setattr(self.config, "WEB_UI_USERNAME", "admin")
+            setattr(self.config, "WEB_UI_PASSWORD", "")
+        except Exception:  # noqa: BLE001
+            pass
+        logger.info("web_ui account unregistered", extra={"event": "config_reload"})
+        if removed_db:
+            return True, "管理员账号已注销（仅清除账号与密码，其他配置未动）"
+        return True, "管理员账号已注销（settings.db 中无持久化凭据，已清除 .env 相关项）"
+
     def migrate_plaintext_password(self, username: str, plaintext: str) -> bool:
         """把 settings.db 中的旧版**明文**密码迁移为 scrypt 哈希（登录成功后调用）。
 

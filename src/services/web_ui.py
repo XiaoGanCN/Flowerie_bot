@@ -145,6 +145,8 @@ class WebUIServer(AuthPanelMixin, ConfigPanelMixin, AppearancePanelMixin, McpPan
         app.router.add_post("/panel/register", self._handle_panel_register)
         app.router.add_post("/panel/save", self._handle_panel_save)
         app.router.add_get("/panel/logout", self._handle_panel_logout)
+        # 注销管理员账号（需当前密码验证；只清账号密码，其他配置不动）
+        app.router.add_post("/panel/account/unregister", self._handle_panel_unregister)
         # 外观美化（主题 / 背景颜色 / 背景图片 / 透明度）
         app.router.add_post("/panel/appearance", self._handle_panel_appearance_save)
         app.router.add_post("/panel/appearance/restore", self._handle_panel_appearance_restore)

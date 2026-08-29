@@ -1,10 +1,11 @@
 """webui_render 群聊知识页：按群查看 / 搜索 / 增删改（严格隔离）。"""
 
+from src.services.webui_render.config_panel import _render_config_row
 from src.services.webui_render.util import _esc
 
 
 def render_knowledge_tab(group_id, rows, search="", count=0, max_memes=500,
-                         enabled=True) -> str:
+                         enabled=True, meme_configs=None) -> str:
     """群聊知识管理页（零 JS）：输入群号查看，搜索/新增/编辑/删除（严格按群隔离）。"""
     if not enabled:
         return '<div class="msg err">群聊知识系统未接入（meme_manager 未注入）</div>'
@@ -127,5 +128,16 @@ def render_knowledge_tab(group_id, rows, search="", count=0, max_memes=500,
         '<button type="submit" class="btn danger">清空本群全部知识</button></form>'
         '</div></fieldset>'
     )
-    return view_block + search_block + add_block + list_block
+    # ---- 知识配置（MEME_*，从配置页移入本页管理） ----
+    config_block = ""
+    if meme_configs:
+        rows_html = "".join(_render_config_row(c) for c in meme_configs)
+        config_block = (
+            '<fieldset class="group"><legend>群聊知识配置</legend>'
+            '<form method="post" action="/panel/knowledge/config">'
+            + rows_html +
+            '<div class="group-actions"><button type="submit" class="btn">保存知识配置</button></div>'
+            '</form></fieldset>'
+        )
+    return view_block + search_block + add_block + list_block + config_block
 

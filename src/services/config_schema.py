@@ -168,7 +168,8 @@ CATEGORY_ORDER: List[str] = [
     "AI", "Bot", "Connection", "Behavior", "Stability", "Memory", "Context",
     "Sticker", "MCP", "WebUI", "Logging", "Budget", "ActiveChat", "Repeat",
     "Poke", "FileParse", "Security", "Whitelist", "Archive", "Paths",
-    "Persona", "Knowledge",
+    # 注意：Persona/Knowledge 分类的配置项已在 SCHEMA 中，但不在配置页展示——
+    # 它们由「人格」「群聊知识」页的专属配置区块管理（见 webui_panels/persona_panel 等）
 ]
 
 _ENUM_VALUES = {

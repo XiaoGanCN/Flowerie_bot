@@ -76,6 +76,19 @@ def render_panel_page(*, theme_class: str, bg_rules: str, msg_html: str,
         '<a class="tab danger" href="/panel/logout">退出</a></nav></header>'
         f'<h1 class="page-title">{title}</h1>'
         + msg_html + body_html +
+        '<fieldset class="group"><legend>注销管理员账号</legend>'
+        '<div class="row"><label class="row-info"><span class="row-title">注销</span>'
+        '<span class="row-key">unregister</span></label>'
+        '<div class="row-control">'
+        '<form method="post" action="/panel/account/unregister">'
+        '<div class="row-control" style="flex-direction:row;gap:10px;flex-wrap:wrap">'
+        '<input type="password" name="password" placeholder="输入当前密码确认注销" '
+        'autocomplete="current-password" required style="max-width:260px">'
+        '<button type="submit" class="btn danger">注销账号</button></div>'
+        '<span class="hint">注销将<strong>只清除管理账号与密码</strong>（settings.db 与 .env 中的 '
+        '<code>WEB_UI_USERNAME</code>/<code>WEB_UI_PASSWORD</code>），'
+        '其他环境配置（API Key 等）一律不动；注销后需重新注册或配置密码才能登录。</span>'
+        '</form></div></div></fieldset>'
         '</div></body></html>'
     )
 

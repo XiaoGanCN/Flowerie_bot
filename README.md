@@ -115,8 +115,9 @@ OneBot WebSocket connected
   bool/int/secret/文本/列表/JSON 各有对应控件（checkbox/number/password/textarea/select）；
   每组独立保存，修改**真正写入项目根 `.env`**（原子更新、保留注释与原有变量），
   重启后由 pydantic-settings 自动读取；Secret 只显示掩码、留空不覆盖
-- **人格**：全局人格设置、人格库 CRUD（创建/编辑/删除/设为全局）、群聊人格绑定与解除
-- **群聊知识**：输入群号查看该群梗知识，搜索/新增/编辑/删除/清空，严格按群隔离
+- **人格**：全局人格设置、人格库 CRUD（创建/编辑/删除/设为全局）、群聊人格绑定与解除、
+  人格配置（`PERSONA_*`）+ 自定义人格 vs 自定义 Prompt 区别说明
+- **群聊知识**：输入群号查看该群梗知识，搜索/新增/编辑/删除/清空 + 知识配置（`MEME_*`），严格按群隔离
 - **外观**：7 套内置主题（默认/深色/浅色/Sakura/Ocean/Forest/AMOLED）、
   自定义背景颜色、背景图片上传（PNG/JPEG/WEBP/GIF，≤5MB，魔数校验，持久化到
   `data/webui/background/`）、图片透明度、显示方式（cover/contain + 位置）、

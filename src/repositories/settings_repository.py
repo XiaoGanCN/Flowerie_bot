@@ -138,6 +138,13 @@ class SettingsRepository:
             rows = self._conn.execute("SELECT key, value FROM app_config").fetchall()
             return [(r["key"], r["value"]) for r in rows]
 
+    def delete_config(self, key: str) -> bool:
+        """删除某配置项（注销账号用：清除 settings.db 中的管理凭据）。"""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM app_config WHERE key=?", (key,))
+            self._conn.commit()
+            return cur.rowcount > 0
+
     # ---------- Web UI 外观偏好（主题/背景，复用同一 SQLite 持久化机制） ----------
     def get_pref(self, key: str) -> Optional[str]:
         with self._lock:

@@ -507,3 +507,96 @@ def test_split_modules_keep_class_structure():
     top_names = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
     assert {"default_persona_text", "build_system_prompt"} <= top_names
     print("✅ prompt_builder 模块级函数就位")
+
+
+# ---------- 人格/知识配置移入专属页 + 区别说明 ----------
+async def test_persona_config_moved_to_persona_tab():
+    """PERSONA_* 配置在人格页渲染并可保存；配置页不再显示。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, _, svc, server, _, _ = _make_stack(td)
+        cookie = await _login(server)
+        page = await server._handle_panel(FakeRequest(query={"tab": "persona"},
+                                                     cookies={"fb_token": cookie}))
+        text = _resp_text(page)
+        assert 'name="PERSONA_MAX_COUNT"' in text          # 配置表单在本页
+        assert 'action="/panel/persona/config"' in text
+        assert "自定义人格 与 自定义 Prompt 的区别" in text   # 区别说明
+        assert "换身份" in text and "加补充" in text
+        # 保存生效（热更新）
+        resp = await server._handle_panel_persona_config(FakeRequest(
+            form={"PERSONA_MAX_COUNT": "88"}, cookies={"fb_token": cookie}))
+        assert resp.status == 302
+        assert svc.config.PERSONA_MAX_COUNT == 88
+        assert svc.repository.get_config("PERSONA_MAX_COUNT") == "88"
+        # 配置页不含人格配置
+        page_c = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}))
+        text_c = _resp_text(page_c)
+        assert 'name="PERSONA_MAX_COUNT"' not in text_c
+
+
+async def test_knowledge_config_moved_to_knowledge_tab():
+    """MEME_* 配置在群聊知识页渲染并可保存。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, _, svc, server, _, _ = _make_stack(td)
+        cookie = await _login(server)
+        page = await server._handle_panel(FakeRequest(query={"tab": "knowledge", "gid": "100"},
+                                                     cookies={"fb_token": cookie}))
+        text = _resp_text(page)
+        assert 'name="MAX_GROUP_MEMES"' in text
+        assert 'name="MEME_LEARNING_ENABLED"' in text
+        assert 'action="/panel/knowledge/config"' in text
+        resp = await server._handle_panel_knowledge_config(FakeRequest(
+            form={"MAX_GROUP_MEMES": "321"}, cookies={"fb_token": cookie}))
+        assert resp.status == 302
+        assert svc.config.MAX_GROUP_MEMES == 321
+        assert svc.repository.get_config("MAX_GROUP_MEMES") == "321"
+
+
+# ---------- 注销（只清账号密码，其他配置不动） ----------
+async def test_unregister_clears_only_credentials():
+    with tempfile.TemporaryDirectory() as td:
+        _, _, svc, server, _, _ = _make_stack(td)
+        # 预置：注册账号（写入 settings.db）+ 一条与账号无关的配置（.env + db 双写）
+        ok, _ = svc.register_user("admin2", "pass123")
+        assert ok
+        svc.update("MAX_REPLY_LENGTH", "42")
+        assert svc.repository.get_config("WEB_UI_USERNAME") == "admin2"
+        # 注册后凭据变为 admin2/pass123，用它登录
+        resp = await server._handle_panel_login(FakeRequest(
+            form={"username": "admin2", "password": "pass123"}))
+        assert resp.status == 302
+        cookie = resp.cookies.get("fb_token").value
+        # 注销（当前密码正确）
+        resp = await server._handle_panel_unregister(FakeRequest(
+            form={"password": "pass123"}, cookies={"fb_token": cookie}))
+        assert resp.status == 302
+        # settings.db 账号凭据已清除
+        assert svc.repository.get_config("WEB_UI_USERNAME") is None
+        assert svc.repository.get_config("WEB_UI_PASSWORD") is None
+        # .env 中 WEB_UI_USERNAME/WEB_UI_PASSWORD 已移除
+        from src.repositories.env_store import EnvFileStore
+        env = EnvFileStore(svc.env_store._path).read_values()
+        assert "WEB_UI_USERNAME" not in env
+        assert "WEB_UI_PASSWORD" not in env
+        # 其他配置不受影响（.env 与 settings.db 均保留）
+        assert svc.repository.get_config("MAX_REPLY_LENGTH") == "42"
+        assert "MAX_REPLY_LENGTH" in env and env["MAX_REPLY_LENGTH"] == "42"
+        # token 已全部失效（未登录访问面板 → 登录页）
+        page = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}))
+        assert "登录" in _resp_text(page)
+
+
+async def test_unregister_requires_current_password():
+    with tempfile.TemporaryDirectory() as td:
+        _, _, svc, server, _, _ = _make_stack(td)
+        svc.register_user("admin2", "pass123")
+        resp = await server._handle_panel_login(FakeRequest(
+            form={"username": "admin2", "password": "pass123"}))
+        cookie = resp.cookies.get("fb_token").value
+        resp = await server._handle_panel_unregister(FakeRequest(
+            form={"password": "wrong-pass"}, cookies={"fb_token": cookie}))
+        assert "err=1" in str(resp.headers.get("Location", ""))
+        # 凭据未被清除，token 仍有效
+        assert svc.repository.get_config("WEB_UI_USERNAME") == "admin2"
+        page = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}))
+        assert "登录" not in _resp_text(page)

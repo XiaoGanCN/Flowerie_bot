@@ -1,11 +1,13 @@
 """webui_render 人格页：默认/全局人格 / 人格 CRUD / 群绑定 / 群聊 Prompt。"""
 
+from src.services.webui_render.config_panel import _render_config_row
 from src.services.webui_render.util import _esc
 
 
 def render_persona_tab(personas, global_id, bindings, edit_persona=None, new=False,
                        enabled=True, default_persona_id="flowerie", default_persona_name="",
-                       global_prompt="", group_prompt="", prompt_gid=None) -> str:
+                       global_prompt="", group_prompt="", prompt_gid=None,
+                       persona_configs=None) -> str:
     """人格管理页（零 JS）：默认人格 / 全局人格 / 人格列表 / 编辑表单 / 群聊人格绑定 /
     群聊自定义 Prompt（<details> 原生折叠，无 JS）。"""
     if not enabled:
@@ -30,6 +32,42 @@ def render_persona_tab(personas, global_id, bindings, edit_persona=None, new=Fal
         '</div></div>'
         '<div class="group-actions"><button type="submit" class="btn">保存默认人格</button></div>'
         '</form></fieldset>'
+    )
+
+    # ---- 人格配置（PERSONA_*，从配置页移入本页管理） ----
+    config_block = ""
+    if persona_configs:
+        rows = "".join(_render_config_row(c) for c in persona_configs)
+        config_block = (
+            '<fieldset class="group"><legend>人格配置</legend>'
+            '<form method="post" action="/panel/persona/config">'
+            + rows +
+            '<div class="group-actions"><button type="submit" class="btn">保存人格配置</button></div>'
+            '</form></fieldset>'
+        )
+
+    # ---- 自定义人格 vs 自定义 Prompt 的区别说明 ----
+    explain_block = (
+        '<fieldset class="group"><legend>自定义人格 与 自定义 Prompt 的区别</legend>'
+        '<div class="mcp-card">'
+        '<div class="mcp-card-head"><b>自定义人格 = 换身份（我是谁）</b></div>'
+        '<div class="mcp-card-url">完整的独立人格资源：身份 / 背景 / 性格 / 说话风格 / 词库，'
+        '整段替换，互相独立（花璃 / 亚托莉 / 雪风 / 任意设计）。'
+        '在上方「人格列表」创建与命名，之后可在「默认人格」「全局人格」「群聊人格」中选用。</div>'
+        '</div>'
+        '<div class="mcp-card">'
+        '<div class="mcp-card-head"><b>自定义 Prompt = 加补充（要注意什么）</b></div>'
+        '<div class="mcp-card-url">一段附加文本，叠加在当前生效人格之上，不改身份：'
+        '比如"本群聊游戏请带攻略""本群禁止剧透"。在下方「群聊自定义 Prompt」按群读写，'
+        '与 /prompt 命令同一存储。</div>'
+        '</div>'
+        '<div class="mcp-card">'
+        '<div class="mcp-card-head"><b>两者可同时生效</b></div>'
+        '<div class="mcp-card-url">注入顺序：人格块（身份）→ 全局风格规则 → 记忆协议 → '
+        '自定义 Prompt（补充）→ 安全声明 → 群聊记录。'
+        '<code>群聊人格</code> 决定"是谁"，<code>群聊自定义 Prompt</code> 决定"在这个群额外注意什么"。</div>'
+        '</div>'
+        '</fieldset>'
     )
 
     # ---- 群聊自定义 Prompt 管理（按群读写；<details> 原生折叠，零 JS） ----
@@ -221,5 +259,5 @@ def render_persona_tab(personas, global_id, bindings, edit_persona=None, new=Fal
         '</fieldset>'
     )
 
-    return default_block + global_block + prompt_block + edit_block + list_block + group_block
+    return default_block + global_block + config_block + explain_block + prompt_block + edit_block + list_block + group_block
 
