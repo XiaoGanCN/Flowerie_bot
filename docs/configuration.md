@@ -67,7 +67,7 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 | `MCP_ALLOWED_HOSTS` | 显式放行的本地/内网主机白名单（逗号分隔；仅这些地址可绕过回环/私网拒绝） | 空 |
 | `MCP_TIMEOUT` | 单次工具调用超时（秒） | `15` |
 | `MCP_MAX_TOOL_CALLS` | 单轮对话工具调用上限 | `5` |
-| `MCP_ALLOWED_TOOLS` | 工具白名单（逗号分隔，空=不允许任何工具） | 空 |
+| `MCP_ALLOWED_TOOLS` | 工具白名单（逗号分隔，留空=放行所有工具） | 空 |
 | `MCP_CIRCUIT_FAILURES` / `MCP_CIRCUIT_PAUSE_SECONDS` | MCP 独立熔断阈值/冷却 | `5` / `60` |
 
 ## 预算与稳定性

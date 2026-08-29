@@ -83,7 +83,7 @@ OneBot WebSocket connected
 | `BOT_QQ` / `BOT_NICKNAME` | 机器人 QQ / 昵称 | 必填 / 花璃 |
 | `WS_PORT` / `HTTP_API_BASE` | 反向 WS 端口 / NapCat HTTP 地址 | `3001` / `http://127.0.0.1:3000` |
 | `STICKER_DIR` / `STICKER_ENABLED` | 表情包目录 / 开关 | 空 / `false` |
-| `MCP_ENABLED` / `MCP_SERVER_URL` / `MCP_SERVERS` / `MCP_ALLOWED_TOOLS` / `MCP_ALLOWED_HOSTS` | MCP 开关 / 单 server 地址 / 多 server 列表(JSON，插件式) / 工具白名单 / 本地·内网主机白名单 | `false` / 空 / 空 / 空 / 空 |
+| `MCP_ENABLED` / `MCP_SERVER_URL` / `MCP_SERVERS` / `MCP_ALLOWED_TOOLS` / `MCP_ALLOWED_HOSTS` | MCP 开关 / 单 server 地址 / 多 server 列表(JSON，插件式) / 工具白名单（留空=放行所有）/ 本地·内网主机白名单 | `false` / 空 / 空 / 空 / 空 |
 | `WEB_UI_ENABLED` / `WEB_UI_PORT` / `WEB_UI_USERNAME` / `WEB_UI_PASSWORD` | Web UI 开关 / 端口 / 登录账号 / 密码 | `false` / `8080` / `admin` / 空 |
 | `LOG_FORMAT` | 日志格式 `text`/`json` | `text` |
 
@@ -117,7 +117,8 @@ OneBot WebSocket connected
   恢复默认主题 / 删除背景图片
 - **日志**：最近 200 条运行日志
 
-详见 [docs/configuration.md](docs/configuration.md)。
+完整功能指南（配置中心 / 主题美化 / MCP 卡片管理 / 安全）见 **[docs/web-ui.md](docs/web-ui.md)**；
+变量说明见 [docs/configuration.md](docs/configuration.md)。
 
 ### 如何开启
 
@@ -141,7 +142,7 @@ OneBot WebSocket connected
 
 ```bash
 pip install -r requirements-dev.txt
-pytest              # 432 个测试
+pytest              # 444 个测试
 ruff check .        # 代码检查
 ```
 
