@@ -1,6 +1,10 @@
 name: Acceptance
 
-on: [push]
+# 只跟随 main 分支推送触发（避免标签推送导致同一 SHA 重复运行）
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   accept:
