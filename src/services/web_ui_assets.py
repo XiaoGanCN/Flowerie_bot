@@ -313,7 +313,7 @@ border-radius:11px;cursor:pointer;transition:border-color .15s,background .15s}
 .bg-preview{max-width:240px;max-height:150px;border-radius:10px;border:1px solid var(--panel-border);object-fit:cover;margin-top:6px}
 .range-row{display:flex;align-items:center;gap:12px}
 .range-row output{font-size:12.5px;color:var(--text-muted);min-width:44px;text-align:right}
-.inline-form{display:inline-block}
+.inline-form{display:inline-flex;align-items:center}
 .mcp-card{background:var(--panel-bg);border:1px solid var(--panel-border);border-radius:12px;padding:14px 16px;margin-bottom:12px}
 .mcp-card-head{display:flex;align-items:center;gap:10px;font-size:14px}
 .mcp-card-head b{color:var(--heading)}
@@ -322,7 +322,7 @@ border-radius:11px;cursor:pointer;transition:border-color .15s,background .15s}
 .mcp-card-test{font-size:12px;margin:4px 0 8px;padding:5px 10px;border-radius:7px;word-break:break-all}
 .mcp-card-test.ok{color:var(--ok);background:rgba(63,185,80,.1)}
 .mcp-card-test.err{color:var(--err);background:rgba(248,81,73,.1)}
-.actions-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.actions-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px}
 .log{background:var(--input-bg);border:1px solid var(--panel-border);border-radius:10px;padding:14px;
 font-size:12px;overflow-x:auto;line-height:1.7;white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace}
 .auth-card{max-width:430px;margin:9vh auto;background:var(--panel-bg);border:1px solid var(--panel-border);
@@ -342,7 +342,7 @@ border-radius:16px;box-shadow:var(--shadow);padding:30px 32px}
   .btn{width:100%}
   /* 主按钮（保存/登录）全宽；卡片与操作的 .btn.small 按钮保持自适应，避免竖排撑满 */
   .btn.small,.actions-row .btn,.actions-row .inline-form{width:auto}
-  .actions-row .inline-form{display:inline-flex;align-items:center}
+  .actions-row{gap:6px}
   .theme-grid{grid-template-columns:1fr 1fr}
   .auth-card{margin:4vh 12px;padding:24px 20px}
 }
@@ -498,7 +498,14 @@ def _mcp_server_card(i, s, test_status=None, tool_count=None) -> str:
     """服务器摘要卡 + 操作按钮（启用/停用、测试、编辑、删除）。"""
     name = _esc(s.get("name", ""))
     url = _esc(s.get("url", ""))
-    tools_label = (f"{tool_count} 个工具" if tool_count is not None else "<span class='hint'>工具数未知</span>")
+    # 工具数量：优先运行时已同步数；无则用配置白名单数；留空=放行所有
+    tools_allow = str(s.get("allowed_tools", "") or "").strip()
+    if tool_count is not None:
+        tools_label = f"{tool_count} 个工具"
+    elif tools_allow:
+        tools_label = f"{len([t for t in tools_allow.split(',') if t.strip()])} 个工具"
+    else:
+        tools_label = "全部工具"
     transport = "sse" if url.lower().startswith("sse://") or "/sse" in url.lower() else "streamable-http"
     enabled = bool(s.get("enabled", True))
     status = '<span class="badge">已启用</span>' if enabled else '<span class="badge warn">已停用</span>'
@@ -510,17 +517,21 @@ def _mcp_server_card(i, s, test_status=None, tool_count=None) -> str:
         f'<div class="mcp-card-url">{url}</div>'
         + (_mcp_test_status_html(test_status) if test_status else "")
         + '<div class="actions-row">'
-        f'<form method="post" action="/panel/mcp/edit" class="inline-form">'
-        f'<input type="hidden" name="mcp_index" value="{i}">'
-        f'<button type="submit" name="mcp_action" value="toggle" class="btn small">{toggle}</button>'
-        f'<button type="submit" name="mcp_action" value="test" class="btn small">测试</button>'
-        '</form>'
-        f'<a class="btn small" href="/panel?cat=MCP&edit={i}">编辑</a>'
-        f'<form method="post" action="/panel/mcp/edit" class="inline-form">'
-        f'<input type="hidden" name="mcp_index" value="{i}">'
-        f'<button type="submit" name="mcp_action" value="delete" class="btn small danger">删除</button>'
-        '</form>'
-        '</div></div>'
+        # 每个操作是独立、紧凑的按钮（toggle 与 test 不再塞进同一个 form），窄屏也横向不竖排
+        + f'<form method="post" action="/panel/mcp/edit" class="inline-form">'
+        + f'<input type="hidden" name="mcp_index" value="{i}">'
+        + f'<button type="submit" name="mcp_action" value="toggle" class="btn small">{toggle}</button>'
+        + '</form>'
+        + f'<form method="post" action="/panel/mcp/edit" class="inline-form">'
+        + f'<input type="hidden" name="mcp_index" value="{i}">'
+        + f'<button type="submit" name="mcp_action" value="test" class="btn small">测试</button>'
+        + '</form>'
+        + f'<a class="btn small" href="/panel?cat=MCP&edit={i}">编辑</a>'
+        + f'<form method="post" action="/panel/mcp/edit" class="inline-form">'
+        + f'<input type="hidden" name="mcp_index" value="{i}">'
+        + f'<button type="submit" name="mcp_action" value="delete" class="btn small danger">删除</button>'
+        + '</form>'
+        + '</div></div>'
     )
 
 
