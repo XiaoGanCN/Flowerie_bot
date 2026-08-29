@@ -14,7 +14,7 @@ pytest              # 全部测试
 pytest tests/xxx    # 单文件
 ```
 
-当前 444 个测试：并发安全、故障隔离、熔断、状态治理、Prompt/Sticker/MCP/Web UI、SSRF/注入回归、MCP 额度/安全、配置持久化/校验、Web UI 注册/无 JS 面板。
+当前 500+ 个测试：并发安全、故障隔离、熔断、状态治理、Prompt/Sticker/MCP/Web UI、SSRF/注入回归、MCP 额度/安全、配置持久化/校验、Web UI 注册/无 JS 面板、**Persona 系统、群聊 Meme Knowledge、每日总结、Web UI 人格/知识页**（新增 `test_persona_manager.py` / `test_meme_knowledge.py` / `test_meme_summary.py` / `test_web_ui_persona_knowledge.py`）。
 
 ## 代码检查
 
@@ -35,9 +35,11 @@ GitHub Actions（`.github/workflows/ci.yml`）在 push/PR 时自动运行：
 src/
 ├── core/           # 消息路由/组装/策略/预算/WS 服务
 ├── services/       # AI 客户端/记忆/文件解析/发送/表情包/MCP/配置服务/Web UI
-├── repositories/   # SQLite 存储层（记忆/设置/表情包索引）
+│                   #   + persona_manager/persona_presets（人格）
+│                   #   + meme_knowledge_manager/meme_summary（群聊梗知识/每日总结）
+├── repositories/   # SQLite 存储层（记忆/设置/表情包索引/梗知识）
 └── utils/          # 日志/trace/指标/熔断/过期容器/任务管理
-tests/              # 444 个测试
+tests/              # 500+ 个测试
 docs/               # 文档
 ```
 

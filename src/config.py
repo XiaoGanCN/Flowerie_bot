@@ -139,6 +139,21 @@ class Settings(BaseSettings):
     WEB_UI_PASSWORD: str = ""
     WEB_UI_TOKEN_TTL_SECONDS: int = 3600  # 登录 token 有效期
 
+    # Persona（人格系统）：人格资源存 settings.db（personas / group_persona /
+    # persona_global 表），内置预设见 src/services/persona_presets.py
+    PERSONA_DEFAULT: str = "flowerie"      # 默认（兜底）人格 id
+    MAX_PERSONA_PROMPT_LENGTH: int = 8000  # 单个人格 system_prompt 最大长度（字）
+
+    # 群聊梗/黑话知识层（Meme Knowledge）：独立 knowledge.db，按群完全隔离
+    MEME_LEARNING_ENABLED: bool = False            # 每日梗总结任务总开关（默认关）
+    MEME_KNOWLEDGE_DB_PATH: str = "./data/knowledge.db"
+    MEME_SUMMARY_INTERVAL_HOURS: int = 24          # 每日总结周期（小时）
+    MAX_GROUP_MEMES: int = 500                     # 每群知识条数上限（防无限增长）
+    MEME_BUFFER_PER_GROUP: int = 1000              # 每群消息缓冲上限（条）
+    MEME_MAX_GROUPS_PER_RUN: int = 20              # 单轮总结最多处理的群数（防 AI 风暴）
+    MEME_MIN_MESSAGES_PER_SUMMARY: int = 10        # 群消息少于该数不总结（宁缺毋滥）
+    MEME_MAX_SUMMARY_CANDIDATES: int = 20          # 单群单轮最多写入的候选梗数
+
     # White list
     ALLOWED_GROUP_IDS: Optional[List[int]] = None
     TOXIC_GROUP_IDS: Optional[List[int]] = None
@@ -342,3 +357,16 @@ def validate_config(config: Settings) -> None:
                     raise ValueError(f"MCP_ALLOWED_TOOLS 含非法工具名: {token!r}")
         if int(getattr(config, "MCP_MAX_TOOL_CALLS", 5)) < 0:
             raise ValueError(f"MCP_MAX_TOOL_CALLS 必须 >= 0，当前: {getattr(config, 'MCP_MAX_TOOL_CALLS', 5)}")
+    # Persona / 群聊知识（Meme）配置合法性
+    if int(getattr(config, "MEME_SUMMARY_INTERVAL_HOURS", 24)) < 1:
+        raise ValueError("MEME_SUMMARY_INTERVAL_HOURS 必须 >= 1（小时）")
+    if int(getattr(config, "MAX_GROUP_MEMES", 500)) < 10:
+        raise ValueError("MAX_GROUP_MEMES 必须 >= 10")
+    if int(getattr(config, "MEME_BUFFER_PER_GROUP", 1000)) < 50:
+        raise ValueError("MEME_BUFFER_PER_GROUP 必须 >= 50")
+    if int(getattr(config, "MEME_MAX_GROUPS_PER_RUN", 20)) < 1:
+        raise ValueError("MEME_MAX_GROUPS_PER_RUN 必须 >= 1")
+    if int(getattr(config, "MEME_MIN_MESSAGES_PER_SUMMARY", 10)) < 1:
+        raise ValueError("MEME_MIN_MESSAGES_PER_SUMMARY 必须 >= 1")
+    if int(getattr(config, "MAX_PERSONA_PROMPT_LENGTH", 8000)) < 500:
+        raise ValueError("MAX_PERSONA_PROMPT_LENGTH 必须 >= 500")

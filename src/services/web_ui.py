@@ -36,8 +36,10 @@ from src.services.web_ui_assets import (
     background_rules,
     render_appearance,
     render_config_sections,
+    render_knowledge_tab,
     render_login_page,
     render_panel_page,
+    render_persona_tab,
     render_register_page,
     theme_body_class,
     theme_default_alpha,
@@ -110,7 +112,8 @@ def normalize_color(value: str) -> Optional[str]:
 
 class WebUIServer:
     def __init__(self, config: Settings, config_service: ConfigService, status_provider=None,
-                 data_dir: str = "./data/webui", tool_manager=None):
+                 data_dir: str = "./data/webui", tool_manager=None,
+                 persona_manager=None, meme_manager=None):
         self.config = config
         self.config_service = config_service
         # status_provider: 可调用，返回状态 dict（ws_connected/uptime 等），由 main 注入
@@ -124,6 +127,9 @@ class WebUIServer:
         self._data_dir = str(data_dir)
         # 运行中 MCP 工具管理器（读取各 server 已同步工具数，用于卡片显示真实数量）
         self._tool_manager = tool_manager
+        # 人格系统 / 群聊知识（Web UI 管理页数据源；未注入时对应 tab 提示不可用）
+        self._persona_manager = persona_manager
+        self._meme_manager = meme_manager
 
     # ---------- 认证 ----------
     def _issue_token(self) -> str:
@@ -250,7 +256,7 @@ class WebUIServer:
         if not self._check_token(request):
             return web.json_response({"error": "未认证"}, status=401)
         status = {
-            "version": "1.0.0",
+            "version": "1.0.1",
             "uptime_seconds": int(time.time() - self._started_at),
             "config_count": len(self.config_service.list_configs()),
         }
@@ -299,6 +305,17 @@ class WebUIServer:
         app.router.add_get("/panel/background", self._handle_panel_background)
         # MCP server 结构化编辑（添加/编辑/删除，零 JS 表单）
         app.router.add_post("/panel/mcp/edit", self._handle_panel_mcp_edit)
+        # 人格管理（零 JS 表单：全局 / 列表 CRUD / 群绑定）
+        app.router.add_post("/panel/persona/global", self._handle_panel_persona_global)
+        app.router.add_post("/panel/persona/save", self._handle_panel_persona_save)
+        app.router.add_post("/panel/persona/delete", self._handle_panel_persona_delete)
+        app.router.add_post("/panel/persona/group", self._handle_panel_persona_group)
+        # 群聊知识管理（零 JS 表单：查看 / 新增 / 编辑 / 删除，严格按群隔离）
+        app.router.add_post("/panel/knowledge/view", self._handle_panel_knowledge_view)
+        app.router.add_post("/panel/knowledge/add", self._handle_panel_knowledge_add)
+        app.router.add_post("/panel/knowledge/save", self._handle_panel_knowledge_save)
+        app.router.add_post("/panel/knowledge/delete", self._handle_panel_knowledge_delete)
+        app.router.add_post("/panel/knowledge/clear", self._handle_panel_knowledge_clear)
         # JSON API（保留，供脚本/自动化使用）
         app.router.add_post("/api/login", self._handle_login)
         app.router.add_post("/api/register", self._handle_register)
@@ -390,7 +407,7 @@ class WebUIServer:
         msg = request.query.get("msg", "")
         err = request.query.get("err", "") == "1"
         tab = request.query.get("tab", "")
-        if tab not in ("appearance", "logs"):
+        if tab not in ("appearance", "logs", "persona", "knowledge"):
             tab = "config"
         cat = request.query.get("cat", "")
         if cat not in ("all", "") and cat not in ConfigService.CATEGORY_ORDER:
@@ -399,10 +416,23 @@ class WebUIServer:
             mcp_edit = int(request.query.get("edit", ""))
         except (TypeError, ValueError):
             mcp_edit = None
-        return web.Response(text=self._panel_page(msg, err, tab, cat, mcp_edit),
-                            content_type="text/html", charset="utf-8")
+        # 人格编辑目标 / 新建标记 / 知识页群号与搜索
+        edit_id = request.query.get("edit", "") if tab == "persona" else ""
+        new_persona = request.query.get("new", "") == "1"
+        gid_raw = request.query.get("gid", "")
+        gid: Optional[int] = None
+        if gid_raw.isdigit():
+            gid = int(gid_raw)
+        q = request.query.get("q", "")
+        return web.Response(
+            text=self._panel_page(msg, err, tab, cat, mcp_edit, edit_id=edit_id,
+                                  new_persona=new_persona, gid=gid, search=q),
+            content_type="text/html", charset="utf-8",
+        )
 
-    def _panel_page(self, msg: str = "", err: bool = False, tab: str = "config", cat: str = "", mcp_edit=None) -> str:
+    def _panel_page(self, msg: str = "", err: bool = False, tab: str = "config", cat: str = "",
+                    mcp_edit=None, edit_id: str = "", new_persona: bool = False,
+                    gid: Optional[int] = None, search: str = "") -> str:
         prefs = self._get_prefs()
         theme = str(prefs["theme"])
         if theme not in THEMES:
@@ -444,6 +474,10 @@ class WebUIServer:
         elif tab == "logs":
             logs = "\n".join(get_recent_logs(200))
             body_html = f'<pre class="log">{_html.escape(logs)}</pre>'
+        elif tab == "persona":
+            body_html = self._render_persona_page(edit_id, new_persona)
+        elif tab == "knowledge":
+            body_html = self._render_knowledge_page(gid, search)
         else:
             body_html = render_config_sections(self.config_service.list_configs(), active_cat=cat,
                                                mcp_edit=mcp_edit, mcp_test_status=self._get_mcp_test_status(),
@@ -796,6 +830,177 @@ class WebUIServer:
         if not ok:
             return web.HTTPFound(f"/panel?cat=MCP&msg={quote(msg)}&err=1")
         return web.HTTPFound(f"/panel?cat=MCP&msg={quote(local_msg)}")
+
+    # ---------- 人格管理页（零 JS） ----------
+    def _render_persona_page(self, edit_id: str = "", new_persona: bool = False) -> str:
+        if self._persona_manager is None:
+            return render_persona_tab([], "", [], enabled=False)
+        personas = self._persona_manager.list_personas()
+        global_p = self._persona_manager.get_global()
+        global_id = global_p["id"] if global_p else ""
+        bindings = self._persona_manager.repository.list_group_bindings()
+        edit_persona = None
+        if edit_id and not new_persona:
+            edit_persona = self._persona_manager.get_persona(edit_id)
+        return render_persona_tab(personas, global_id, bindings,
+                                  edit_persona=edit_persona, new=new_persona, enabled=True)
+
+    async def _handle_panel_persona_global(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        persona_id = str(form.get("persona_id", "") or "").strip()
+        if self._persona_manager is None:
+            return web.HTTPFound("/panel?tab=persona&msg=" + quote("人格系统未启用") + "&err=1")
+        ok, msg = self._persona_manager.set_global(persona_id)
+        return web.HTTPFound(f"/panel?tab=persona&msg={quote(msg)}&err={'1' if not ok else ''}")
+
+    async def _handle_panel_persona_save(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        if self._persona_manager is None:
+            return web.HTTPFound("/panel?tab=persona&msg=" + quote("人格系统未启用") + "&err=1")
+        action = str(form.get("action", "") or "update").strip()
+        persona_id = str(form.get("persona_id", "") or "").strip()
+        name = str(form.get("name", "") or "")
+        description = str(form.get("description", "") or "")
+        system_prompt = str(form.get("system_prompt", "") or "")
+        vocabulary = str(form.get("vocabulary", "") or "")
+        behavior_rules = str(form.get("behavior_rules", "") or "")
+        response_style = str(form.get("response_style", "") or "")
+        if action == "create":
+            ok, msg = self._persona_manager.create_persona(
+                persona_id, name, description, system_prompt,
+                vocabulary=vocabulary, behavior_rules=behavior_rules, response_style=response_style)
+        else:
+            ok, msg = self._persona_manager.update_persona(
+                persona_id, name=name, description=description, system_prompt=system_prompt,
+                vocabulary=vocabulary, behavior_rules=behavior_rules, response_style=response_style)
+        return web.HTTPFound(f"/panel?tab=persona&msg={quote(msg)}&err={'1' if not ok else ''}")
+
+    async def _handle_panel_persona_delete(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        if self._persona_manager is None:
+            return web.HTTPFound("/panel?tab=persona&msg=" + quote("人格系统未启用") + "&err=1")
+        persona_id = str(form.get("persona_id", "") or "").strip()
+        ok, msg = self._persona_manager.delete_persona(persona_id)
+        return web.HTTPFound(f"/panel?tab=persona&msg={quote(msg)}&err={'1' if not ok else ''}")
+
+    async def _handle_panel_persona_group(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        if self._persona_manager is None:
+            return web.HTTPFound("/panel?tab=persona&msg=" + quote("人格系统未启用") + "&err=1")
+        gid_raw = str(form.get("group_id", "") or "").strip()
+        if not gid_raw.isdigit():
+            return web.HTTPFound("/panel?tab=persona&msg=" + quote("群号必须是数字") + "&err=1")
+        group_id = int(gid_raw)
+        action = str(form.get("action", "") or "set").strip()
+        if action == "clear":
+            ok, msg = self._persona_manager.clear_group(group_id)
+        else:
+            persona_id = str(form.get("persona_id", "") or "").strip()
+            ok, msg = self._persona_manager.set_group(group_id, persona_id)
+        return web.HTTPFound(f"/panel?tab=persona&msg={quote(msg)}&err={'1' if not ok else ''}")
+
+    # ---------- 群聊知识管理页（零 JS，严格按群隔离） ----------
+    def _render_knowledge_page(self, gid: Optional[int], search: str = "") -> str:
+        if self._meme_manager is None:
+            return render_knowledge_tab(None, [], enabled=False)
+        if gid is None:
+            return render_knowledge_tab(None, [], enabled=True)
+        rows = self._meme_manager.list_for_group(gid, search=search or "")
+        count = self._meme_manager.repository.count_by_group(gid)
+        # 时间戳转可读串（渲染层不暴露原始 float）
+        for idx, r in enumerate(rows):
+            r["updated_at"] = self._fmt_ts(r.get("updated_at"))
+            rows[idx] = r
+        return render_knowledge_tab(gid, rows, search=search or "", count=count,
+                                    max_memes=self._meme_manager.max_memes_per_group, enabled=True)
+
+    @staticmethod
+    def _fmt_ts(ts) -> str:
+        try:
+            return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(ts)))
+        except (TypeError, ValueError):
+            return ""
+
+    async def _handle_panel_knowledge_view(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        gid_raw = str(form.get("group_id", "") or "").strip()
+        if not gid_raw.isdigit():
+            return web.HTTPFound("/panel?tab=knowledge&msg=" + quote("群号必须是数字") + "&err=1")
+        return web.HTTPFound(f"/panel?tab=knowledge&gid={gid_raw}")
+
+    async def _handle_panel_knowledge_add(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        if self._meme_manager is None:
+            return web.HTTPFound("/panel?tab=knowledge&msg=" + quote("群聊知识系统未启用") + "&err=1")
+        gid_raw = str(form.get("group_id", "") or "").strip()
+        if not gid_raw.isdigit():
+            return web.HTTPFound("/panel?tab=knowledge&msg=" + quote("群号必须是数字") + "&err=1")
+        group_id = int(gid_raw)
+        term = str(form.get("term", "") or "")
+        meaning = str(form.get("meaning", "") or "")
+        examples = str(form.get("examples", "") or "")
+        confidence = str(form.get("confidence", "") or "medium").strip()
+        ok, msg = self._meme_manager.add_knowledge(
+            group_id, term, meaning, examples=examples, source="manual", confidence=confidence)
+        return web.HTTPFound(f"/panel?tab=knowledge&gid={gid_raw}&msg={quote(msg)}&err={'1' if not ok else ''}")
+
+    async def _handle_panel_knowledge_save(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        if self._meme_manager is None:
+            return web.HTTPFound("/panel?tab=knowledge&msg=" + quote("群聊知识系统未启用") + "&err=1")
+        gid_raw = str(form.get("group_id", "") or "").strip()
+        id_raw = str(form.get("id", "") or "").strip()
+        if not gid_raw.isdigit() or not id_raw.isdigit():
+            return web.HTTPFound("/panel?tab=knowledge&msg=" + quote("参数非法") + "&err=1")
+        group_id = int(gid_raw)
+        knowledge_id = int(id_raw)
+        ok, msg = self._meme_manager.update_knowledge(
+            knowledge_id, group_id,
+            meaning=str(form.get("meaning", "") or ""),
+            examples=str(form.get("examples", "") or ""),
+            confidence=str(form.get("confidence", "") or "").strip(),
+            status=str(form.get("status", "") or "").strip(),
+        )
+        return web.HTTPFound(f"/panel?tab=knowledge&gid={gid_raw}&msg={quote(msg)}&err={'1' if not ok else ''}")
+
+    async def _handle_panel_knowledge_delete(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        if self._meme_manager is None:
+            return web.HTTPFound("/panel?tab=knowledge&msg=" + quote("群聊知识系统未启用") + "&err=1")
+        gid_raw = str(form.get("group_id", "") or "").strip()
+        id_raw = str(form.get("id", "") or "").strip()
+        if not gid_raw.isdigit() or not id_raw.isdigit():
+            return web.HTTPFound("/panel?tab=knowledge&msg=" + quote("参数非法") + "&err=1")
+        ok, msg = self._meme_manager.delete_knowledge(int(id_raw), int(gid_raw))
+        return web.HTTPFound(f"/panel?tab=knowledge&gid={gid_raw}&msg={quote(msg)}&err={'1' if not ok else ''}")
+
+    async def _handle_panel_knowledge_clear(self, request: web.Request) -> web.Response:
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        if self._meme_manager is None:
+            return web.HTTPFound("/panel?tab=knowledge&msg=" + quote("群聊知识系统未启用") + "&err=1")
+        gid_raw = str(form.get("group_id", "") or "").strip()
+        if not gid_raw.isdigit():
+            return web.HTTPFound("/panel?tab=knowledge&msg=" + quote("群号必须是数字") + "&err=1")
+        ok, msg = self._meme_manager.clear_group(int(gid_raw))
+        return web.HTTPFound(f"/panel?tab=knowledge&gid={gid_raw}&msg={quote(msg)}&err={'1' if not ok else ''}")
 
     # ---------- 生命周期 ----------
     @staticmethod

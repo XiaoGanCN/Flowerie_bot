@@ -22,15 +22,34 @@
 
 ---
 
-## 三个页签
+## 五个页签
 
 | 页签 | 功能 |
 | :--- | :--- |
-| **配置** | 全部 **97 个配置变量**按 19 个功能分组，顶部分类导航，每组一个表单保存 |
+| **配置** | 全部配置变量按 21 个功能分组（含「人格（Persona）」「群聊知识（Meme）」），顶部分类导航，每组一个表单保存 |
+| **人格** | 全局人格设置、人格库 CRUD（创建/编辑/删除/设为全局）、群聊人格绑定与解除 |
+| **群聊知识** | 输入群号查看该群梗知识：搜索/新增/编辑/删除/清空，严格按群隔离 |
 | **外观** | 7 套内置主题 + 背景颜色/图片 + 面板透明度 + 卡片效果 + 恢复默认/删除图片 |
 | **日志** | 最近 200 条运行日志 |
 
 全部通过 **HTML `<form>` + GET/POST + 服务端模板渲染**实现，**不使用任何 JavaScript**。
+
+---
+
+## 人格页
+
+- **全局人格（Global Persona）**：下拉选择任意人格并保存；没有群聊特殊设置时所有群使用全局人格
+- **人格列表**：内置（花璃 / 亚托莉 ATRI，带「内置」徽标）与自定义人格卡片；支持**编辑**（system_prompt / 词库参考 / 行为规则 / 回复风格）、**设为全局**、**删除**（内置不可删除）
+- **新建人格**：填写 id / 名称 / 简介 / system_prompt 等；独立人格完全替换，不是微调
+- **群聊人格（Group Persona）**：输入群号 + 选择人格绑定；当前绑定列表可一键**解除**（自动回退全局/内置）
+- 权限：页面复用管理后台登录认证，普通用户不可见/不可操作
+
+## 群聊知识页
+
+- 输入**群号**查看该群全部梗知识（知识按群完全隔离，群 A 页面绝不出现群 B 的知识）
+- 支持按词条/含义**搜索**、**新增**（词条/含义/例句/可信度）、**编辑**（含义/例句/可信度/状态）、**删除**、**清空本群**
+- 可信度：低/中/高（知识是群聊知识而非绝对事实）；状态：活跃/停用（停用不注入）
+- 服务端按 `group_id` 强制作用域，所有写入过清洗闸门（注入句式/疑似 QQ 号/长度）
 
 ---
 
@@ -105,11 +124,13 @@ MCP 服务器以**卡片列表**展示，无需手写 JSON：
 
 | 用途 | 路径 |
 | :--- | :--- |
-| 配置持久化 | 项目根 `.env`（原子写入）+ `data/settings.db`（`app_config` / `webui_prefs` 表） |
+| 配置持久化 | 项目根 `.env`（原子写入）+ `data/settings.db`（`app_config` / `webui_prefs` / `personas` / `group_persona` / `persona_global` 表） |
 | 背景图片 | `data/webui/background/` |
 | 服务端实现 | `src/services/web_ui.py`（路由/处理器） |
-| 模板与主题 | `src/services/web_ui_assets.py`（HTML/CSS/7 主题） |
-| 配置业务层 | `src/services/config_service.py`（97 变量 SCHEMA + `.env`/settings.db 双写） |
+| 模板与主题 | `src/services/web_ui_assets.py`（HTML/CSS/7 主题/人格与知识页渲染） |
+| 配置业务层 | `src/services/config_service.py`（配置 SCHEMA + `.env`/settings.db 双写） |
+| 人格业务层 | `src/services/persona_manager.py` + `src/services/persona_presets.py`（内置预设） |
+| 群聊知识业务层 | `src/services/meme_knowledge_manager.py` + `src/repositories/meme_knowledge_repository.py` |
 | `.env` 写入器 | `src/repositories/env_store.py`（原子/保留注释/并发锁） |
 
 ---
@@ -118,4 +139,4 @@ MCP 服务器以**卡片列表**展示，无需手写 JSON：
 
 - 全程 **无 JavaScript**（无 `<script>`/fetch/框架），仅 HTML + CSS + 服务端
 - 移动端自适应（PC / 平板 / 手机），窄屏表单转单列、按钮紧凑横排
-- 其它配置项说明见 [configuration.md](configuration.md)；MCP 详见 [mcp.md](mcp.md)
+- 其它配置项说明见 [configuration.md](configuration.md)；人格详见 [persona.md](persona.md)；群聊知识详见 [knowledge.md](knowledge.md)；MCP 详见 [mcp.md](mcp.md)

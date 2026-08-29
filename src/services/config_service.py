@@ -196,6 +196,18 @@ class ConfigService:
         "ARCHIVE_MAX_SIZE_MB": ("Archive", "int", False, True, "每群存档大小上限 MB（0=不限）"),
         # ---------- 数据路径 ----------
         "SETTINGS_DB_PATH": ("Paths", "str", False, False, "设置库路径（需重启，谨慎修改）"),
+        # ---------- Persona（人格系统） ----------
+        "PERSONA_DEFAULT": ("Persona", "str", False, False, "默认人格 id（兜底，需重启）"),
+        "MAX_PERSONA_PROMPT_LENGTH": ("Persona", "int", False, False, "人格 system_prompt 最大长度（需重启）"),
+        # ---------- 群聊知识（Meme Knowledge） ----------
+        "MEME_LEARNING_ENABLED": ("Knowledge", "bool", False, True, "每日梗总结任务开关"),
+        "MEME_KNOWLEDGE_DB_PATH": ("Knowledge", "str", False, False, "梗知识库路径（需重启）"),
+        "MEME_SUMMARY_INTERVAL_HOURS": ("Knowledge", "int", False, True, "梗总结周期（小时）"),
+        "MAX_GROUP_MEMES": ("Knowledge", "int", False, True, "每群梗知识条数上限"),
+        "MEME_BUFFER_PER_GROUP": ("Knowledge", "int", False, False, "每群消息缓冲上限（需重启）"),
+        "MEME_MAX_GROUPS_PER_RUN": ("Knowledge", "int", False, True, "单轮总结最多处理群数"),
+        "MEME_MIN_MESSAGES_PER_SUMMARY": ("Knowledge", "int", False, True, "总结最少消息数"),
+        "MEME_MAX_SUMMARY_CANDIDATES": ("Knowledge", "int", False, True, "单群单轮候选梗上限"),
     }
 
     # 分类显示名与展示顺序（表单分组用）
@@ -219,11 +231,14 @@ class ConfigService:
         "Whitelist": "白名单与隐私",
         "Archive": "消息存档",
         "Paths": "数据路径",
+        "Persona": "人格（Persona）",
+        "Knowledge": "群聊知识（Meme）",
     }
     CATEGORY_ORDER: List[str] = [
         "AI", "Bot", "Connection", "Behavior", "Stability", "Memory", "Context",
         "Sticker", "MCP", "WebUI", "Logging", "Budget", "ActiveChat", "Repeat",
         "Poke", "FileParse", "Security", "Whitelist", "Archive", "Paths",
+        "Persona", "Knowledge",
     ]
 
     def __init__(self, config: Settings, repository: SettingsRepository,
@@ -488,6 +503,13 @@ class ConfigService:
         "ARCHIVE_RETENTION_DAYS": (0, 36500),
         "ARCHIVE_MAX_SIZE_MB": (0, 1000000),
         "WS_PORT": (1, 65535),
+        "MAX_PERSONA_PROMPT_LENGTH": (500, 100000),
+        "MEME_SUMMARY_INTERVAL_HOURS": (1, 8760),
+        "MAX_GROUP_MEMES": (10, 100000),
+        "MEME_BUFFER_PER_GROUP": (50, 100000),
+        "MEME_MAX_GROUPS_PER_RUN": (1, 10000),
+        "MEME_MIN_MESSAGES_PER_SUMMARY": (1, 10000),
+        "MEME_MAX_SUMMARY_CANDIDATES": (1, 200),
     }
 
     def _validate(self, key: str, ctype: str, raw: str) -> Optional[str]:

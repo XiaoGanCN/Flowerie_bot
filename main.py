@@ -11,13 +11,17 @@ from src.config import load_config, validate_config
 from src.core.message_router import MessageRouter
 from src.core.policy_engine import PolicyEngine
 from src.core.websocket_server import WebSocketServer
+from src.repositories.meme_knowledge_repository import MemeKnowledgeRepository
 from src.repositories.settings_repository import SettingsRepository
 from src.repositories.sticker_repository import StickerRepository
 from src.services.ai_client import AIClient
 from src.services.config_service import ConfigService
 from src.services.file_parser import FileParser
 from src.services.mcp_tool_manager import McpToolManager
+from src.services.meme_knowledge_manager import MemeKnowledgeManager
+from src.services.meme_summary import MemeSummaryService
 from src.services.memory_manager import MemoryManager
+from src.services.persona_manager import PersonaManager
 from src.services.prompt_manager import PromptManager
 from src.services.sender import Sender
 from src.services.sticker_manager import StickerManager
@@ -56,6 +60,29 @@ async def main():
         sticker_repo = StickerRepository(config.STICKER_DB_PATH)
         sticker_manager = StickerManager(config, sticker_repo, ai_client)
         tool_manager = McpToolManager(config)
+        # 人格系统（内置预设自动播种；Group > Global > 内置默认）
+        persona_manager = PersonaManager(
+            settings_repo,
+            default_persona_id=getattr(config, "PERSONA_DEFAULT", "flowerie"),
+            max_system_prompt_length=getattr(config, "MAX_PERSONA_PROMPT_LENGTH", 8000),
+        )
+        # 群聊梗知识（独立库，按群隔离）+ 每日总结任务
+        meme_repo = MemeKnowledgeRepository(config.MEME_KNOWLEDGE_DB_PATH)
+        meme_manager = MemeKnowledgeManager(
+            meme_repo,
+            max_memes_per_group=getattr(config, "MAX_GROUP_MEMES", 500),
+            buffer_per_group=getattr(config, "MEME_BUFFER_PER_GROUP", 1000),
+        )
+        meme_summary = MemeSummaryService(
+            config,
+            ai_client,
+            meme_manager,
+            tool_manager=tool_manager,
+            min_messages=getattr(config, "MEME_MIN_MESSAGES_PER_SUMMARY", 10),
+            max_groups_per_run=getattr(config, "MEME_MAX_GROUPS_PER_RUN", 20),
+            max_candidates=getattr(config, "MEME_MAX_SUMMARY_CANDIDATES", 20),
+            interval_hours=getattr(config, "MEME_SUMMARY_INTERVAL_HOURS", 24),
+        )
         web_ui = None
         if config.WEB_UI_ENABLED:
             def _status_provider():
@@ -63,7 +90,11 @@ async def main():
                     "ws_connected": message_router.global_state.ws_connected,
                     "groups": len(message_router.policy_engine.groups),
                 }
-            web_ui = WebUIServer(config, config_service, status_provider=_status_provider, tool_manager=tool_manager)
+            web_ui = WebUIServer(
+                config, config_service, status_provider=_status_provider,
+                tool_manager=tool_manager, persona_manager=persona_manager,
+                meme_manager=meme_manager,
+            )
         file_parser = FileParser(config)
         policy_engine = PolicyEngine(config, memory_manager)
         message_router = MessageRouter(
@@ -76,6 +107,9 @@ async def main():
             prompt_manager=prompt_manager,
             sticker_manager=sticker_manager,
             tool_manager=tool_manager,
+            persona_manager=persona_manager,
+            meme_manager=meme_manager,
+            meme_summary=meme_summary,
         )
         ws_server = WebSocketServer(config, message_router)
 
@@ -103,6 +137,7 @@ async def main():
             memory_manager.close()
             settings_repo.close()
             sticker_manager.close()
+            meme_manager.close()
             await tool_manager.close()
             # 4) 输出进程内 metrics 摘要
             logger.info(

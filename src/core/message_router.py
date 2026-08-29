@@ -60,6 +60,9 @@ class MessageRouter:
         prompt_manager: Optional["PromptManager"] = None,
         sticker_manager: Optional["StickerManager"] = None,
         tool_manager: Optional["McpToolManager"] = None,
+        persona_manager: Optional["PersonaManager"] = None,
+        meme_manager: Optional["MemeKnowledgeManager"] = None,
+        meme_summary: Optional["MemeSummaryService"] = None,
     ):
         self.config = config
         self.ai_client = ai_client
@@ -74,6 +77,12 @@ class MessageRouter:
         self.sticker_manager = sticker_manager
         # MCP 工具：None 或未启用时走纯聊天路径（不影响现有行为）
         self.tool_manager = tool_manager
+        # 人格系统：None 时回退内置默认人格（不影响现有行为）
+        self.persona_manager = persona_manager
+        # 群聊梗知识：None 时不记录/不注入（不影响现有行为）
+        self.meme_manager = meme_manager
+        # 每日梗总结任务：None 或未启用时不注册
+        self.meme_summary = meme_summary
         # 消息组装（文本/识图/转发/卡片/文件/存档）→ MessageAssembler
         self.assembler = MessageAssembler(config, ai_client, file_parser, self.global_state)
         # 指令处理 → CommandHandler
@@ -120,6 +129,14 @@ class MessageRouter:
         # MCP 工具列表同步（失败不阻塞启动；工具列表为空则不会注入 tools）
         if self.tool_manager is not None and self.tool_manager.is_enabled():
             self.task_manager.register("mcp_tools_sync", self.tool_manager.sync_tools())
+        # 每日梗总结（MEME_LEARNING_ENABLED=true 时注册；批量、有界、可降级）
+        if self.meme_summary is not None and self._meme_learning_enabled():
+            self.task_manager.register("meme_summary", self.meme_summary.run_loop())
+            logger.info("Meme summary loop started (every %sh)",
+                        getattr(self.config, "MEME_SUMMARY_INTERVAL_HOURS", 24))
+
+    def _meme_learning_enabled(self) -> bool:
+        return bool(getattr(self.config, "MEME_LEARNING_ENABLED", False))
 
     async def stop(self):
         # 统一取消并等待所有后台任务（TaskManager 负责异常记录与超时强杀）
@@ -250,6 +267,11 @@ class MessageRouter:
 
         # 更新上下文
         self.policy_engine.add_context(group_id, user_id, full_text[:200], is_bot=False)
+
+        # 梗知识消息缓冲（每日总结的数据源；MEME_LEARNING_ENABLED 时才有总结任务，
+        # 但缓冲记录始终启用有界保护，避免开关切换瞬间丢数据）
+        if self.meme_manager is not None and full_text and full_text.strip():
+            self.meme_manager.record_message(group_id, user_id, full_text, raw_time)
 
         # ---------- 强制记忆（静默，先于回复决策） ----------
         # 用户明确表达个人偏好/特征但未被@：只记记忆、不回复、不烧 AI 调用。
@@ -429,6 +451,17 @@ class MessageRouter:
             extra={"event": "ai_request_started", "model": model},
         )
         _M_AI_REQ.inc()  # logical request 计数
+        # 人格解析（动态决定，绝不写入记忆/上下文；Group > Global > 内置默认）
+        if self.persona_manager is not None and group_id:
+            persona = self.persona_manager.resolve_persona(group_id)
+            if persona:
+                kwargs = {**kwargs, "persona_text": self.persona_manager.compose_system_prompt(persona)}
+        # 群聊知识检索注入（只注入当前消息命中的本群梗，作为不可信上下文知识）
+        if self.meme_manager is not None and group_id:
+            user_message = kwargs.get("user_message", "")
+            meme_ctx = self.meme_manager.build_context_block(group_id, user_message)
+            if meme_ctx:
+                kwargs = {**kwargs, "meme_context": meme_ctx}
         reply, memory_update = None, None
         retryable_failure = False  # 是否发生了可重试的瞬时失败（用于熔断计数）
         # P2-1：MCP 工具额度是一次 logical request 的硬上限——在重试循环前创建，

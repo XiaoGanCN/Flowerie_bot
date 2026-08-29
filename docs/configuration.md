@@ -96,6 +96,31 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 
 > ⚠️ `WEB_UI_PORT` 与 `WS_PORT` 冲突时启动直接报错——Web UI 的本地回环端口不能与 NapCat 反向 WS 端口一致。
 
+## 人格（Persona）
+
+| 变量 | 说明 | 默认 |
+| :--- | :--- | :--- |
+| `PERSONA_DEFAULT` | 默认（兜底）人格 id（内置：`flowerie` / `atri`） | `flowerie` |
+| `MAX_PERSONA_PROMPT_LENGTH` | 单个人格 system_prompt 最大长度（字） | `8000` |
+
+人格数据存 `data/settings.db`（`personas` / `group_persona` / `persona_global` 表），
+Web UI「人格」页管理（全局 / 群聊 / 自定义）。详见 [persona.md](persona.md)。
+
+## 群聊知识（Meme Knowledge）
+
+| 变量 | 说明 | 默认 |
+| :--- | :--- | :--- |
+| `MEME_LEARNING_ENABLED` | 每日梗总结任务总开关 | `false` |
+| `MEME_KNOWLEDGE_DB_PATH` | 梗知识库（SQLite，按群隔离） | `./data/knowledge.db` |
+| `MEME_SUMMARY_INTERVAL_HOURS` | 总结周期（小时） | `24` |
+| `MAX_GROUP_MEMES` | 每群知识条数上限（防无限增长） | `500` |
+| `MEME_BUFFER_PER_GROUP` | 每群消息缓冲上限（条） | `1000` |
+| `MEME_MAX_GROUPS_PER_RUN` | 单轮总结最多处理群数（防 AI 风暴） | `20` |
+| `MEME_MIN_MESSAGES_PER_SUMMARY` | 总结最少消息数（低于则跳过） | `10` |
+| `MEME_MAX_SUMMARY_CANDIDATES` | 单群单轮最多写入候选梗数 | `20` |
+
+详见 [knowledge.md](knowledge.md)。
+
 ### 如何开启
 
 1. 编辑项目根目录的 `.env`，追加：
@@ -116,7 +141,7 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 
 `/panel` 面板的三个页签全部**纯 HTML + CSS + 服务端渲染，零 JavaScript**：
 
-- **配置页**：全部 **97 个配置变量**按 19 个功能分组展示，**顶部提供分类导航**
+- **配置页**：全部配置变量按 21 个功能分组展示（含「人格（Persona）」「群聊知识（Meme）」两组），**顶部提供分类导航**
   （点击只看某一类，如 MCP / 发言设置 / 稳定性……各自一屏，避免拥挤），每组一个表单保存。
   控件按类型自动选择：bool→checkbox、int/float→number（含 min/max/step）、
   secret→password（只显示掩码，留空不覆盖）、枚举→select（日志级别/格式）、

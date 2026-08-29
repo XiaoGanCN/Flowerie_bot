@@ -147,7 +147,15 @@ async def main():
     cfg.WEB_UI_PORT = port
     repo = SettingsRepository(cfg.SETTINGS_DB_PATH)
     svc = ConfigService(cfg, repo, env_path=os.path.join(ROOT, ".env"))
-    wui = WebUIServer(cfg, svc, data_dir=os.path.join(ROOT, "data", "webui_accept"))
+    # 注入人格与群聊知识管理器（与 main.py 组装一致），验收新页签
+    from src.services.persona_manager import PersonaManager
+    from src.repositories.meme_knowledge_repository import MemeKnowledgeRepository
+    from src.services.meme_knowledge_manager import MemeKnowledgeManager
+    _pmgr = PersonaManager(repo)
+    _mrepo = MemeKnowledgeRepository(os.path.join(ROOT, "data", "webui_accept", "knowledge.db"))
+    _mmgr = MemeKnowledgeManager(_mrepo)
+    wui = WebUIServer(cfg, svc, data_dir=os.path.join(ROOT, "data", "webui_accept"),
+                      persona_manager=_pmgr, meme_manager=_mmgr)
     await wui.start()
 
     BG_DIR = os.path.join(ROOT, "data", "webui_accept", "background")
@@ -363,12 +371,55 @@ async def main():
     persist = os.path.exists(os.path.join(BG_DIR, "background.png"))
     rec(persist, "图片重启后仍存在", f"data/webui_accept/background/background.png 存在={persist}")
 
+    # ---------- G2. 人格 / 群聊知识页签（黑盒，零 JS） ----------
+    try:
+        st_p, txt_p, _ = await http(port, ("GET", "/panel?tab=persona"))
+        st_k, txt_k, _ = await http(port, ("GET", "/panel?tab=knowledge"))
+        persona_ok = st_p == 200 and "人格管理" in txt_p and "全局人格" in txt_p \
+            and "花璃" in txt_p and "亚托莉" in txt_p
+        knowledge_ok = st_k == 200 and "群聊知识管理" in txt_k \
+            and 'action="/panel/knowledge/view"' in txt_k
+        rec(persona_ok and knowledge_ok, "人格/群聊知识页签渲染（黑盒）",
+            f"persona={st_p} knowledge={st_k}")
+        # 零 JS：两个新页签的 HTML 不允许出现脚本特征
+        js_hits_p = [pat for pat in ("<script", "onclick=", "onchange=", "oninput=", "fetch(", "XMLHttpRequest")
+                     if pat in txt_p.lower()]
+        js_hits_k = [pat for pat in ("<script", "onclick=", "onchange=", "oninput=", "fetch(", "XMLHttpRequest")
+                     if pat in txt_k.lower()]
+        rec(not js_hits_p and not js_hits_k, "人格/群聊知识页零 JavaScript",
+            "无脚本特征" if not (js_hits_p or js_hits_k) else f"命中 {js_hits_p + js_hits_k}")
+        # 黑盒新增一条知识（跨群隔离）
+        await http(port, ("POST", "/panel/knowledge/add",
+                          urllib.parse.urlencode({"group_id": "77777", "term": "验收梗",
+                                                  "meaning": "验收用含义", "confidence": "medium"}).encode(),
+                          {"Content-Type": "application/x-www-form-urlencoded"}, None))
+        _, txt_k2, _ = await http(port, ("GET", "/panel?tab=knowledge&gid=77777"))
+        rec("验收梗" in txt_k2 and "验收用含义" in txt_k2, "群聊知识新增+查看（黑盒）", "group 77777")
+        # 群 B 页面不出现群 A 的知识
+        _, txt_kb, _ = await http(port, ("GET", "/panel?tab=knowledge&gid=88888"))
+        rec("验收梗" not in txt_kb, "群聊知识跨群隔离（黑盒）", "group 88888 不可见 77777 的知识")
+        # 人格 CRUD（黑盒）：新建 → 列表可见 → 删除
+        await http(port, ("POST", "/panel/persona/save",
+                          urllib.parse.urlencode({"action": "create", "persona_id": "accept_test",
+                                                  "name": "验收人格", "system_prompt": "你是验收人格"}).encode(),
+                          {"Content-Type": "application/x-www-form-urlencoded"}, None))
+        _, txt_p2, _ = await http(port, ("GET", "/panel?tab=persona"))
+        rec("验收人格" in txt_p2, "人格创建+列表（黑盒）", "accept_test")
+        await http(port, ("POST", "/panel/persona/delete",
+                          urllib.parse.urlencode({"persona_id": "accept_test"}).encode(),
+                          {"Content-Type": "application/x-www-form-urlencoded"}, None))
+    except Exception as e:  # noqa: BLE001
+        rec(False, "人格/群聊知识页签（黑盒）", f"异常: {e}")
+
     # ---------- H. 零 JS 检查 ----------
     import subprocess as sp
     out = sp.run(["grep", "-rnE", "<script|javascript:|onclick=|onload=|addEventListener|fetch\\(|XMLHttpRequest|let |const |var ",
                   "src/services/web_ui.py", "src/services/web_ui_assets.py",
                   "src/repositories/env_store.py", "src/services/config_service.py",
-                  "src/repositories/settings_repository.py", "main.py"],
+                  "src/repositories/settings_repository.py", "main.py",
+                  "src/services/persona_manager.py", "src/services/persona_presets.py",
+                  "src/services/meme_knowledge_manager.py", "src/services/meme_summary.py",
+                  "src/repositories/meme_knowledge_repository.py"],
                  capture_output=True, text=True)
     js_hits = [l for l in (out.stdout or "").splitlines()
                if not re.search(r"javascript:|# noqa", l)]
