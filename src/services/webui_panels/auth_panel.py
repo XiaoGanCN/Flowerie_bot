@@ -5,7 +5,6 @@
 """
 import json
 import time
-from urllib.parse import quote
 
 from aiohttp import web
 
@@ -163,28 +162,5 @@ class AuthPanelMixin:
         token = request.cookies.get("fb_token", "")
         self._tokens.pop(token, None)
         resp = web.HTTPFound("/panel")
-        resp.del_cookie("fb_token")
-        return resp
-
-    async def _handle_panel_unregister(self, request: web.Request) -> web.Response:
-        """注销管理员账号：必须已登录且提供当前密码验证（防误触/防劫持）。
-
-        只清除管理凭据（settings.db + .env 的 WEB_UI_USERNAME / WEB_UI_PASSWORD），
-        其他环境配置（API Key 等）一律不动；完成后登出并回到登录页。
-        """
-        if not self._check_token(request):
-            return web.HTTPFound("/panel")
-        form = await request.post()
-        password = str(form.get("password", "") or "")
-        eff_user, _eff_pass = self._effective_credentials()
-        if not self._verify_admin(eff_user, password):
-            self._record_login_fail(request.remote or "unknown")
-            return web.HTTPFound(f"/panel?msg={quote('当前密码不正确，无法注销')}&err=1")
-        _ok, message = self.config_service.unregister_account()
-        # 注销成功 → 强制登出（清 token 与 cookie）
-        token = request.cookies.get("fb_token", "")
-        self._tokens.pop(token, None)
-        self._tokens.clear()
-        resp = web.HTTPFound("/panel?msg=" + quote(message))
         resp.del_cookie("fb_token")
         return resp

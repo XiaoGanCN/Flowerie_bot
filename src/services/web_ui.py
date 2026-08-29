@@ -43,6 +43,7 @@ from src.services.web_ui_assets import (
     theme_default_bg,
 )
 from src.services.webui_panels import (
+    AccountPanelMixin,
     AppearancePanelMixin,
     AuthPanelMixin,
     ConfigPanelMixin,
@@ -62,8 +63,9 @@ _LOGIN_FAIL_LIMIT = 5
 _LOGIN_FAIL_WINDOW = 60
 
 
-class WebUIServer(AuthPanelMixin, ConfigPanelMixin, AppearancePanelMixin, McpPanelMixin,
-                  PromptPanelMixin, PersonaPanelMixin, KnowledgePanelMixin):
+class WebUIServer(AccountPanelMixin, AuthPanelMixin, ConfigPanelMixin, AppearancePanelMixin,
+                  McpPanelMixin, PromptPanelMixin, PersonaPanelMixin,
+                  KnowledgePanelMixin):
 
     def __init__(self, config: Settings, config_service: ConfigService, status_provider=None,
                  data_dir: str = "./data/webui", tool_manager=None,
@@ -210,7 +212,7 @@ class WebUIServer(AuthPanelMixin, ConfigPanelMixin, AppearancePanelMixin, McpPan
         msg = request.query.get("msg", "")
         err = request.query.get("err", "") == "1"
         tab = request.query.get("tab", "")
-        if tab not in ("appearance", "logs", "persona", "knowledge"):
+        if tab not in ("appearance", "logs", "persona", "knowledge", "account"):
             tab = "config"
         cat = request.query.get("cat", "")
         if cat not in ("all", "") and cat not in ConfigService.CATEGORY_ORDER:
@@ -284,6 +286,8 @@ class WebUIServer(AuthPanelMixin, ConfigPanelMixin, AppearancePanelMixin, McpPan
         elif tab == "logs":
             logs = "\n".join(get_recent_logs(200))
             body_html = f'<pre class="log">{_html.escape(logs)}</pre>'
+        elif tab == "account":
+            body_html = self._render_account_page()
         elif tab == "persona":
             body_html = self._render_persona_page(edit_id, new_persona, prompt_gid)
         elif tab == "knowledge":

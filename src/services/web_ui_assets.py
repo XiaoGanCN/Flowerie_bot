@@ -9,6 +9,7 @@
 - webui_render/knowledge.py    群聊知识页
 零 JavaScript 保证：所有渲染函数只输出 HTML/CSS，无任何脚本。
 """
+from src.services.webui_render.account import render_account_tab
 from src.services.webui_render.appearance import render_appearance
 from src.services.webui_render.config_panel import (
     render_config_sections,
@@ -40,4 +41,5 @@ __all__ = [
     "theme_default_bg", "render_appearance", "render_config_sections",
     "render_knowledge_tab", "render_login_page", "render_mcp_editor",
     "render_panel_page", "render_persona_tab", "render_register_page",
+    "render_account_tab",
 ]

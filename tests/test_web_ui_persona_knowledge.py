@@ -632,3 +632,59 @@ async def test_unregister_message_mentions_restart_note():
         import urllib.parse
         msg = urllib.parse.parse_qs(urllib.parse.urlparse(loc).query).get("msg", [""])[0]
         assert "WEB_UI_ENABLED" in msg
+
+
+# ---------- 用户状态页（账户/注销/服务器/MCP/API） ----------
+async def test_account_tab_renders_all_status():
+    """用户状态页：当前管理员 / 注销表单 / 服务器状态 / MCP 状态 / API 连接状态。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, _, svc, server, _, _ = _make_stack(td)
+        svc.register_user("admin2", "pass123")
+        resp = await server._handle_panel_login(FakeRequest(
+            form={"username": "admin2", "password": "pass123"}))
+        cookie = resp.cookies.get("fb_token").value
+        page = await server._handle_panel(FakeRequest(query={"tab": "account"},
+                                                     cookies={"fb_token": cookie}))
+        text = _resp_text(page)
+        for probe in ("当前管理员", "admin2", "注销账号", "服务器状态",
+                      "内存占用", "API 厂商连接状态", "DeepSeek（聊天主厂商）"):
+            assert probe in text, f"用户状态页缺少 {probe}"
+        # 注销表单 /panel/account/unregister 在 account 页
+        assert 'action="/panel/account/unregister"' in text
+        # 未登出前可访问（已登录）
+        assert "登录后管理全部配置" not in text
+
+
+async def test_unregister_form_not_in_body_bottom():
+    """注销表单已从面板 body 底部移走（只在用户状态页）。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, _, _, server, _, _ = _make_stack(td)
+        cookie = await _login(server)
+        page = await server._handle_panel(FakeRequest(query={"tab": "config"},
+                                                     cookies={"fb_token": cookie}))
+        text = _resp_text(page)
+        # 配置页 body 底部不再有注销表单
+        assert 'action="/panel/account/unregister"' not in text
+        assert "注销管理员账号" not in text
+        # 顶部导航有「用户状态」
+        assert "/panel?tab=account" in text
+
+
+async def test_account_tab_is_js_free():
+    """用户状态页零 JS（含服务器/MCP/API 状态）。"""
+    with tempfile.TemporaryDirectory() as td:
+        _, _, _, server, _, _ = _make_stack(td)
+        cookie = await _login(server)
+        page = await server._handle_panel(FakeRequest(query={"tab": "account"},
+                                                     cookies={"fb_token": cookie}))
+        text = _resp_text(page).lower()
+        for pat in ("<script", "onclick=", "onchange=", "oninput=", "fetch(", "XMLHttpRequest"):
+            assert pat not in text, f"用户状态页出现 {pat}"
+
+
+def test_login_and_register_username_input_width_consistent():
+    """登录/注册页的用户名与密码输入框 type 一致（避免 [type=text] 选择器不匹配变窄）。"""
+    from src.services.webui_render.pages import render_login_page, render_register_page
+    for html in (render_login_page(), render_register_page()):
+        assert 'name="username" type="text"' in html
+        assert 'name="password" type="password"' in html

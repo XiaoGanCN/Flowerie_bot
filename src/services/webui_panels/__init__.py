@@ -4,6 +4,7 @@
 WebUIServer 只保留核心（认证基座/面板壳/生命周期）并多重继承各 mixin。
 对外 API（from src.services.web_ui import WebUIServer）保持不变。
 """
+from src.services.webui_panels.account_panel import AccountPanelMixin
 from src.services.webui_panels.appearance_panel import AppearancePanelMixin
 from src.services.webui_panels.auth_panel import AuthPanelMixin
 from src.services.webui_panels.config_panel import ConfigPanelMixin
@@ -13,6 +14,6 @@ from src.services.webui_panels.persona_panel import PersonaPanelMixin
 from src.services.webui_panels.prompt_panel import PromptPanelMixin
 
 __all__ = [
-    "AppearancePanelMixin", "AuthPanelMixin", "ConfigPanelMixin",
+    "AccountPanelMixin", "AppearancePanelMixin", "AuthPanelMixin", "ConfigPanelMixin",
     "KnowledgePanelMixin", "McpPanelMixin", "PersonaPanelMixin", "PromptPanelMixin",
 ]
