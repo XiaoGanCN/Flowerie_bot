@@ -300,6 +300,7 @@ class WebUIServer(AuthPanelMixin, ConfigPanelMixin, AppearancePanelMixin, McpPan
             glass=(panel_style == "glass"),
         )
 
+    @staticmethod
     def effective_host(config) -> str:
         """实际监听地址：WEB_UI_ALLOW_LAN=true 时强制 0.0.0.0（局域网/公网可访问），否则用 WEB_UI_HOST。
 
