@@ -276,3 +276,101 @@ async def test_summary_no_concurrent_reentry():
         assert result["status"] == "skipped"
     finally:
         tmp.cleanup()
+
+
+# ---------- 预算闸门（总结不绕过现有 AI 预算） ----------
+async def test_summary_respects_budget_gate():
+    """全局/群预算耗尽时总结跳过该群（不烧 AI），缓冲保留待预算恢复。"""
+    from types import SimpleNamespace
+
+    from src.core.budget_manager import BudgetManager
+    from src.models import GlobalState
+    from tests.test_router_regression import FakeSender
+
+    svc, mgr, _, ai, tmp = _make_stack(
+        json.dumps({"memes": [{"term": "梗", "meaning": "含义"}]}, ensure_ascii=False),
+        min_messages=1)
+    try:
+        config = SimpleNamespace(USER_AI_CALL_MIN_INTERVAL=0, DAILY_AI_CALL_BUDGET=2,
+                                 GROUP_DAILY_AI_CALL_BUDGET=300, BUDGET_EXHAUSTED_NOTICE=False)
+        gs = GlobalState()
+        budget = BudgetManager(config, gs, FakeSender())
+        # 聊天路径先耗尽全局预算
+        assert budget.check(100, 1)[0] is True
+        assert budget.check(100, 2)[0] is True
+        assert budget.check(100, 3)[0] is False  # 全局预算耗尽
+        svc.budget = budget
+        for i in range(3):
+            mgr.record_message(100, 1, f"消息{i} 梗")
+        result = await svc.run_once()
+        assert result["groups_processed"] == 0   # 预算拒绝 → 不总结
+        assert ai.calls == 0                      # 零 AI 调用
+        assert mgr.buffered_count(100) == 3       # 缓冲保留（预算恢复后可处理）
+    finally:
+        tmp.cleanup()
+
+
+async def test_summary_budget_group_gate():
+    """群级预算耗尽同样跳过该群总结（其他群不受影响）。"""
+    from types import SimpleNamespace
+
+    from src.core.budget_manager import BudgetManager
+    from src.models import GlobalState
+    from tests.test_router_regression import FakeSender
+
+    svc, mgr, _, ai, tmp = _make_stack(
+        json.dumps({"memes": [{"term": "梗", "meaning": "含义"}]}, ensure_ascii=False),
+        min_messages=1)
+    try:
+        config = SimpleNamespace(USER_AI_CALL_MIN_INTERVAL=0, DAILY_AI_CALL_BUDGET=0,
+                                 GROUP_DAILY_AI_CALL_BUDGET=1, BUDGET_EXHAUSTED_NOTICE=False)
+        gs = GlobalState()
+        budget = BudgetManager(config, gs, FakeSender())
+        assert budget.check(100, 1)[0] is True   # 群 100 预算用尽
+        assert budget.check(100, 2)[0] is False
+        svc.budget = budget
+        for i in range(3):
+            mgr.record_message(100, 1, f"消息{i} 梗")
+        for i in range(3):
+            mgr.record_message(200, 1, f"消息{i} 梗")
+        result = await svc.run_once()
+        assert result["groups_processed"] == 1   # 群 200 正常总结
+        assert result["groups_skipped"] == 1     # 群 100 被预算跳过
+        assert mgr.buffered_count(100) == 3      # 群 100 缓冲保留
+    finally:
+        tmp.cleanup()
+
+
+# ---------- 任务注册与关闭（无 task 泄漏） ----------
+async def test_meme_summary_task_registered_and_shutdown():
+    """MEME_LEARNING_ENABLED=true 时注册总结任务；stop 后无任务泄漏。"""
+    from src.core.message_router import MessageRouter
+    from src.core.policy_engine import PolicyEngine
+    from src.repositories.meme_knowledge_repository import MemeKnowledgeRepository
+    from src.services.meme_knowledge_manager import MemeKnowledgeManager
+    from tests.test_router_regression import (
+        FakeAIClient,
+        FakeFileParser,
+        FakeMemoryManager,
+        FakeSender,
+        make_config,
+    )
+
+    tmp = tempfile.TemporaryDirectory()
+    try:
+        repo = MemeKnowledgeRepository(f"{tmp.name}/k.db")
+        mmgr = MemeKnowledgeManager(repo)
+        config = make_config(MEME_LEARNING_ENABLED=True)
+        ai = FakeAIClient()
+        sender = FakeSender()
+        mm = FakeMemoryManager()
+        fp = FakeFileParser()
+        policy = PolicyEngine(config, mm)
+        svc = MemeSummaryService(config, ai, mmgr, min_messages=10)
+        router = MessageRouter(config, ai, mm, fp, sender, policy, meme_summary=svc)
+        await router.start()
+        assert "meme_summary" in router.task_manager.task_names()
+        await router.stop()
+        assert router.task_manager.running_count() == 0  # 优雅关闭，无泄漏
+    finally:
+        tmp.cleanup()

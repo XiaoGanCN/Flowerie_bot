@@ -67,10 +67,13 @@ class MemeKnowledgeRepository:
                       limit: int = 200) -> List[dict]:
         with self._lock:
             if search:
-                like = f"%{search}%"
+                # LIKE 通配符转义（% _ \ 按字面匹配，防搜索词变成通配符）
+                escaped = (search.replace("\\", "\\\\")
+                           .replace("%", "\\%").replace("_", "\\_"))
+                like = f"%{escaped}%"
                 rows = self._conn.execute(
-                    "SELECT * FROM meme_knowledge WHERE group_id=? AND (term LIKE ? OR meaning LIKE ?)"
-                    " ORDER BY last_seen_at DESC LIMIT ?",
+                    "SELECT * FROM meme_knowledge WHERE group_id=? AND (term LIKE ? ESCAPE '\\'"
+                    " OR meaning LIKE ? ESCAPE '\\') ORDER BY last_seen_at DESC LIMIT ?",
                     (group_id, like, like, max(1, int(limit))),
                 ).fetchall()
             else:

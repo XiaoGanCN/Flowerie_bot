@@ -59,11 +59,13 @@ class MemeSummaryService:
                  tool_manager: Optional[McpToolManager] = None,
                  min_messages: int = 10, max_groups_per_run: int = 20,
                  max_candidates: int = 20, interval_hours: int = 24,
-                 max_retries: int = 3):
+                 max_retries: int = 3, budget=None):
         self.config = config
         self.ai_client = ai_client
         self.meme_manager = meme_manager
         self.tool_manager = tool_manager
+        # 预算闸门（复用 BudgetManager 的三层计数）：None 时不设闸（兼容旧调用/测试）
+        self.budget = budget
         self.min_messages = max(1, int(min_messages))
         self.max_groups_per_run = max(1, int(max_groups_per_run))
         self.max_candidates = max(1, int(max_candidates))
@@ -101,22 +103,58 @@ class MemeSummaryService:
         result = {"status": "done", "groups_processed": 0, "groups_skipped": 0, "memes_written": 0, "groups_failed": 0}
         try:
             groups = self.meme_manager.buffered_groups()
+            processed_groups: List[int] = []
             for group_id in groups[: self.max_groups_per_run]:
                 if self.meme_manager.buffered_count(group_id) < self.min_messages:
                     result["groups_skipped"] += 1
+                    continue
+                # 预算闸门：全局/群级预算耗尽时跳过该群（缓冲保留，预算恢复后下轮处理；
+                # 不计重试——预算拒绝不是 AI 故障）
+                if not self._budget_allowed(group_id):
+                    result["groups_skipped"] += 1
+                    logger.info("meme_summary_budget_skipped group=%s", group_id,
+                                extra={"event": "meme_summary_budget_skipped"})
                     continue
                 ok, written = await self._summarize_group(group_id, now)
                 if ok:
                     result["groups_processed"] += 1
                     result["memes_written"] += written
+                    processed_groups.append(group_id)
                 else:
                     result["groups_failed"] += 1
-            # 每轮结束执行一次全库上限治理（不删活跃知识）
-            pruned = self.meme_manager.enforce_caps()
+            # 本轮处理过的群做上限治理（不删活跃知识）；全库治理由 enforce_caps 单独提供
+            pruned = 0
+            for gid in processed_groups:
+                pruned += self.meme_manager.repository.trim_group_to_max(
+                    gid, self.meme_manager.max_memes_per_group)
             result["pruned"] = pruned
             return result
         finally:
             self._running = False
+
+    def _budget_allowed(self, group_id: int) -> bool:
+        """全局/群级预算闸门（复用 BudgetManager 计数，不消耗、不通知）。
+
+        总结任务是后台批量任务：预算耗尽时跳过（保留缓冲），避免在聊天已
+        用尽额度时继续烧 API（任务要求：新增知识层不绕过现有安全机制）。
+        """
+        if self.budget is None:
+            return True
+        try:
+            gs = self.budget.global_state
+            from datetime import datetime
+            today = datetime.now().strftime("%Y-%m-%d")
+            if gs.ai_budget_date != today:
+                return True  # 跨天未计数（BudgetManager 会在下次 check 时重置）
+            cap = max(0, int(getattr(self.config, "DAILY_AI_CALL_BUDGET", 1000)))
+            if cap > 0 and gs.ai_budget_count >= cap:
+                return False
+            gcap = max(0, int(getattr(self.config, "GROUP_DAILY_AI_CALL_BUDGET", 300)))
+            if gcap > 0 and gs.group_ai_budget_count.get(group_id, 0) >= gcap:
+                return False
+        except Exception:  # noqa: BLE001 - 预算读取异常按放行处理（不阻塞总结）
+            return True
+        return True
 
     # ---------- 单群总结 ----------
     async def _summarize_group(self, group_id: int, now: float) -> Tuple[bool, int]:

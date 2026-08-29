@@ -31,10 +31,11 @@ class PersonaManager:
     """人格管理：内置预设播种 / CRUD / 全局与群聊绑定 / 生效解析 / Prompt 组装。"""
 
     def __init__(self, repository: SettingsRepository, default_persona_id: str = DEFAULT_PERSONA_ID,
-                 max_system_prompt_length: int = 8000):
+                 max_system_prompt_length: int = 8000, max_persona_count: int = 200):
         self.repository = repository
         self.default_persona_id = default_persona_id or DEFAULT_PERSONA_ID
         self.max_system_prompt_length = max(500, int(max_system_prompt_length))
+        self.max_persona_count = max(1, int(max_persona_count or 200))
         self._reserved_ids = {p["id"] for p in BUILTIN_PERSONAS}
         self._seed_builtins()
 
@@ -114,6 +115,9 @@ class PersonaManager:
     def list_personas(self) -> List[dict]:
         return self.repository.list_personas()
 
+    def _custom_persona_count(self) -> int:
+        return sum(1 for p in self.repository.list_personas() if not p.get("builtin"))
+
     def get_persona(self, persona_id: str) -> Optional[dict]:
         return self.repository.get_persona(persona_id)
 
@@ -149,6 +153,9 @@ class PersonaManager:
             return False, "system_prompt 不能为空（人格核心文本必填）"
         if len(system_prompt) > self.max_system_prompt_length:
             return False, f"system_prompt 过长（{len(system_prompt)} 字，上限 {self.max_system_prompt_length}）"
+        # 自定义人格总数上限（内置不计）：防长期运行无限增长
+        if self._custom_persona_count() >= self.max_persona_count:
+            return False, f"自定义人格已达上限（{self.max_persona_count} 个），无法继续创建"
         self.repository.upsert_persona({
             "id": pid,
             "name": name,

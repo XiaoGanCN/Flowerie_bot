@@ -66,6 +66,7 @@ class MessageRouter:
         persona_manager: Optional["PersonaManager"] = None,
         meme_manager: Optional["MemeKnowledgeManager"] = None,
         meme_summary: Optional["MemeSummaryService"] = None,
+        budget: Optional["BudgetManager"] = None,
     ):
         self.config = config
         self.ai_client = ai_client
@@ -90,8 +91,8 @@ class MessageRouter:
         self.assembler = MessageAssembler(config, ai_client, file_parser, self.global_state)
         # 指令处理 → CommandHandler
         self.commands = CommandHandler(config, sender, memory_manager, prompt_manager)
-        # AI 预算/限速 → BudgetManager
-        self.budget = BudgetManager(config, self.global_state, sender)
+        # AI 预算/限速 → BudgetManager（外部可注入共享实例，供每日总结等复用同一计数）
+        self.budget = budget or BudgetManager(config, self.global_state, sender)
         # 后台任务统一管理（TaskManager：注册/跟踪/异常记录/优雅关闭）
         self.task_manager = task_manager or BackgroundTaskManager()
         # ---- Circuit Breaker（双层：provider 级全局 + 群级有界）----

@@ -199,6 +199,7 @@ class ConfigService:
         # ---------- Persona（人格系统） ----------
         "PERSONA_DEFAULT": ("Persona", "str", False, False, "默认人格 id（兜底，需重启）"),
         "MAX_PERSONA_PROMPT_LENGTH": ("Persona", "int", False, False, "人格 system_prompt 最大长度（需重启）"),
+        "PERSONA_MAX_COUNT": ("Persona", "int", False, True, "自定义人格总数上限（内置不计）"),
         # ---------- 群聊知识（Meme Knowledge） ----------
         "MEME_LEARNING_ENABLED": ("Knowledge", "bool", False, True, "每日梗总结任务开关"),
         "MEME_KNOWLEDGE_DB_PATH": ("Knowledge", "str", False, False, "梗知识库路径（需重启）"),
@@ -504,6 +505,7 @@ class ConfigService:
         "ARCHIVE_MAX_SIZE_MB": (0, 1000000),
         "WS_PORT": (1, 65535),
         "MAX_PERSONA_PROMPT_LENGTH": (500, 100000),
+        "PERSONA_MAX_COUNT": (1, 100000),
         "MEME_SUMMARY_INTERVAL_HOURS": (1, 8760),
         "MAX_GROUP_MEMES": (10, 100000),
         "MEME_BUFFER_PER_GROUP": (50, 100000),

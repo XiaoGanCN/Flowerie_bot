@@ -143,6 +143,7 @@ class Settings(BaseSettings):
     # persona_global 表），内置预设见 src/services/persona_presets.py
     PERSONA_DEFAULT: str = "flowerie"      # 默认（兜底）人格 id
     MAX_PERSONA_PROMPT_LENGTH: int = 8000  # 单个人格 system_prompt 最大长度（字）
+    PERSONA_MAX_COUNT: int = 200           # 自定义人格总数上限（内置不计，防无限增长）
 
     # 群聊梗/黑话知识层（Meme Knowledge）：独立 knowledge.db，按群完全隔离
     MEME_LEARNING_ENABLED: bool = False            # 每日梗总结任务总开关（默认关）
@@ -370,3 +371,5 @@ def validate_config(config: Settings) -> None:
         raise ValueError("MEME_MIN_MESSAGES_PER_SUMMARY 必须 >= 1")
     if int(getattr(config, "MAX_PERSONA_PROMPT_LENGTH", 8000)) < 500:
         raise ValueError("MAX_PERSONA_PROMPT_LENGTH 必须 >= 500")
+    if int(getattr(config, "PERSONA_MAX_COUNT", 200)) < 1:
+        raise ValueError("PERSONA_MAX_COUNT 必须 >= 1")

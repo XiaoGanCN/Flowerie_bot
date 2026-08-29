@@ -82,6 +82,7 @@ async def main():
             max_groups_per_run=getattr(config, "MEME_MAX_GROUPS_PER_RUN", 20),
             max_candidates=getattr(config, "MEME_MAX_SUMMARY_CANDIDATES", 20),
             interval_hours=getattr(config, "MEME_SUMMARY_INTERVAL_HOURS", 24),
+            budget=None,  # 与 MessageRouter 共享的预算实例在 policy_engine 创建后注入
         )
         web_ui = None
         if config.WEB_UI_ENABLED:
@@ -97,6 +98,10 @@ async def main():
             )
         file_parser = FileParser(config)
         policy_engine = PolicyEngine(config, memory_manager)
+        # 共享 AI 预算实例：聊天与每日梗总结复用同一套全局/群计数（总结不绕过预算）
+        from src.core.budget_manager import BudgetManager
+        budget_manager = BudgetManager(config, policy_engine.global_state, sender)
+        meme_summary.budget = budget_manager  # 总结任务复用同一预算计数（不绕过三层预算）
         message_router = MessageRouter(
             config=config,
             ai_client=ai_client,
@@ -110,6 +115,7 @@ async def main():
             persona_manager=persona_manager,
             meme_manager=meme_manager,
             meme_summary=meme_summary,
+            budget=budget_manager,
         )
         ws_server = WebSocketServer(config, message_router)
 

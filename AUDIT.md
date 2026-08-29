@@ -12,8 +12,11 @@
 > - **阶段三**：ExpiringMap 状态自治、inactive 群清理、双层熔断（provider + 群级）、Metrics 低基数 —— ✅ 全部完成
 > - **第四轮收尾**：MCP 工具额度按次硬上限、持久化配置启动合并、MCP SSRF 加固 + 工具结果不可信处理、
 >   MCP 插件式多 server（`MCP_SERVERS`）、Web UI 改为无 JS 服务端渲染面板（`/panel`，支持注册，账号持久化 `settings.db`）—— ✅ 完成
+> - **v1.0.1 新功能轮**：Persona 人格系统（全局/群聊/自定义三级 + 花璃/ATRI 双预设）、
+>   群聊 Meme Knowledge（按群隔离、命中注入、每日 24h 批量总结 + MCP 按需检索）、
+>   Web UI 人格/群聊知识管理页（零 JS）—— ✅ 完成（CI 全绿后验收通过）
 >
-> **当前基线**：测试 **326** 个（pytest + ruff 全过，CI Python 3.9 / 3.12 全绿）。
+> **当前基线**：测试 **507** 个（pytest + ruff 全过，CI Python 3.9 / 3.12 全绿）。
 
 > 审计对象：Flowerie_bot（NapCat 版，`/storage/emulated/0/Flowerie_bot/`）
 > 审计时间：2026-08-27
@@ -283,3 +286,41 @@ guarded_chat(group_id, user_id, ...)
 2. **ExpiringMap**（轻量 TTL 容器，monotonic + 惰性过期 + max_size 淘汰）：统一 user_last_time / user_ai_last_call / poke_last_time / last_toxic_warning / group breakers——状态自治，不再依赖 backup loop
 3. **inactive 群清理**：GroupState 增加 last_activity，超过 24h 无活动的群从 groups 移除（context 短期记忆随群清理，长期记忆在 SQLite 不受影响）
 4. **Metrics**：新增 ai_attempts_total / ai_circuit_rejections_total{level}，确认无 group_id/user_id label（低 cardinality）
+
+# 第四轮：v1.0.1 新增功能专项审计（Persona / Meme / Web UI）
+
+> 审计对象：v1.0.1 新增代码（persona_manager / persona_presets / meme_knowledge_manager /
+> meme_knowledge_repository / meme_summary / ai_client 人格注入 / web_ui 人格与知识页）
+> 审计方式：代码审查 + 本地纯模块复现 + CI 全量测试；结论：**507 测试全绿，验收通过**。
+
+## 本轮发现并修复的问题
+
+| # | 问题 | 风险 | 修复 |
+| :--- | :--- | :--- | :--- |
+| 1 | 每日梗总结的 AI 调用**绕过三层预算**（DAILY/GROUP_DAILY_AI_CALL_BUDGET） | 高：聊天额度耗尽后总结仍可烧 API，违反"新增知识层不绕过现有安全机制" | MemeSummaryService 注入共享 BudgetManager；run_once 对每个候选群先过预算闸门，耗尽即跳过（缓冲保留、不计重试）；main.py 创建共享 budget 实例注入 router 与总结任务 |
+| 2 | meme 知识注入前无二次清洗（DB 被手工改库时可带注入句式） | 中：纵深防御缺失 | ai_client 组装知识块前 sanitize_untrusted_text 兜底清洗 + 日志 |
+| 3 | 知识搜索 LIKE 通配符未转义（`%`/`_`/`\` 变通配符放大匹配） | 低：行为异常 | repository 搜索参数转义 + `ESCAPE '\\'` |
+| 4 | 自定义人格数量无上限 | 低：长期运行可无限增长（任务 23 要求有界） | `PERSONA_MAX_COUNT`（默认 200）+ 创建时拒绝 + 启动校验 + Web UI 配置项 |
+| 5 | 每轮总结后全库 enforce_caps 扫描（全表遍历） | 低：无谓开销 | 改为只治理本轮处理过的群（enforce_caps 保留作全库入口） |
+| 6 | acceptance 验收脚本未关闭 knowledge.db 连接 | 低：进程退出即回收 | 收尾补 `_mrepo.close()` |
+
+## 新增测试（本轮的 review 覆盖）
+
+- `test_summary_respects_budget_gate` / `test_summary_budget_group_gate`：全局/群预算耗尽 → 总结跳过、零 AI 调用、缓冲保留
+- `test_meme_100_groups_isolation`：100 群各自隔离、计数精确、互不串线（任务 37）
+- `test_meme_search_wildcard_escaped`：LIKE 通配符按字面匹配
+- `test_persona_count_limit`：自定义人格数量上限（内置不计）
+- `test_dirty_meme_db_content_sanitized_on_injection`：改库污染内容注入前被清洗
+- `test_meme_summary_task_registered_and_shutdown`：总结任务注册与优雅关闭无泄漏（任务 41/43）
+
+## 专项检查结论（任务 29 质量门禁逐项）
+
+- 未关闭 task：总结/备份/主动聊天等全部经 TaskManager 注册，stop 后 running_count=0 ✅
+- HTTP session 泄漏：AIClient/Sender 走 async with 生命周期 ✅（本轮未新增 HTTP 资源）
+- SQLite connection 泄漏：新增 knowledge.db 由 meme_manager.close() 关闭，测试与验收均收尾关闭 ✅
+- 无限增长 dict：消息缓冲有界（群数 LRU + deque 上限）、重试计数随放弃清理、人格/知识/绑定全有上限 ✅
+- 高 cardinality metrics：新增指标无 label 或枚举 label（reason/tool）✅
+- Prompt injection：知识写入拒绝注入词条、注入前二次清洗、知识区永远在不可信数据区内 ✅
+- MCP 安全边界：总结任务复用 McpToolManager（allowlist/熔断/SSRF/结果清洗/quota）✅
+- 群数据/Persona/Memory/Context 串线：全部按 group_id 作用域 + 双条件编辑 + 隔离测试 ✅
+- Web UI 零 JS：新页签经黑盒与渲染级扫描（`<script`/onclick/onchange/oninput/fetch/XMLHttpRequest 全无）✅

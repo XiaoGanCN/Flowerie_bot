@@ -442,6 +442,11 @@ async def main():
         await wui.stop()
     except Exception:  # noqa: BLE001
         pass
+    try:
+        if "_mrepo" in dir():
+            _mrepo.close()
+    except Exception:  # noqa: BLE001
+        pass
     if main_proc is not None:
         try:
             main_proc.terminate()

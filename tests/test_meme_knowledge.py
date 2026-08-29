@@ -256,3 +256,33 @@ def test_meme_buffer_bounded(stack):
         mgr.close()
     finally:
         tmp.cleanup()
+
+
+# ---------- 100 群长期运行隔离（任务 37） ----------
+def test_meme_100_groups_isolation(stack):
+    """100 个群并发写入后：每群只见自己的知识，全库计数精确，互不串线。"""
+    mgr, repo, _ = stack
+    for gid in range(1, 101):
+        mgr.add_knowledge(1000 + gid, f"梗{gid}", f"含义{gid}")
+        # 每群自己的梗可命中
+        assert mgr.build_context_block(1000 + gid, f"今天聊 梗{gid}") != ""
+    # 群 5 的梗对另外 99 个群完全不可见
+    for gid in range(1, 101):
+        if gid != 5:
+            assert mgr.build_context_block(1000 + gid, "梗5") == ""
+    # 全库计数精确（100 群 × 1 条）
+    total = sum(repo.count_by_group(1000 + g) for g in range(1, 101))
+    assert total == 100
+
+
+def test_meme_search_wildcard_escaped(stack):
+    """搜索词中的 LIKE 通配符（% _）按字面匹配，不放大匹配范围。"""
+    mgr, repo, _ = stack
+    mgr.add_knowledge(100, "100%胜率", "含义A")
+    mgr.add_knowledge(100, "普通词", "含义B")
+    hits = mgr.list_for_group(100, search="%")
+    assert [h["term"] for h in hits] == ["100%胜率"]
+    mgr.add_knowledge(100, "a_b", "含义C")
+    mgr.add_knowledge(100, "axb", "含义D")
+    hits = mgr.list_for_group(100, search="_")
+    assert [h["term"] for h in hits] == ["a_b"]

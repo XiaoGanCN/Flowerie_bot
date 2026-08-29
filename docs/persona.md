@@ -80,6 +80,7 @@ Built-in Default（内置默认，PERSONA_DEFAULT，默认 flowerie）
 | :--- | :--- | :--- |
 | `PERSONA_DEFAULT` | `flowerie` | 默认（兜底）人格 id |
 | `MAX_PERSONA_PROMPT_LENGTH` | `8000` | 单个人格 system_prompt 最大长度（字） |
+| `PERSONA_MAX_COUNT` | `200` | 自定义人格总数上限（内置不计，防无限增长） |
 
 ## 测试覆盖
 
