@@ -131,11 +131,13 @@ async def test_summary_failure_retries_then_gives_up():
         assert r1["groups_failed"] == 1
         assert mgr.buffered_count(100) == 3  # 失败 → 消息放回缓冲
         r2 = await svc.run_once()
-        assert r2["groups_failed"] == 1
-        r3 = await svc.run_once()
-        # 连续失败 2 次后放弃该批（不再重试，也不占用缓冲）
-        assert r3["groups_failed"] == 0
+        # 第 2 次失败达到 max_retries=2 → 放弃该批（视为已解决，不再占用缓冲）
+        assert r2["groups_failed"] == 0
+        assert r2["groups_processed"] == 1
         assert mgr.buffered_count(100) == 0
+        r3 = await svc.run_once()
+        assert r3["groups_processed"] == 0
+        assert ai.calls == 2  # 只重试一次后放弃，无第三次调用
     finally:
         tmp.cleanup()
 

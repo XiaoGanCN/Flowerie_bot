@@ -227,7 +227,7 @@ class MemeSummaryService:
             return []
         out = []
         for item in memes:
-            if isinstance(item, dict) and item.get("term"):
+            if isinstance(item, dict) and item.get("term") and item.get("meaning"):
                 out.append({
                     "term": str(item.get("term", "")).strip()[:50],
                     "meaning": str(item.get("meaning", "")).strip()[:250],

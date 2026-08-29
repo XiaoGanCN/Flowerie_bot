@@ -249,9 +249,14 @@ async def test_html_only_interaction_forms_present():
         page = await server._handle_panel(FakeRequest(query={"tab": "persona"},
                                                      cookies={"fb_token": cookie}))
         text = _resp_text(page)
-        for action in ("/panel/persona/global", "/panel/persona/save",
-                       "/panel/persona/delete", "/panel/persona/group"):
+        for action in ("/panel/persona/global", "/panel/persona/group"):
             assert f'action="{action}"' in text
+        # 编辑页才有 save/delete 表单（新建/编辑表单）
+        page2 = await server._handle_panel(FakeRequest(query={"tab": "persona", "edit": "atri"},
+                                                      cookies={"fb_token": cookie}))
+        text2 = _resp_text(page2)
+        for action in ("/panel/persona/save", "/panel/persona/delete"):
+            assert f'action="{action}"' in text2
         page = await server._handle_panel(FakeRequest(query={"tab": "knowledge"},
                                                      cookies={"fb_token": cookie}))
         text = _resp_text(page)

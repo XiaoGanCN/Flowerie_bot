@@ -40,9 +40,10 @@ class MemeKnowledgeManager:
                  buffer_per_group: int = 1000, max_buffered_groups: int = 200,
                  term_max_length: int = 40, meaning_max_length: int = 200):
         self.repository = repository
-        self.max_memes_per_group = max(10, int(max_memes_per_group or 500))
-        self.buffer_per_group = max(50, int(buffer_per_group or 1000))
-        self.max_buffered_groups = max(10, int(max_buffered_groups or 200))
+        # 下限 1：防御性钳制（Settings 配置校验另有更严格的业务下限，测试可注入小值）
+        self.max_memes_per_group = max(1, int(max_memes_per_group or 500))
+        self.buffer_per_group = max(1, int(buffer_per_group or 1000))
+        self.max_buffered_groups = max(1, int(max_buffered_groups or 200))
         self.term_max_length = max(2, int(term_max_length or 40))
         self.meaning_max_length = max(10, int(meaning_max_length or 200))
         # 消息缓冲（进程内）：group_id -> deque[(ts, user_id, text)]，有界
@@ -171,9 +172,14 @@ class MemeKnowledgeManager:
         if re.search(r"\d{5,}", term):
             _M_REJECT.inc({"reason": "digits_in_term"})
             return False, "词条疑似包含 QQ 号/群号，拒绝写入"
-        # 注入句式清洗（知识内容绝不能携带指令）
-        term, _t1 = sanitize_untrusted_text(term)
+        # 注入句式清洗（知识内容绝不能携带指令）：
+        # - 词条命中注入句式 → 拒绝写入（词条会被当作检索键使用，必须干净）
+        # - 含义命中 → 清洗后保留（含义只作为不可信知识展示）
+        term, term_inject = sanitize_untrusted_text(term)
         meaning, _t2 = sanitize_untrusted_text(meaning)
+        if term_inject:
+            _M_REJECT.inc({"reason": "term_injection"})
+            return False, "词条疑似含注入句式，拒绝写入"
         if not term or not meaning:
             _M_REJECT.inc({"reason": "sanitized_empty"})
             return False, "词条内容不合规"

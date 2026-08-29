@@ -130,6 +130,8 @@ class PersonaManager:
                        behavior_rules: str = "", response_style: str = "") -> Tuple[bool, str]:
         """创建自定义人格。返回 (是否成功, 提示)。"""
         pid = (persona_id or "").strip().lower()
+        if (persona_id or "").strip() != pid:
+            return False, "人格 ID 只能使用小写字母/数字/下划线/短横线"
         err = self._validate_id(pid)
         if err:
             return False, err
