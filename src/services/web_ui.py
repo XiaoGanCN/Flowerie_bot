@@ -402,15 +402,18 @@ class WebUIServer:
         image_url = ""
         if prefs["bg_image"]:
             image_url = "/panel/background?v=%d" % int(time.time())
-        # 主题面板透明度：用户显式设置则用其值（覆盖所有主题的默认 alpha），否则用各主题默认
-        panel_alpha = ""
+        # 主题面板透明度：用户显式设置则用其值（覆盖所有主题的默认 alpha），否则用各主题默认。
+        # 卡片背景由服务端算成**具体 rgba(r,g,b,a)** 注入 body（杜绝 rgba(var(),var()) 在部分
+        # 浏览器失效导致卡片颜色错误），保证深色主题卡片也是深色。
+        theme_vars = THEMES.get(theme, THEMES["default"])["vars"]
+        theme_rgb = str(theme_vars.get("--panel-rgb", "255,255,255"))
         panel_opacity = int(round(theme_default_alpha(theme) * 100))
         if prefs["panel_opacity"]:
             try:
                 panel_opacity = max(0, min(100, int(prefs["panel_opacity"])))
-                panel_alpha = "%.2f" % (panel_opacity / 100.0)
             except ValueError:
                 panel_opacity = int(round(theme_default_alpha(theme) * 100))
+        panel_bg_css = "rgba(%s,%.2f)" % (theme_rgb, panel_opacity / 100.0)
         bg_rules = background_rules(
             bg_color,
             image_url if prefs["bg_image"] else "",
@@ -439,7 +442,7 @@ class WebUIServer:
             msg_html=msg_html,
             body_html=body_html,
             active_tab=tab,
-            panel_alpha=panel_alpha,
+            panel_bg_css=panel_bg_css,
         )
 
     async def _handle_panel_login(self, request: web.Request) -> web.Response:

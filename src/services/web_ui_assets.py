@@ -384,7 +384,7 @@ def render_register_page(msg: str = "", ok: bool = True) -> str:
 
 
 def render_panel_page(*, theme_class: str, bg_rules: str, msg_html: str,
-                      body_html: str, active_tab: str, panel_alpha: str = "") -> str:
+                      body_html: str, active_tab: str, panel_bg_css: str = "") -> str:
     tabs = [
         ("config", "/panel", "配置"),
         ("appearance", "/panel?tab=appearance", "外观"),
@@ -396,8 +396,8 @@ def render_panel_page(*, theme_class: str, bg_rules: str, msg_html: str,
     )
     titles = {"config": "配置管理", "appearance": "外观美化", "logs": "日志"}
     title = titles.get(active_tab, "配置管理")
-    # panel_alpha：用户自定义的主题面板不透明度（0~1）；为空则用各主题默认
-    inline_style = f' style="--panel-alpha:{panel_alpha}"' if panel_alpha else ""
+    # panel_bg_css：服务端算好的具体 rgba(r,g,b,a) 卡片背景（保证兼容）；为空则由 CSS 主题接管
+    inline_style = f' style="--panel-bg:{panel_bg_css}"' if panel_bg_css else ""
     return (
         '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'

@@ -182,7 +182,7 @@ async def test_appearance_theme_save_and_render():
 
 
 async def test_panel_opacity_saves_and_renders():
-    """面板透明度设置应持久化并对 body 注入 --panel-alpha，让卡片透出背景。"""
+    """面板透明度设置应持久化并给 body 注入具体 --panel-bg，让卡片透出背景。"""
     with tempfile.TemporaryDirectory() as td:
         _, repo, _, server = _make_stack(td)
         cookie = await _login(server)
@@ -194,7 +194,7 @@ async def test_panel_opacity_saves_and_renders():
         assert repo.get_pref("panel_opacity") == "40"
         resp2 = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}, query={"tab": "appearance"}))
         text = _resp_text(resp2)
-        assert 'style="--panel-alpha:0.40"' in text
+        assert 'style="--panel-bg:rgba(255,255,255,0.40)"' in text  # sakura rgb 白 + 40%
         assert 'name="panel_opacity"' in text  # 滑块存在
         assert 'value="40"' in text
 
