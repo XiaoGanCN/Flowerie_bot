@@ -267,7 +267,8 @@ async def test_html_only_interaction_forms_present():
                                                       cookies={"fb_token": cookie}))
         text3 = _resp_text(page3)
         form_start = text3.index("编辑人格：亚托莉")
-        form_end = text3.index("人格列表") if "人格列表" in text3 else len(text3)
+        # 注意：区别说明卡片里也有「人格列表」字样，锚点用列表区块的完整标题
+        form_end = text3.index("人格列表（Persona 资源库）") if "人格列表（Persona 资源库）" in text3 else len(text3)
         edit_zone = text3[form_start:form_end]
         assert 'action="/panel/persona/save"' in edit_zone
         assert 'action="/panel/persona/delete"' not in edit_zone
@@ -596,7 +597,9 @@ async def test_unregister_requires_current_password():
         resp = await server._handle_panel_unregister(FakeRequest(
             form={"password": "wrong-pass"}, cookies={"fb_token": cookie}))
         assert "err=1" in str(resp.headers.get("Location", ""))
-        # 凭据未被清除，token 仍有效
+        # 凭据未被清除，token 仍有效（面板页可见；登录页有专属标语，面板页没有）
         assert svc.repository.get_config("WEB_UI_USERNAME") == "admin2"
         page = await server._handle_panel(FakeRequest(cookies={"fb_token": cookie}))
-        assert "登录" not in _resp_text(page)
+        text = _resp_text(page)
+        assert "登录后管理全部配置" not in text
+        assert "注销管理员账号" in text
