@@ -31,6 +31,7 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 | `WS_TOKEN` | 反向 WS 鉴权 token（可选） | 空 |
 | `NAPCAT_WS_MODE` | NapCat WebSocket 模式：`reverse`（原有，NapCat 连 Flowerie 的 WS server）/ `forward`（Flowerie 连 NapCat 正向 WS） | `reverse` |
 | `NAPCAT_WS_URL` | `forward` 模式必填，NapCat 正向 WS 地址（`ws://` 或 `wss://`） | 空 |
+| `NAPCAT_WS_AUTH_MODE` | forward 鉴权通道：`header`（默认，Authorization: Bearer，URL 不带 token）/ `query`（URL `?access_token=`，OneBot11 约定）——**两种约定互斥，绝不同时发送**（避免令牌出现在代理/访问日志）；需重启 | `header` |
 | `NAPCAT_ACCESS_TOKEN` | `forward` 模式鉴权 token（NapCat 侧需配相同 access token；**绝不清写入日志**） | 空 |
 | `ONLY_REPLY_WHEN_AT` | 哑巴模式（只回 @） | `false` |
 | `USER_COOLDOWN` / `BOT_COOLDOWN` | 用户/机器人冷却（秒） | `5` / `2` |

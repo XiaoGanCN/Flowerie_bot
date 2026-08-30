@@ -34,10 +34,10 @@ _RECONNECT_DELAYS = [5, 10, 20, 40, 60]
 
 
 def redact_ws_url(url: str) -> str:
-    """去除 URL 查询串（access_token 等敏感参数绝不进日志/UI）。"""
+    """去除 URL 查询串与 fragment（access_token 等敏感参数绝不进日志/UI）。"""
     try:
         parts = urlparse(url)
-        return urlunparse((parts.scheme, parts.netloc, parts.path, "", "", parts.fragment))
+        return urlunparse((parts.scheme, parts.netloc, parts.path, "", "", ""))
     except ValueError:
         return "<invalid-url>"
 
@@ -55,7 +55,9 @@ class NapCatForwardClient:
         self._task: Optional[asyncio.Task] = None
         self._connect_timeout = 10.0
         self._url = str(getattr(config, "NAPCAT_WS_URL", "") or "").strip()
-        self._token = str(getattr(config, "NAPCAT_ACCESS_TOKEN", "") or "").strip()
+        self._token = str(getattr(config, "NAPCAT_ACCESS_TOKEN", "") or "")
+        # forward 鉴权通道（header/query，互斥——同一连接绝不双份凭据）
+        self._auth_mode = str(getattr(config, "NAPCAT_WS_AUTH_MODE", "header") or "header").lower().strip()
 
     # ---------- 生命周期 ----------
     async def run(self):
@@ -108,12 +110,16 @@ class NapCatForwardClient:
         headers = None
         connect_url = self._url
         if self._token:
-            # 鉴权：Authorization 头 + URL access_token 参数（OneBot11 约定；日志只记脱敏 URL）
-            headers = {"Authorization": f"Bearer {self._token}"}
+            # 鉴权通道（NAPCAT_WS_AUTH_MODE，互斥，绝不双份凭据）：
+            # - header（默认）：Authorization: Bearer <token>（URL 不变，避免代理/访问日志泄漏）
+            # - query：URL ?access_token=<token>（OneBot11/NapCat 约定；日志只记脱敏 URL）
             parsed = urlparse(self._url)
-            # token 必须 URL 编码（防 & / # 等字符破坏查询串）
-            connect_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "",
-                                      urlencode({"access_token": self._token}), parsed.fragment))
+            if self._auth_mode == "query":
+                # token 必须 URL 编码（防 & / # 等字符破坏查询串）
+                connect_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "",
+                                          urlencode({"access_token": self._token}), parsed.fragment))
+            else:
+                headers = {"Authorization": f"Bearer {self._token}"}
         logger.info("napcat_ws_connecting url=%s", redact_ws_url(self._url),
                     extra={"event": "ws_connecting"})
         connect_kwargs = {

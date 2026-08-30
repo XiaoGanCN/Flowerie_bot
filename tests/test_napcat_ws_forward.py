@@ -179,3 +179,148 @@ async def test_forward_malformed_and_garbage_events_survive():
         await task
         server.close()
         await server.wait_closed()
+
+
+
+# ---------- WS 鉴权：header / query 二选一，绝不同时发送（NAPCAT_WS_AUTH_MODE） ----------
+def _auth_roundtrip(cfg, token, mode="header", wait=2.0):
+    """连接本地 WS server，返回服务端看到的 (auth_header, query)。"""
+    seen = {}
+
+    async def handler(ws):
+        req = ws.request
+        seen["auth"] = req.headers.get("Authorization", "")
+        seen["query"] = urlparse(req.path).query
+        await asyncio.sleep(0.1)
+
+    return handler, seen
+
+
+async def test_ws_auth_header():
+    """默认（header）：只发 Authorization: Bearer；URL/路径不带 token。"""
+    from urllib.parse import urlparse as _up
+    router = FakeMsgRouter()
+    cfg = FakeConfig()
+    cfg.NAPCAT_ACCESS_TOKEN = "tok_header_secret"
+    server_seen = {}
+
+    async def handler(ws):
+        req = ws.request
+        server_seen["auth"] = req.headers.get("Authorization", "")
+        server_seen["query"] = _up(req.path).query
+        await asyncio.sleep(0.1)
+
+    server = await websockets.serve(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    cfg.NAPCAT_WS_URL = f"ws://127.0.0.1:{port}/ws"
+    client = _client(router, cfg, delays=[0.05])
+    task = asyncio.create_task(client.run())
+    try:
+        for _ in range(50):
+            if server_seen.get("auth") is not None:
+                break
+            await asyncio.sleep(0.05)
+        assert server_seen["auth"] == "Bearer tok_header_secret"
+        assert "access_token" not in server_seen["query"]      # Header 模式：URL 无 token
+        assert "tok_header_secret" not in server_seen["query"]
+    finally:
+        await client.shutdown()
+        await task
+        server.close()
+        await server.wait_closed()
+
+
+async def test_ws_auth_query():
+    """query 模式：URL ?access_token=...（已编码）；Header 不得携带 token。"""
+    from urllib.parse import urlparse as _up
+    router = FakeMsgRouter()
+    cfg = FakeConfig()
+    cfg.NAPCAT_ACCESS_TOKEN = "tok query & special#"
+    cfg.NAPCAT_WS_AUTH_MODE = "query"
+    server_seen = {}
+
+    async def handler(ws):
+        req = ws.request
+        server_seen["auth"] = req.headers.get("Authorization", "")
+        server_seen["query"] = _up(req.path).query
+        await asyncio.sleep(0.1)
+
+    server = await websockets.serve(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    cfg.NAPCAT_WS_URL = f"ws://127.0.0.1:{port}/ws"
+    client = _client(router, cfg, delays=[0.05])
+    task = asyncio.create_task(client.run())
+    try:
+        for _ in range(50):
+            if server_seen.get("auth") is not None:
+                break
+            await asyncio.sleep(0.05)
+        assert server_seen["auth"] == ""                        # Query 模式：Header 无 token
+        assert "access_token=" in server_seen["query"]          # URL 带 query
+        # 特殊字符已百分号编码（& # 空格不得原样出现）
+        assert "access_token=tok" in server_seen["query"]
+        assert "&" not in server_seen["query"].split("access_token=")[-1] \
+            or "tok%20query%20%26%20special%23" in server_seen["query"]
+    finally:
+        await client.shutdown()
+        await task
+        server.close()
+        await server.wait_closed()
+
+
+async def test_ws_auth_not_sent_twice():
+    """黄金用例：同一连接绝不同时出现 Bearer 头 + URL access_token。"""
+    from urllib.parse import urlparse as _up
+
+    async def _probe(mode, token):
+        router = FakeMsgRouter()
+        cfg = FakeConfig()
+        cfg.NAPCAT_ACCESS_TOKEN = token
+        cfg.NAPCAT_WS_AUTH_MODE = mode
+        seen = {}
+
+        async def handler(ws):
+            req = ws.request
+            seen["auth"] = req.headers.get("Authorization", "")
+            seen["query"] = _up(req.path).query
+            await asyncio.sleep(0.1)
+
+        server = await websockets.serve(handler, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        cfg.NAPCAT_WS_URL = f"ws://127.0.0.1:{port}/ws"
+        client = _client(router, cfg, delays=[0.05])
+        task = asyncio.create_task(client.run())
+        try:
+            for _ in range(50):
+                if seen.get("auth") is not None:
+                    break
+                await asyncio.sleep(0.05)
+            return seen
+        finally:
+            await client.shutdown()
+            await task
+            server.close()
+            await server.wait_closed()
+
+    seen_header = await _probe("header", "only_header_tok")
+    assert "Bearer only_header_tok" in seen_header["auth"]
+    assert "access_token" not in seen_header["query"]           # Header 模式：URL 绝无 token
+
+    seen_query = await _probe("query", "only_query_tok")
+    assert seen_query["auth"] == ""                             # Query 模式：Header 绝无 token
+    assert "access_token=" in seen_query["query"]
+
+
+async def test_ws_auth_token_redaction():
+    """日志脱敏：含 token 的 URL 只输出掩码形式，原始 token 绝不出现。"""
+    url = "ws://127.0.0.1:3001/?access_token=SECRET-VALUE-123"
+    redacted = redact_ws_url(url)
+    assert "SECRET-VALUE-123" not in redacted
+    assert "access_token" not in redacted                       # 整段 query 剥除
+    assert redacted == "ws://127.0.0.1:3001/"
+    # 无 query 的 URL 原样返回（无敏感内容则不误伤）
+    assert redact_ws_url("ws://127.0.0.1:3001/ws") == "ws://127.0.0.1:3001/ws"
+    # fragment 中的敏感内容同样被剥除
+    assert "SECRET" not in redact_ws_url("ws://127.0.0.1:3001/ws#access_token=SECRET")
+    # 畸形 URL 有安全兜底（解析失败的输入绝不回显原始内容）
+    assert redact_ws_url("ws://[bad") == "<invalid-url>"

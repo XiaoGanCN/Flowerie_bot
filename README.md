@@ -100,7 +100,7 @@ OneBot WebSocket connected
 | `ADMIN_RESPONSE_RULES` | 管理员补充发言规则（每行一条；优先级：安全策略 > 人格 > 人格内置规则 > 本条，不覆盖安全策略） | 空 |
 | `PROACTIVE_MESSAGE_MIN/MAX/_BASE/_USER_BOOST/_SINGLE_USER/_SHORT_MESSAGE/_EMPTY_CONTEXT/_BOT_MULTIPLIER` | 上下文随机回复概率（详见 configuration.md） | `0.01`/`0.05`/`0.03`/`0.01`/`0.02`/`0.02`/`0.02`/`0.3` |
 | `ACTIVE_CHAT_PROBABILITY` / `ACTIVE_CHAT_INTERVAL_MIN/MAX_SECONDS` / `ACTIVE_CHAT_CONSECUTIVE_COOLDOWN_SECONDS` | 主动聊天循环概率与间隔/冷却 | `0.10` / `5`/`10` / `1800` |
-| `NAPCAT_WS_MODE` / `NAPCAT_WS_URL` / `NAPCAT_ACCESS_TOKEN` | NapCat WS 模式（`reverse`/`forward`）/ forward 地址 / forward 鉴权 token | `reverse` / 空 / 空 |
+| `NAPCAT_WS_MODE` / `NAPCAT_WS_URL` / `NAPCAT_ACCESS_TOKEN` | NapCat WS 模式（`reverse`/`forward`）/ forward 地址 / forward 鉴权 token | `reverse` / 空 / 空 | · `NAPCAT_WS_AUTH_MODE`（header/query 互斥鉴权）
 | `PLUGIN_DIR` / `PLUGIN_PROTECTION` / `PLUGIN_MAX_COUNT` / `PLUGIN_URL_MAX_BYTES` / `PLUGIN_URL_TIMEOUT` / `PLUGIN_ZIP_MAX_UNZIPPED_BYTES` / `PLUGIN_ZIP_MAX_FILES` | 插件系统：目录 / 保护级别 / 总数上限 / URL 下载大小上限 / 超时 / 解压后总大小上限 / 文件数上限 | `./plugins` / `normal` / `100` / `5242880` / `15` / `52428800` / `200` |
 | `MEME_LEARNING_ENABLED` / `MEME_SUMMARY_INTERVAL_HOURS` / `MAX_GROUP_MEMES` | 群聊梗知识学习开关 / 总结周期（小时）/ 每群知识条数上限 | `false` / `24` / `500` |
 | `WEB_UI_ENABLED` / `WEB_UI_PORT` / `WEB_UI_USERNAME` / `WEB_UI_PASSWORD` | Web UI 开关 / 端口 / 登录账号 / 密码 | `false` / `8080` / `admin` / 空 |

@@ -86,7 +86,8 @@
 ### 分组新增项（v1.2.0）
 
 - **连接（Connection）**：本组新增 NapCat WebSocket 配置——`NAPCAT_WS_MODE`（`reverse`/`forward` 二选一，枚举下拉）、
-  forward 时必填的 `NAPCAT_WS_URL`（`ws://` 或 `wss://`）、以及 `NAPCAT_ACCESS_TOKEN`
+  forward 时必填的 `NAPCAT_WS_URL`（`ws://` 或 `wss://`）、`NAPCAT_ACCESS_TOKEN` 与
+  `NAPCAT_WS_AUTH_MODE`（`header`/`query` 二选一；**互斥，同一连接绝不同时发送**）
   （secret，forward 鉴权 token；**绝不写入日志 / 只在 UI 显示掩码，留空不修改**）。均为需重启项。
 - **主动聊天（ActiveChat）**：本组除原有 `ACTIVE_CHAT_COOLDOWN` 外，新增**主动发言概率**全套——上下文随机回复概率
   `PROACTIVE_MESSAGE_MIN/MAX/_BASE/_USER_BOOST/_SINGLE_USER/_SHORT_MESSAGE/_EMPTY_CONTEXT/_BOT_MULTIPLIER`，

@@ -193,6 +193,10 @@ class Settings(BaseSettings):
     NAPCAT_WS_MODE: str = "reverse"
     NAPCAT_WS_URL: str = ""                # forward 模式必填（ws:// 或 wss://）
     NAPCAT_ACCESS_TOKEN: str = ""          # forward 鉴权 token（绝不清写入日志）
+    # forward 鉴权通道（两种约定二选一，**绝不同时发送**）：
+    # header（默认）：Authorization: Bearer <token>（URL 不带 token，不在代理/访问日志泄漏）
+    # query：URL ?access_token=<urlencoded token>（OneBot11/NapCat 约定；日志已脱敏）
+    NAPCAT_WS_AUTH_MODE: str = "header"
 
     # 群聊梗/黑话知识层（Meme Knowledge）：独立 knowledge.db，按群完全隔离
     MEME_LEARNING_ENABLED: bool = False            # 每日梗总结任务总开关（默认关）
@@ -505,6 +509,9 @@ def validate_config(config: Settings) -> None:
     ws_mode = str(getattr(config, "NAPCAT_WS_MODE", "reverse") or "reverse").lower()
     if ws_mode not in ("reverse", "forward"):
         raise ValueError(f"NAPCAT_WS_MODE 必须是 reverse/forward，当前: {ws_mode!r}")
+    auth_mode = str(getattr(config, "NAPCAT_WS_AUTH_MODE", "header") or "header").lower()
+    if auth_mode not in ("header", "query"):
+        raise ValueError(f"NAPCAT_WS_AUTH_MODE 必须是 header/query，当前: {auth_mode!r}")
     if ws_mode == "forward":
         ws_url = (getattr(config, "NAPCAT_WS_URL", "") or "").strip()
         if not ws_url:

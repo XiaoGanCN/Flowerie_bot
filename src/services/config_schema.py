@@ -40,6 +40,8 @@ SCHEMA: Dict[str, Tuple[str, str, bool, bool, str]] = {
                       "forward 模式的连接地址（ws:// 或 wss://，需重启）"),
     "NAPCAT_ACCESS_TOKEN": ("Connection", "secret", True, False,
                             "forward 模式鉴权 token（绝不写日志，需重启）"),
+    "NAPCAT_WS_AUTH_MODE": ("Connection", "str", False, False,
+                            "forward 鉴权通道：header=Bearer 头（默认，URL 不带 token）/ query=URL access_token 参数（OneBot11 约定）；两者绝不同时发送"),
     # ---------- 行为与回复 ----------
     "CONTEXT_SIZE": ("Behavior", "int", False, True, "上下文条数"),
     "USER_COOLDOWN": ("Behavior", "int", False, True, "用户冷却（秒）"),
@@ -220,6 +222,7 @@ _ENUM_VALUES = {
     "LOG_LEVEL": {"debug", "info", "warning", "error", "critical"},
     "LOG_FORMAT": {"text", "json"},
     "NAPCAT_WS_MODE": {"reverse", "forward"},
+    "NAPCAT_WS_AUTH_MODE": {"header", "query"},
     "PLUGIN_PROTECTION": {"normal", "relaxed", "unsafe"},
 }
 
@@ -227,6 +230,7 @@ _ENUM_OPTIONS = {
     "LOG_LEVEL": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     "LOG_FORMAT": ["text", "json"],
     "NAPCAT_WS_MODE": ["reverse", "forward"],
+    "NAPCAT_WS_AUTH_MODE": ["header", "query"],
     "PLUGIN_PROTECTION": ["normal", "relaxed", "unsafe"],
 }
 
