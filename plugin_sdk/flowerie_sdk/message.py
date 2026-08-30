@@ -2,7 +2,7 @@
 
 插件构造：msg = BotMessage().text("hi").at(123).image(url)
 """
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Iterator, List, Optional
 
 
 class BotMessage:

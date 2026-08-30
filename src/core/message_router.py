@@ -13,7 +13,6 @@ from src.core.command_handler import CommandHandler
 from src.core.message_assembler import MessageAssembler
 from src.core.policy_engine import PolicyEngine
 from src.core.sanitizer import validate_memory_content
-from src.sdk.onebot.transformer import to_bot_event
 from src.models import GroupMessage
 from src.services.ai_client import AIClient
 from src.services.file_parser import FileParser

@@ -38,12 +38,14 @@ class OneBotAdapter(BotAdapter):
     async def send(self, target: str, target_id: int, message,
                    reply_id: Optional[int] = None) -> int:
         payload = to_bot_message_payload(message)
-        segmented = to_bot_message_payload(BotMessage("", reply_id=reply_id)) if reply_id is not None else []
-        # reply 段已由 to_bot_message_payload 处理（BotMessage.reply_id）；str 场景显式补 reply
-        if reply_id is not None and not isinstance(payload, list):
-            payload = [{"type": "reply", "data": {"id": int(reply_id)}}, {"type": "text", "data": {"text": str(payload)}}]
-        elif reply_id is not None and isinstance(payload, list):
-            payload = [{"type": "reply", "data": {"id": int(reply_id)}}] + payload
+        # reply 段统一由下层补（BotMessage 已含 reply_id 时 to_bot_message_payload 会输出；
+        # str 场景在首部补 reply 段）
+        if reply_id is not None:
+            if isinstance(payload, list):
+                payload = [{"type": "reply", "data": {"id": int(reply_id)}}] + payload
+            else:
+                payload = [{"type": "reply", "data": {"id": int(reply_id)}},
+                           {"type": "text", "data": {"text": str(payload)}}]
         result = await self._call(self._sender.send_msg_raw(target, int(target_id), payload))
         if not result.get("ok"):
             raise BotAPIError(f"发送失败（target={target}）: {result.get('error', '')}")

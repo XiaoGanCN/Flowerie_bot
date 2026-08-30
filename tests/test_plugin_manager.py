@@ -382,11 +382,8 @@ async def test_message_query_actions(env):
 
 # ---------- 匹配扩展：正则 / 优先级 / Matcher 阻断 ----------
 def _decl(rule):
-    import io as _io
     import json as _json
-    import shutil as _sh
     import tempfile as _tf
-    tmp = _tf.mkdtemp()
     d = _tf.mkdtemp()
     p = os.path.join(d, "m.json")
     open(p, "w", encoding="utf-8").write(_json.dumps({

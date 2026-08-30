@@ -1,10 +1,13 @@
 """SDK 中层/下层测试：BotMessage · Transformer（CQ 阉割 · 出站段转换）。"""
-import pytest
 
 from src.sdk.message import BotMessage
 from src.sdk.onebot.transformer import (
-    extract_at_list, extract_images, extract_reply_id, extract_text,
-    to_bot_event, to_bot_message_payload,
+    extract_at_list,
+    extract_images,
+    extract_reply_id,
+    extract_text,
+    to_bot_event,
+    to_bot_message_payload,
 )
 
 

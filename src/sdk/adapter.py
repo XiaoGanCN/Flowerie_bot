@@ -6,7 +6,7 @@ SDK 只依赖本接口；下层（src/sdk/onebot/）提供 OneBot 实现。
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
-from src.sdk.errors import BotError, UnsupportedOperationError
+from src.sdk.errors import UnsupportedOperationError
 from src.sdk.message import BotMessage
 
 

@@ -5,9 +5,7 @@
 - group_admin / group_owner：经 BotAdapter 查询群成员角色（OneBot group member role）
 - require_permission(kind)：装饰器，检查失败抛 BotPermissionError
 """
-from typing import Any, Callable, Optional
-
-from src.sdk.errors import BotPermissionError
+from typing import Callable
 
 VALID_KINDS = ("user", "group_member", "group_admin", "group_owner", "bot_admin", "bot_owner")
 

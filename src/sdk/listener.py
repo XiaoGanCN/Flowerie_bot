@@ -6,7 +6,7 @@
 - event.stop()：阻断后续低优先级 listener（本分发表内）
 - shutdown()：正确结束（清空注册表）
 """
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, List, Optional
 
 
 class EventListener:
@@ -42,7 +42,7 @@ class EventDispatcher:
 
     async def dispatch(self, event) -> None:
         """按 priority 大者先分发（异常隔离；event.stop 阻断低优先级）。"""
-        ordered = sorted(self._listeners, key=lambda l: l.priority, reverse=True)
+        ordered = sorted(self._listeners, key=lambda lst: lst.priority, reverse=True)
         for listener in ordered:
             if event.stopped:
                 break

@@ -54,7 +54,7 @@ class FlowerieBot:
         import inspect
         if self._module is not None:
             items = (self._module.items() if isinstance(self._module, dict) else vars(self._module).items())
-            for name, val in list(items):
+            for _name, val in list(items):
                 if inspect.isfunction(val):
                     for m in collect(val):
                         self._handlers.append((m, val))
@@ -62,7 +62,7 @@ class FlowerieBot:
             import sys
             for _, mod in list(sys.modules.items()):
                 if mod is not None and "flowerie_plugin_" in getattr(mod, "__name__", ""):
-                    for name, val in vars(mod).items():
+                    for _name, val in vars(mod).items():
                         if inspect.isfunction(val):
                             for m in collect(val):
                                 self._handlers.append((m, val))
@@ -96,22 +96,19 @@ class FlowerieBot:
             matched = matched[0] if matched else {}   # 主进程按 priority 降序；命中链第一优先
         self._matched_name = str(matched.get("name") or "")
         self._last_args = str(matched.get("args") or "")
-        handled = False
         if self._matched_name:
             for m, handler in self._handlers:
                 if self._matched_name == m.get("name"):
                     await self._invoke(handler, event)
-                    handled = True
                     break
         else:
             listeners = sorted(self._listeners.get(event.post_type, []),
                                key=lambda x: x[0], reverse=True)
-            for priority, stop, handler in listeners:
+            for _priority, stop, handler in listeners:
                 if event._stopped:
                     break
                 try:
                     await self._invoke(handler, event)
-                    handled = True
                 except Exception:  # noqa: BLE001 - 监听器异常隔离
                     continue
                 if stop or event._stopped:

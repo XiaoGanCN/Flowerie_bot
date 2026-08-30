@@ -3,7 +3,7 @@
 构造：Bot(adapter, config=None, permission_checker=None)；adapter 为 BotAdapter 实例。
 所有网络 API 保持 async；失败抛统一 BotError 体系。
 """
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from src.sdk.event import BotEvent
 from src.sdk.message import BotMessage

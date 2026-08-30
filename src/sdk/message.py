@@ -4,7 +4,7 @@
 OneBot 段/CQ 的处理只发生在下层 src/sdk/onebot/。
 提供 Builder（链式构造）：msg = BotMessage().text("hi").at(123).image(url)
 """
-from typing import Any, Dict, List, Optional, Iterator
+from typing import Any, Dict, Iterator, List, Optional
 
 
 class BotMessage:

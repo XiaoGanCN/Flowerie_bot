@@ -3,7 +3,7 @@
 OneBot v11 事件有 20+ 字段，这里只取领域需要的少数；多余字段不进入
 任何结构体定义（map 兜底仅用于内部低级需求，不向上传播）。
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 
 class EventDTO:

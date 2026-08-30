@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 from src.sdk.event import BotEvent
-from src.sdk.matcher import Matcher, Rule, collect_matchers, command, exact, keyword, prefix, regex, rule
+from src.sdk.matcher import Matcher, Rule, collect_matchers, command, keyword
 
 
 def _event(text="", scope="group", user_id=1, group_id=2):
@@ -46,8 +46,6 @@ def test_rule_conditions():
     assert r.matches(_event()) is True
     assert r.matches(_event(scope="private")) is False
     assert r.matches(_event(user_id=2)) is False
-    # 组合
-    r2 = Rule(user_id=1) + Rule(exact_ok=True)  # 未知 key 由 matches 兜底（callable 检查）
     # 自定义谓词（同步）
     r3 = Rule(custom=lambda ev, bot: ev.text.startswith("ok"))
     assert r3.matches(_event("okay")) is True

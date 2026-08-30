@@ -24,13 +24,13 @@ from src.core.sanitizer import validate_memory_content
 from src.plugins.http_action import plugin_http_request, redact_url
 from src.plugins.installer import PluginInstaller, PluginInstallError
 from src.plugins.manifest import PluginManifest, PluginManifestError
+from src.plugins.permissions import PermissionManager
+from src.plugins.runtime import PluginRuntime
+from src.repositories.settings_repository import SettingsRepository
 from src.sdk.bot import Bot
 from src.sdk.event import BotEvent
 from src.sdk.matcher import Matcher
 from src.sdk.onebot.adapter import OneBotAdapter
-from src.plugins.permissions import PermissionManager
-from src.plugins.runtime import PluginRuntime
-from src.repositories.settings_repository import SettingsRepository
 from src.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)
