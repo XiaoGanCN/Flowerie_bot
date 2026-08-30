@@ -157,8 +157,6 @@ async def test_forward_malformed_and_garbage_events_survive():
     """畸形 JSON / 非 JSON 帧：客户端跳过继续处理后续正常事件（黑盒韧性）。"""
     router = FakeMsgRouter()
     cfg = FakeConfig()
-    server_ready = asyncio.Event()
-    received = []
 
     async def handler(ws):
         await ws.send(b"not-json-at-all{{{{")
