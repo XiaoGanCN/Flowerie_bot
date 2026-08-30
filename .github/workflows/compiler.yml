@@ -73,34 +73,14 @@ jobs:
 
 
 
-    #
-    # Fully bundled executable
-    #
-
     - name: Build builtin version
-
       run: |
+        python -m PyInstaller --onefile --name Flowerie_bot-${{ matrix.name }}-builtin main.py
 
-        python -m PyInstaller \
-          --onefile \
-          --name Flowerie_bot-${{ matrix.name }}-builtin \
-          main.py
-
-
-
-    #
-    # External dependency version
-    #
 
     - name: Build portable version
-
       run: |
-
-        python -m PyInstaller \
-          --onedir \
-          --name Flowerie_bot-${{ matrix.name }}-portable \
-          main.py
-
+        python -m PyInstaller --onedir --name Flowerie_bot-${{ matrix.name }}-portable main.py
 
 
     #
@@ -109,7 +89,7 @@ jobs:
 
     - name: Package release files
 
-      shell: python
+      shell: python {0}
 
       run: |
 
