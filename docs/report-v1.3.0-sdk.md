@@ -134,3 +134,48 @@ install-termux 版本脚注）
 - ✅ 验证：24 个 action 权限映射完整；中层零 OneBot 字段/import；事件投递
   payload 最小化（at_list≤20/images≤10/text≤2000）；matcher_register 幂等；
   撤回白名单（仅本 bot 发送记录）；SDK 无网络/数据库直接依赖
+
+---
+
+# Bot SDK v1.4.0（高频能力补齐）报告
+
+## 交付原则
+OneBot11 已有能力直接包装现成端点（请求处理/群管理/消息）；OneBot 没有的轻量自造
+（无 Redis/Kafka/新数据库/完整 cron——asyncio Task 调度器与插件侧 future 方案）。
+
+## 新增能力（详见 docs/sdk.md 23 章）
+
+| 分组 | 实现 | 权限 |
+| --- | --- | --- |
+| 消息多媒体 | BotMessage: video/voice/file/add_segment（键盘等平台相关透传） | send_message |
+| 请求处理 | set_friend_add_request / set_group_add_request（OneBot 现有） | request_handle |
+| 定时 | interval/delay/daily 三型（asyncio Task；无 cron） | scheduler |
+| 多轮/Session | wait_for/ask/confirm/select（插件侧 future；事件先喂队列） | 无 |
+| 命令进阶 | event.args（shlex）/ 子命令（名含 .）/ cool_down | 无 |
+| KV | plugin_kv 表（plugin_id 命名空间隔离；≤64KB） | storage |
+| HTTP 扩展 | PUT/DELETE/HEAD 复用 http_action 防线 + 下载（10MB 落插件目录） | http_request |
+| 记忆 | mem_update / mem_clear（复用 MemoryManager 审计） | read_memory |
+| AI 限频受限 | ai_chat（注入 ai_client；独立预算——文档警告自限频） | ai_chat |
+| 工具 | random_choice / random_int / now / format_time | 无 |
+| 可观测 | 事件 payload + trace_id；event.trigger / schedule_id | — |
+
+## 关键决定
+- **Router 未重写**：插件通道真实领域化（_plugin_payload → to_bot_event 单一入口，
+  修复了此前 payload 未落地旧格式的问题）；主流程（_handle_message 等）保持不变。
+- **权限不膨胀**：新增 4 个（request_handle/scheduler/storage/ai_chat 总计 22）；
+  工具类用「白名单声明 None」放行，拒绝逻辑仍黑名单外一律拒绝。
+- **资源**：shutdown 清理调度任务（task 泄漏检查 ✓ 0 残留）；delay 触发即清理；
+  wait 队列超时/命中即移除。
+
+## 测试与验收
+- 新增 14 个测试（capabilities 8 + plugin_lib 6），本地 147 通过，ruff 0
+- CI（3.9/3.12）+ Acceptance 双绿（4d42e5d）
+- 白盒复查：新 action 权限映射完整（发现 get_group_info 缺失即修复）；wait 队列
+  移除路径 2 处；调度 delay 清理 2 处
+
+## 剩余问题（下阶段）
+1. cron 完整语法（当前 interval/delay/daily 三型）——需要时请额外提出
+2. 等待消息与 matcher 同插件互斥（文档已注明拆插件/不注册 matcher）
+3. AI Streaming/Vision/Tool Calling 未插件化（主进程能力保留）
+4. 图片处理（压缩/缩放）——无第三方依赖，标注 P1
+5. node 插件 SDK（v1.4 为 Python 优先）

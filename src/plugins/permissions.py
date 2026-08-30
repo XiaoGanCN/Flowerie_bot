@@ -84,6 +84,7 @@ ACTION_PERMISSIONS: Dict[str, Optional[str]] = {
     "http_download": "http_request",
     "send_private_message": "send_message",
     "get_group": "read_group_info",
+    "get_group_info": "read_group_info",
     "get_user": "read_user_info",
     "get_memory": "read_memory",
     "write_memory": "write_memory",
