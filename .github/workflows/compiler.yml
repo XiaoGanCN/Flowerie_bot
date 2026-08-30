@@ -32,9 +32,6 @@ jobs:
           - os: windows-11-arm
             name: windows-arm64
 
-          - os: macos-13
-            name: macos-x64
-
           - os: macos-latest
             name: macos-arm64
 
@@ -62,31 +59,14 @@ jobs:
         python -m pip install pyinstaller
 
 
-    #
-    # Full standalone build
-    #
     - name: Build builtin library version
       run: |
-
-        pyinstaller \
-          --onefile \
-          --name Flowerie_bot-${{ matrix.name }}-builtin \
-          main.py
+        python -m PyInstaller --onefile --name Flowerie_bot-${{ matrix.name }}-builtin main.py
 
 
-    #
-    # Thin version
-    #
-    # Keeps Python imports external
-    # Requires user installed dependencies
-    #
     - name: Build portable version
       run: |
-
-        pyinstaller \
-          --onedir \
-          --name Flowerie_bot-${{ matrix.name }}-portable \
-          main.py
+        python -m PyInstaller --onedir --name Flowerie_bot-${{ matrix.name }}-portable main.py
 
 
     - name: Prepare release files
