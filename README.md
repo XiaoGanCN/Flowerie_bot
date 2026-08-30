@@ -8,8 +8,12 @@
   <b>「戳我干嘛，再戳就不理你了哦」</b>
 </p>
 
----
+<div align="center">
+  
 [![GitHub Tag](https://img.shields.io/github/v/tag/xiaogancn/flowerie_bot)](https://github.com)[![Build Flowerie_bot](https://github.com/XiaoGanCN/Flowerie_bot/actions/workflows/compiler.yml/badge.svg)](https://github.com/XiaoGanCN/Flowerie_bot/actions/workflows/compiler.yml)
+
+</div>
+---
 ## 这是什么
 
 **花璃** 是一个基于 **DeepSeek API** 的 **QQ 群聊机器人**：像真实群友一样聊天、识图、看转发、记记忆、被戳会回应，还能自定义人格、发表情包、用 MCP 工具上网查信息，并通过 Web UI 管理配置。
