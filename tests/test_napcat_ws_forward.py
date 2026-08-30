@@ -150,3 +150,34 @@ async def test_forward_reconnect_after_disconnect():
         await task
         server.close()
         await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_forward_malformed_and_garbage_events_survive():
+    """畸形 JSON / 非 JSON 帧：客户端跳过继续处理后续正常事件（黑盒韧性）。"""
+    router = FakeMsgRouter()
+    cfg = FakeConfig()
+    server_ready = asyncio.Event()
+    received = []
+
+    async def handler(ws):
+        await ws.send(b"not-json-at-all{{{{")
+        await ws.send("{bad json: 1}")
+        await ws.send(json.dumps({"post_type": "message", "message_type": "group",
+                                  "group_id": 5, "user_id": 6, "message_id": 7,
+                                  "time": 1, "message": [{"type": "text", "data": {"text": "ok"}}]}))
+        await asyncio.sleep(0.1)
+
+    server = await websockets.serve(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    cfg.NAPCAT_WS_URL = f"ws://127.0.0.1:{port}/ws"
+    client = _client(router, cfg, delays=[0.05])
+    task = asyncio.create_task(client.run())
+    try:
+        await asyncio.wait_for(router_events_until(router, 1), timeout=5)
+        assert router.events[0]["post_type"] == "message"  # 只有正常事件被处理
+    finally:
+        await client.shutdown()
+        await task
+        server.close()
+        await server.wait_closed()

@@ -58,6 +58,8 @@ ACTION_PERMISSIONS: Dict[str, Optional[str]] = {
 
 # v1 未实现的保留 Action（即使权限已批准也拒绝执行）
 _UNIMPLEMENTED = frozenset({"execute_process", "webhook"})
+# 内建无副作用动作：任何权限组合下都允许（仅日志/测试探针，无外部副作用）
+_BUILTIN_ACTIONS = frozenset({"log", "test"})
 
 
 class PermissionDeniedError(Exception):
@@ -97,7 +99,8 @@ class PermissionManager:
             return False  # v1 不支持：即使批准也拒绝（诚实接口）
         permission = ACTION_PERMISSIONS.get(action)
         if permission is None:
-            return True  # 无害动作（log/test）
+            # 白名单原则：仅内建无副作用动作放行；未知 action 一律拒绝
+            return action in _BUILTIN_ACTIONS
         return permission in self.approved
 
     def denied_reason(self, action: str) -> str:
@@ -105,7 +108,7 @@ class PermissionManager:
             return f"action {action!r} 在 Plugin API v1 未实现（保留权限）"
         permission = ACTION_PERMISSIONS.get(action)
         if permission is None:
-            return ""
+            return "未知 action，不允许执行（白名单外）" if action not in _BUILTIN_ACTIONS else ""
         return f"需要权限 {permission!r}（管理员未批准）"
 
     # ---------- 保护级别对应的资源限制 ----------

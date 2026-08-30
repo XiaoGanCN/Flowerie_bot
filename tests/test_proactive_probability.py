@@ -182,3 +182,29 @@ def test_config_service_validate_range_uses_ranges():
     ok, msg = svc.update("PROACTIVE_MESSAGE_BASE_PROBABILITY", "-0.1")
     assert not ok
     tmp.cleanup()
+
+
+# ---------- 概率分布黑盒：统计频率与配置一致（±30% 容差，避免 flaky） ----------
+def test_probability_distribution_matches_config(monkeypatch):
+    """5000 次采样：BASE 0.03 时回复频率应在 0.021~0.039（±30%）。"""
+    cfg, cm = _context_cfg(monkeypatch)
+    cm.add_context(1, 100, "第一条消息")
+    cm.add_context(1, 101, "第二条消息")
+    hits = sum(1 for _ in range(5000) if cm.should_reply_by_context(1))
+    rate = hits / 5000
+    # BASE 0.03 + USER_BOOST 0.01 = 0.04（上下文含用户消息）
+    assert 0.04 * 0.7 <= rate <= 0.04 * 1.3, f"频率 {rate} 偏离 0.04"
+
+
+def test_probability_zero_never_replies(monkeypatch):
+    cfg, cm = _context_cfg(monkeypatch)
+    cfg.PROACTIVE_MESSAGE_BASE_PROBABILITY = 0.0
+    cfg.PROACTIVE_MESSAGE_USER_BOOST = 0.0
+    cfg.PROACTIVE_MESSAGE_SHORT_MESSAGE_PROBABILITY = 0.0
+    cfg.PROACTIVE_MESSAGE_EMPTY_CONTEXT_PROBABILITY = 0.0
+    cfg.PROACTIVE_MESSAGE_SINGLE_USER_PROBABILITY = 0.0
+    cfg.PROACTIVE_MESSAGE_MIN_PROBABILITY = 0.0
+    cfg.PROACTIVE_MESSAGE_MAX_PROBABILITY = 0.0
+    cm.add_context(1, 100, "x")
+    cm.add_context(1, 101, "y")
+    assert all(cm.should_reply_by_context(1) is False for _ in range(200))

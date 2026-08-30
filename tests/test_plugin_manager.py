@@ -242,3 +242,48 @@ async def test_refresh_discovers_and_updates(env):
     discovered, changed = mgr.refresh()
     assert changed == ["minimal_plugin"]
     assert json.loads(repo.get_plugin("minimal_plugin")["manifest_json"])["version"] == "2.0.0"
+
+
+# ---------- 未知动作：无权限映射的 action 一律拒绝（白盒） ----------
+@pytest.mark.asyncio
+async def test_unknown_action_rejected_not_executed(env):
+    mgr, repo, sender, tmp = env
+    _deploy(tmp, "rogue_plugin")
+    mgr.discover()
+    ok, msg = await mgr.enable("rogue_plugin", approved_permissions=["read_message"])
+    assert ok, msg
+    summary = await mgr.dispatch_event("message", {"group_id": 1, "user_id": 2, "text": "do evil"})
+    assert summary, "事件被投递"
+    assert summary[0]["action"] == "do_evil"
+    assert summary[0]["denied"] is True and summary[0]["ok"] is False
+    # 未定义动作绝不落到 _run_action（无副作用）：sender 未被调用
+    assert sender.sent == []
+
+
+# ---------- 声明式插件：匹配到规则但未批准权限 → 动作被拒 ----------
+@pytest.mark.asyncio
+async def test_declarative_action_denied_without_approved_permission(env):
+    mgr, repo, sender, tmp = env
+    _deploy(tmp, "declarative_plugin")
+    mgr.discover()
+    # 只批准 read_message（事件投递），不批准 send_message（动作执行被拒）
+    ok, msg = await mgr.enable("declarative_plugin", approved_permissions=["read_message"])
+    assert ok, msg
+    summary = await mgr.dispatch_event("message", {"group_id": 7, "user_id": 9, "text": "hello world"})
+    assert summary and any(s["action"] == "send_message" for s in summary)
+    assert all(s["denied"] is True and s["ok"] is False for s in summary)
+    assert sender.sent == []
+
+
+# ---------- 保护级别 unsafe 也不豁免权限 ----------
+@pytest.mark.asyncio
+async def test_unsafe_level_still_enforces_permissions(env):
+    mgr, repo, sender, tmp = env
+    _deploy(tmp, "declarative_plugin")
+    mgr.discover()
+    ok, msg = await mgr.enable("declarative_plugin",
+                               approved_permissions=["read_message"], protection="unsafe")
+    assert ok, msg
+    summary = await mgr.dispatch_event("message", {"group_id": 3, "user_id": 4, "text": "hello there"})
+    assert summary and all(s["denied"] is True for s in summary)
+    assert sender.sent == []

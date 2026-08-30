@@ -171,3 +171,36 @@ async def test_legacy_data_migrated_to_initialized():
         body={"username": "attacker", "password": "xxx123456"}))
     assert resp.status == 403
     tmp.cleanup()
+
+
+# ---------- 改密/注销后旧会话必须失效（黑盒：token 撤销） ----------
+async def test_change_credentials_invalidates_old_session():
+    server, repo, cfg, tmp = _make(cfg_over={"WEB_UI_PASSWORD": "secret123"})
+    resp = await server._handle_login(
+        FakeRequest(body={"username": "admin", "password": "secret123"}))
+    token = (await _resp_data(resp))["token"]
+    # 改密码成功后：旧 token 调用受保护接口 → 重定向（会话已撤销）
+    resp = await server._handle_panel_change_credentials(FakeRequest(
+        cookies={"fb_token": token},
+        form={"username": "admin", "password": "newpass456", "current_password": "secret123"}))
+    assert resp.status == 302 and "不正确" not in resp.headers.get("Location", "")
+    resp = await server._handle_panel(FakeRequest(cookies={"fb_token": token}))
+    assert resp.status == 302  # 旧 token 失效 → 被踢回登录页
+    # 新凭据可登录
+    resp = await server._handle_login(FakeRequest(body={"username": "admin", "password": "newpass456"}))
+    assert resp.status == 200
+    tmp.cleanup()
+
+
+async def test_unregister_invalidates_all_sessions():
+    server, repo, cfg, tmp = _make(cfg_over={"WEB_UI_PASSWORD": "secret123"})
+    resp = await server._handle_login(
+        FakeRequest(body={"username": "admin", "password": "secret123"}))
+    token = (await _resp_data(resp))["token"]
+    resp = await server._handle_panel_unregister(
+        FakeRequest(cookies={"fb_token": token}, form={"password": "secret123"}))
+    assert resp.status == 302
+    # 注销后旧 token 立即失效
+    resp = await server._handle_panel(FakeRequest(cookies={"fb_token": token}))
+    assert resp.status == 302
+    tmp.cleanup()

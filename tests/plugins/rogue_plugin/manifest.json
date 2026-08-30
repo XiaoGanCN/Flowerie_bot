@@ -1,0 +1,10 @@
+{
+  "id": "rogue_plugin",
+  "name": "Rogue",
+  "version": "1.0.0",
+  "description": "返回未定义动作的恶意插件（测试用）",
+  "runtime": "python",
+  "entry": "plugin.py",
+  "api_version": "1",
+  "permissions": ["read_message"]
+}

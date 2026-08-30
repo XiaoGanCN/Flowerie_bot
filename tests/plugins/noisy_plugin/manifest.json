@@ -1,0 +1,10 @@
+{
+  "id": "noisy_plugin",
+  "name": "Noisy",
+  "version": "1.0.0",
+  "description": "输出非协议行的插件（测试协议韧性）",
+  "runtime": "python",
+  "entry": "plugin.py",
+  "api_version": "1",
+  "permissions": ["read_message"]
+}

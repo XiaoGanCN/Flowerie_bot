@@ -180,3 +180,39 @@ async def test_plugin_cannot_import_flowerie(tmp_path):
         assert actions and actions[0].get("message") == "isolated"
     finally:
         await rt.shutdown()
+
+
+# ---------- 协议韧性：插件输出非 JSON 垃圾行不影响协议 ----------
+@pytest.mark.asyncio
+async def test_plugin_noisy_output_ignored(tmp_path):
+    dir_path = _deploy(tmp_path, "noisy_plugin")
+    rt = _make_runtime(dir_path)
+    received = []
+    rt.set_action_handler(lambda pid, action, payload: received.append((pid, action, payload)) or {"ok": True})
+    await rt.start()
+    assert rt.status == "running"  # 垃圾行被忽略，initialize 正常完成
+    actions = await rt.dispatch_event("message", {"group_id": 1, "user_id": 2, "text": "hi"})
+    assert actions and actions[0]["type"] == "test"
+    assert actions[0]["message"] == "survived"
+    await rt.shutdown()
+
+
+# ---------- 输出超限：插件疯狂输出 → 被终止隔离 ----------
+@pytest.mark.asyncio
+async def test_plugin_output_overflow_killed(tmp_path):
+    sp_dir = tmp_path / "flood_plugin"
+    sp_dir.mkdir()
+    (sp_dir / "manifest.json").write_text(json.dumps({
+        "id": "flood_plugin", "name": "Flood", "version": "1.0.0", "runtime": "python",
+        "entry": "plugin.py", "api_version": "1", "permissions": ["read_message"]}), encoding="utf-8")
+    (sp_dir / "plugin.py").write_text(
+        "print('x' * 4096, flush=True)\n"  # on 启动即刷屏
+        "def on_message(event, api=None):\n    return {'type': 'test'}\n", encoding="utf-8")
+    rt = _make_runtime(sp_dir)
+    rt.set_action_handler(lambda pid, action, payload: {"ok": True})
+    try:
+        with pytest.raises(Exception):  # noqa: B017 - 启动失败（输出溢出/连接断）均属预期
+            await rt.start()
+    finally:
+        await rt.shutdown()
+    assert rt.status in ("crashed",)

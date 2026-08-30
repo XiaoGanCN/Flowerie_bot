@@ -172,3 +172,25 @@ async def test_upload_rejects_oversize(tmp_path):
     location = unquote(resp.headers.get("Location", ""))
     assert "err=1" in location
     assert "大小上限" in location
+
+
+# ---------- URL 安装黑盒：内网/回环 URL 一律拒绝（SSRF），不触碰网络 ----------
+async def test_install_url_ssrf_rejected(tmp_path):
+    server, mgr, repo, cfg, tmp = _make(tmp_path)
+    token = await _login(server)
+    # 回环地址：SSRF 校验拒绝（无需真实网络）
+    resp = await server._handle_panel_plugins_install_url(
+        FakeRequest(form={"url": "http://127.0.0.1:8080/evil.zip"}, **_auth(token)))
+    assert resp.status == 302
+    from urllib.parse import unquote
+    location = unquote(resp.headers.get("Location", ""))
+    assert "err=1" in location
+    assert "SSRF" in location or "不合法" in location
+    assert repo.list_plugins() == []
+    # 非法 scheme / 无扩展名同样拒绝
+    resp = await server._handle_panel_plugins_install_url(
+        FakeRequest(form={"url": "file:///etc/passwd"}, **_auth(token)))
+    assert "err=1" in unquote(resp.headers.get("Location", ""))
+    resp = await server._handle_panel_plugins_install_url(
+        FakeRequest(form={"url": "https://example.com/noext"}, **_auth(token)))
+    assert "err=1" in unquote(resp.headers.get("Location", ""))
