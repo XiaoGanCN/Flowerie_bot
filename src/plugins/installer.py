@@ -214,7 +214,9 @@ class PluginInstaller:
                             f"解压后总大小超过上限（>{self.max_unzipped_bytes} 字节，拒绝 Zip Bomb）")
                     self._check_member(info)
                 # 定位 manifest.json（允许整体包一个顶层目录：pkg/manifest.json）
-                manifest_infos = [i for i in infos if _norm_name(i.filename) == "manifest.json"]
+                manifest_infos = [i for i in infos
+                                  if _norm_name(i.filename) == "manifest.json"
+                                  or _norm_name(i.filename).endswith("/manifest.json")]
                 manifest_info = None
                 prefix = ""
                 candidates = sorted(manifest_infos, key=lambda i: i.filename.count("/"))
@@ -286,9 +288,13 @@ class PluginInstaller:
 
     def _check_member(self, info: zipfile.ZipInfo) -> None:
         """成员名/链接/深度检查（提取前）。"""
-        name = _norm_name(info.filename)
-        if not name or name.startswith("/") or "\\" in name or ":" in name:
-            raise PluginInstallError(f"非法成员名（绝对路径/反斜杠）: {info.filename}")
+        raw = str(info.filename)
+        name = _norm_name(raw)
+        # 反斜杠必须在归一化前检查（_norm_name 会把 \\ 转成 /）
+        if "\\" in raw:
+            raise PluginInstallError(f"非法成员名（反斜杠）: {info.filename}")
+        if not name or name.startswith("/") or ":" in name:
+            raise PluginInstallError(f"非法成员名（绝对路径）: {info.filename}")
         if ".." in name.split("/"):
             raise PluginInstallError(f"路径穿越被拒绝（ZIP Slip）: {info.filename}")
         if name.startswith("./"):

@@ -50,7 +50,7 @@ async def test_minimal_python_plugin_executes(tmp_path):
         assert actions[0]["event"] == "message"
         # 插件进程独立：直接验证插件不可见 Flowerie 内部模块（隔离标志）
         out = await rt.request("health", {}, timeout=5.0)
-        assert out.get("result", {}).get("ok") is True
+        assert out.get("ok") is True
     finally:
         await rt.shutdown()
     assert rt.proc is None

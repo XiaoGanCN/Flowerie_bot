@@ -165,8 +165,10 @@ async def test_upload_rejects_oversize(tmp_path):
         filename = "big.zip"
         file = type("R", (), {"read": lambda self, n=None: big})()
 
+    from urllib.parse import unquote
     resp = await server._handle_panel_plugins_upload(
         FakeRequest(form={"plugin_file": _File()}, **_auth(token)))
     assert resp.status == 302
-    assert "err=1" in resp.headers.get("Location", "")
-    assert "大小上限" in resp.headers.get("Location", "")
+    location = unquote(resp.headers.get("Location", ""))
+    assert "err=1" in location
+    assert "大小上限" in location

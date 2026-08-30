@@ -159,7 +159,7 @@ class PluginRuntime:
 
     # ---------- 命令构造 ----------
     def _build_command(self) -> tuple:
-        runner_dir = os.path.dirname(os.path.abspath(__file__))
+        runner_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runner")
         env = {k: os.environ.get(k, "") for k in _ENV_WHITELIST if k in os.environ}
         if not env.get("PATH"):
             env["PATH"] = "/usr/bin:/bin"
@@ -214,7 +214,8 @@ class PluginRuntime:
                 self._pending.pop(req_id, None)
             if isinstance(result, dict) and result.get("error"):
                 raise RuntimeError(f"plugin {self.plugin_id} {method} 返回错误: {result['error']}")
-            return result if isinstance(result, dict) else {}
+            payload_out = result.get("result") if isinstance(result, dict) else None
+            return payload_out if isinstance(payload_out, dict) else {}
 
     async def dispatch_event(self, event: str, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         """投递事件，返回插件动作列表（已截断到上限）。"""
@@ -274,7 +275,8 @@ class PluginRuntime:
         finally:
             if not self._shutting_down and self.proc is not None:
                 self.status = "crashed"
-                self._notify_exit("process_exit", 0)
+                self._notify_exit("process_exit",
+                                  self.proc.returncode if self.proc.returncode is not None else 0)
 
     async def _handle_action_line(self, msg: Dict[str, Any]) -> None:
         """执行插件 action 请求并把结果写回插件（响应与请求互不阻塞）。"""
@@ -312,7 +314,7 @@ class PluginRuntime:
     async def health_check(self) -> Dict[str, Any]:
         try:
             result = await self.request("health", {}, timeout=5.0)
-            return {"ok": bool(result.get("result", {}).get("ok", True)), "status": self.status}
+            return {"ok": bool(result.get("ok", True)), "status": self.status}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "status": self.status, "error": type(e).__name__}
 

@@ -212,7 +212,7 @@ async def _fake_client_monkey(monkeypatch, resp, downloader):
         async def __aexit__(self, *a):
             return False
 
-        async def stream(self, *a, **k):
+        def stream(self, *a, **k):
             return resp
 
     monkeypatch.setattr(inst_mod, "validate_mcp_server_url", lambda u, allowed=None: (True, ""))
