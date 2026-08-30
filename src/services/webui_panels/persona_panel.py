@@ -38,13 +38,26 @@ class PersonaPanelMixin:
         persona_configs = [c for c in self.config_service.list_configs()
                            if c["key"] in ("PERSONA_DEFAULT", "MAX_PERSONA_PROMPT_LENGTH",
                                            "PERSONA_MAX_COUNT")]
+        # 管理员补充发言规则（全局文本；每行一条，热更新立即生效）
+        admin_rules = list(getattr(self.config, "ADMIN_RESPONSE_RULES", None) or [])
+        rules_text = "\n".join(str(r) for r in admin_rules)
         return render_persona_tab(
             personas, global_id, bindings,
             edit_persona=edit_persona, new=new_persona, enabled=True,
             default_persona_id=default_id, default_persona_name=default_name,
             global_prompt=global_prompt, group_prompt=group_prompt, prompt_gid=prompt_gid,
             persona_configs=persona_configs,
+            admin_rules=admin_rules, rules_text=rules_text,
         )
+
+    async def _handle_panel_persona_admin_rules(self, request: web.Request) -> web.Response:
+        """保存管理员补充发言规则（ConfigService 双写 + 热更新，立即生效）。"""
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        raw = str(form.get("rules", ""))
+        ok, message = self.config_service.update("ADMIN_RESPONSE_RULES", raw)
+        return web.HTTPFound(f"/panel?tab=persona&msg={quote(message)}&err={'1' if not ok else ''}")
 
     async def _handle_panel_persona_config(self, request: web.Request) -> web.Response:
         """保存人格配置（PERSONA_*，复用 ConfigService 双写 + 热更新）。"""

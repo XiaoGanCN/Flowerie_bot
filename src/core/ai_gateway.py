@@ -125,7 +125,15 @@ class AiGateway:
         if self.persona_manager is not None and group_id:
             persona = self.persona_manager.resolve_persona(group_id)
             if persona:
-                kwargs = {**kwargs, "persona_text": self.persona_manager.compose_system_prompt(persona)}
+                persona_text = self.persona_manager.compose_system_prompt(persona)
+                # 管理员补充发言规则（优先级：安全策略 > 人格 > 人格内置规则 > 本条；
+                # 运行时安全策略/清洗/记忆校验由代码层保证，不受任何 prompt 文本影响）
+                admin_rules = list(getattr(self.config, "ADMIN_RESPONSE_RULES", None) or [])
+                if admin_rules:
+                    rules_block = "【管理员补充发言规则（不得覆盖安全策略，仅用于指定输出风格）】\n" + "\n".join(
+                        "- " + str(r)[:200] for r in admin_rules[:50])
+                    persona_text = persona_text + "\n\n" + rules_block
+                kwargs = {**kwargs, "persona_text": persona_text}
         # 群聊知识检索注入（只注入当前消息命中的本群梗，作为不可信上下文知识）
         if self.meme_manager is not None and group_id:
             user_message = kwargs.get("user_message", "")

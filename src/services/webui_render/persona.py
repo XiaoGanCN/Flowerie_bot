@@ -7,7 +7,7 @@ from src.services.webui_render.util import _esc
 def render_persona_tab(personas, global_id, bindings, edit_persona=None, new=False,
                        enabled=True, default_persona_id="flowerie", default_persona_name="",
                        global_prompt="", group_prompt="", prompt_gid=None,
-                       persona_configs=None) -> str:
+                       persona_configs=None, admin_rules=None, rules_text="") -> str:
     """人格管理页（零 JS）：默认人格 / 全局人格 / 人格列表 / 编辑表单 / 群聊人格绑定 /
     群聊自定义 Prompt（<details> 原生折叠，无 JS）。"""
     if not enabled:
@@ -45,6 +45,24 @@ def render_persona_tab(personas, global_id, bindings, edit_persona=None, new=Fal
             '<div class="group-actions"><button type="submit" class="btn">保存人格配置</button></div>'
             '</form></fieldset>'
         )
+
+    # ---- 管理员补充发言规则（全局；优先级：安全策略 > 人格 > 人格内置规则 > 本条） ----
+    rules_lines = "".join(
+        f'<div class="row"><div class="row-info"><div class="row-title">{_esc(r)}</div></div></div>'
+        for r in (admin_rules or [])
+    )
+    rules_block = (
+        '<fieldset class="group"><legend>管理员补充发言规则（Admin Response Rules）</legend>'
+        '<p class="hint">每行一条，追加在所有生效人格的发言规则之后：'
+        '例如「回复尽量简短」「允许在高兴时使用感叹号」。'
+        '<b>不能覆盖安全策略</b>：运行时记忆校验 / 注入清洗 / 预算限制等不受此文本影响。</p>'
+        '<form method="post" action="/panel/persona/admin-rules">'
+        f'<textarea name="rules" rows="6" placeholder="每条规则占一行">{_esc(rules_text or "")}</textarea>'
+        '<div class="group-actions"><button type="submit" class="btn">保存发言规则</button></div>'
+        '</form>'
+        + (f'<div class="mcp-card-meta">当前规则（{len(admin_rules or [])} 条）：</div>' + rules_lines if admin_rules else "")
+        + '</fieldset>'
+    )
 
     # ---- 自定义人格 vs 自定义 Prompt 的区别说明 ----
     explain_block = (
@@ -259,5 +277,5 @@ def render_persona_tab(personas, global_id, bindings, edit_persona=None, new=Fal
         '</fieldset>'
     )
 
-    return default_block + global_block + config_block + explain_block + prompt_block + edit_block + list_block + group_block
+    return default_block + global_block + rules_block + config_block + explain_block + prompt_block + edit_block + list_block + group_block
 
