@@ -200,56 +200,71 @@ async def test_login_and_unauthorized(webapp):
     assert "token" in await _resp_data(resp)
 
 
-# ---------- 注册（账号持久化到 settings.db，登录优先于 .env） ----------
-async def test_register_and_login_with_registered_account(webapp):
+# ---------- 注册（Bootstrap Lock：仅未初始化时创建第一个管理员） ----------
+async def test_register_closed_when_initialized(webapp):
+    """.env 已配置管理员密码（=已初始化）：公开注册永久关闭 → 403，攻击者无法自建账号。"""
     server = webapp
-    # 首次注册需提供当前 .env 密码验证
     resp = await server._handle_register(FakeRequest(
-        body={"username": "boss", "password": "newpass123", "admin_password": "secret123"}))
+        body={"username": "attacker", "password": "newpass123"}))
+    assert resp.status == 403
+    # 攻击者登录自己（未被创建的）账号 → 401
+    resp = await server._handle_login(FakeRequest(body={"username": "attacker", "password": "newpass123"}))
+    assert resp.status == 401
+
+
+async def test_register_first_bootstrap_then_lock(webapp):
+    """未初始化 → 首次注册成功；再注册第二个 → 403（第二管理员被阻止）。"""
+    server = webapp
+    server.config_service.repository.delete_config("WEB_UI_USERNAME")
+    server.config_service.repository.delete_config("WEB_UI_PASSWORD")
+    server.config_service.repository.mark_bootstrap_uninitialized()
+    server.config.WEB_UI_PASSWORD = ""
+    assert server.config_service.admin_initialized() is False
+    resp = await server._handle_register(FakeRequest(
+        body={"username": "boss", "password": "newpass123"}))
     assert resp.status == 200
     # 用新注册账号登录成功
     resp = await server._handle_login(FakeRequest(body={"username": "boss", "password": "newpass123"}))
     assert resp.status == 200
-    assert "token" in await _resp_data(resp)
-    # 注册后以注册账号为准，旧 .env 账号不再可登录
-    resp = await server._handle_login(FakeRequest(body={"username": "admin", "password": "secret123"}))
-    assert resp.status == 401
-
-
-async def test_register_requires_current_password(webapp):
-    server = webapp
+    # 第二管理员：公开注册关闭（不再有"再注册一个"的机会）
     resp = await server._handle_register(FakeRequest(
-        body={"username": "hacker", "password": "newpass123", "admin_password": "wrong"}))
+        body={"username": "hacker", "password": "newpass123"}))
     assert resp.status == 403
 
 
-async def test_register_rate_limited_after_failures(webapp):
-    """注册接口共享登录限流：连续猜错当前密码 5 次后锁 IP（防暴力破解 admin_password）。"""
+async def test_register_requires_current_password(webapp):
+    """已初始化系统：注册一律 403（不再提供"带当前密码注册"的后门）。"""
+    server = webapp
+    resp = await server._handle_register(FakeRequest(
+        body={"username": "hacker", "password": "newpass123", "admin_password": "secret123"}))
+    assert resp.status == 403
+
+
+async def test_register_closed_does_not_count_rate_limit(webapp):
+    """已初始化后注册被 403 拒绝且不消耗登录限流（接口已关闭）。"""
     server = webapp
     for _ in range(5):
         resp = await server._handle_register(FakeRequest(
             remote="10.0.0.9",
-            body={"username": "hacker", "password": "newpass123", "admin_password": "wrong"}))
+            body={"username": "hacker", "password": "newpass123"}))
         assert resp.status == 403
-    # 第 6 次即使密码正确也被限流
-    resp = await server._handle_register(FakeRequest(
-        remote="10.0.0.9",
-        body={"username": "boss", "password": "newpass123", "admin_password": "secret123"}))
-    assert resp.status == 429
-    # 其他 IP 不受影响
-    resp = await server._handle_register(FakeRequest(
-        remote="10.0.0.10",
-        body={"username": "boss", "password": "newpass123", "admin_password": "secret123"}))
+    # 登录限流不受影响：管理员仍可登录
+    resp = await server._handle_login(FakeRequest(
+        remote="10.0.0.9", body={"username": "admin", "password": "secret123"}))
     assert resp.status == 200
 
 
 async def test_register_validates_username_password(webapp):
+    """未初始化时：用户名/密码格式校验（400）。"""
     server = webapp
+    server.config_service.repository.delete_config("WEB_UI_USERNAME")
+    server.config_service.repository.delete_config("WEB_UI_PASSWORD")
+    server.config.WEB_UI_PASSWORD = ""
     resp = await server._handle_register(FakeRequest(
-        body={"username": "ab", "password": "newpass123", "admin_password": "secret123"}))
+        body={"username": "ab", "password": "newpass123"}))
     assert resp.status == 400  # 用户名太短
     resp = await server._handle_register(FakeRequest(
-        body={"username": "boss", "password": "123", "admin_password": "secret123"}))
+        body={"username": "boss", "password": "123"}))
     assert resp.status == 400  # 密码太短
 
 
@@ -287,15 +302,16 @@ async def test_panel_login_sets_cookie_and_enters(webapp):
     assert "用户名或密码错误" in await _resp_text(resp3)
 
 
-async def test_panel_register_via_form(webapp):
+async def test_panel_register_closed_via_form(webapp):
+    """已初始化：面板注册页显示「注册已关闭」，不再有表单。"""
     server = webapp
+    text = await _resp_text(await server._handle_panel_register_page(FakeRequest()))
+    assert "注册已关闭" in text
+    assert 'name="username"' not in text
     resp = await server._handle_panel_register(FakeRequest(
-        form={"username": "boss", "password": "newpass123", "admin_password": "secret123"}))
+        form={"username": "boss", "password": "newpass123"}))
     assert resp.status == 200
-    assert "注册成功" in await _resp_text(resp)
-    # 新账号走面板登录成功
-    resp2 = await server._handle_panel_login(FakeRequest(form={"username": "boss", "password": "newpass123"}))
-    assert resp2.status == 302
+    assert "注册已关闭" in await _resp_text(resp)
 
 
 async def test_panel_save_config_via_form(webapp):

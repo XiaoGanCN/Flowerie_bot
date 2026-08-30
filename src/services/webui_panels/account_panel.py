@@ -90,6 +90,7 @@ class AccountPanelMixin:
 
         只清除管理凭据（settings.db + .env 的 WEB_UI_USERNAME / WEB_UI_PASSWORD），
         其他环境配置（API Key 等）一律不动；完成后登出并回到登录页。
+        注意：注销 = 显式 Reset → 系统回到 UNINITIALIZED（允许重新首次注册）。
         """
         if not self._check_token(request):
             return web.HTTPFound("/panel")
@@ -107,3 +108,23 @@ class AccountPanelMixin:
         resp = web.HTTPFound("/panel?msg=" + quote(message))
         resp.del_cookie("fb_token")
         return resp
+
+    async def _handle_panel_change_credentials(self, request: web.Request) -> web.Response:
+        """登录态下修改管理账号（Bootstrap Lock 下的唯一改密路径）。
+
+        需要当前密码二次验证；不改变系统初始化状态（保持 INITIALIZED）。
+        """
+        if not self._check_token(request):
+            return web.HTTPFound("/panel")
+        form = await request.post()
+        username = str(form.get("username", ""))
+        password = str(form.get("password", ""))
+        current = str(form.get("current_password", "") or "")
+        ok, message = self.config_service.change_credentials(username, password, current)
+        if ok:
+            # 改密后强制重新登录（旧 token 保留会破坏"改密即撤销会话"的直觉）
+            self._tokens.clear()
+            resp = web.HTTPFound("/panel?msg=" + quote(message))
+            resp.del_cookie("fb_token")
+            return resp
+        return web.HTTPFound(f"/panel?tab=account&msg={quote(message)}&err=1")

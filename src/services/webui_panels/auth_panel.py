@@ -35,13 +35,17 @@ class AuthPanelMixin:
         return web.json_response({"error": "用户名或密码错误"}, status=401)
 
     async def _handle_register(self, request: web.Request) -> web.Response:
-        """注册/修改管理账号：账号密码持久化到 settings.db，之后登录不再依赖 .env。
+        """注册（仅 Bootstrap：系统从未初始化管理员账号时创建第一个管理员）。
 
-        安全护栏：
-        - 若当前已有生效密码（.env 或已注册），必须提供当前管理员密码验证；
-          仅当完全未配置密码（首次搭建）时才允许免验证注册
-        - 与登录共享限流：当前密码猜错也计入失败，连续 5 次锁 IP 1 分钟（防暴力破解）
+        安全设计（Bootstrap Lock）：
+        - 一旦系统已初始化（.env 或 settings.db 存在管理凭据），公开注册永久关闭 → 403
+        - 未初始化时无需任何口令验证（首次搭建）；并发注册由原子 CAS 保证仅一个成功
+        - 初始化后改账号一律走登录态 /panel/account/credentials（需当前密码）
         """
+        if self.config_service.admin_initialized():
+            return web.json_response(
+                {"error": "系统已完成初始化，公开注册已关闭（攻击者无法再自建管理员账号）"},
+                status=403)
         ip = request.remote or "unknown"
         if self._login_blocked(ip):
             return web.json_response({"error": "尝试过多，请稍后再试"}, status=429)
@@ -51,11 +55,6 @@ class AuthPanelMixin:
             return web.json_response({"error": "请求格式错误"}, status=400)
         username = str(body.get("username", ""))
         password = str(body.get("password", ""))
-        admin_password = str(body.get("admin_password", ""))
-        eff_user, eff_pass = self._effective_credentials()
-        if eff_pass and not self._verify_admin(eff_user, admin_password):
-            self._record_login_fail(ip)
-            return web.json_response({"error": "当前管理员密码不正确，无法注册"}, status=403)
         ok, message = self.config_service.register_user(username, password)
         if not ok:
             return web.json_response({"error": message}, status=400)
@@ -92,7 +91,7 @@ class AuthPanelMixin:
         if not self._check_token(request):
             return web.json_response({"error": "未认证"}, status=401)
         status = {
-            "version": "1.1.0",
+            "version": "1.2.0",
             "uptime_seconds": int(time.time() - self._started_at),
             "config_count": len(self.config_service.list_configs()),
         }
@@ -138,9 +137,19 @@ class AuthPanelMixin:
                             content_type="text/html", charset="utf-8")
 
     async def _handle_panel_register_page(self, request: web.Request) -> web.Response:
+        if self.config_service.admin_initialized():
+            return web.Response(text=render_register_page(
+                "系统已完成初始化，公开注册已关闭。修改账号请用现有账号登录后，"
+                "到「用户状态」页操作。", ok=False, closed=True),
+                content_type="text/html", charset="utf-8")
         return web.Response(text=render_register_page(), content_type="text/html", charset="utf-8")
 
     async def _handle_panel_register(self, request: web.Request) -> web.Response:
+        """Bootstrap 注册（同 /api/register）：仅系统未初始化时可用。"""
+        if self.config_service.admin_initialized():
+            return web.Response(text=render_register_page(
+                "系统已完成初始化，公开注册已关闭。", ok=False, closed=True),
+                content_type="text/html", charset="utf-8")
         ip = request.remote or "unknown"
         if self._login_blocked(ip):
             return web.Response(text=render_register_page("尝试过多，请稍后再试", ok=False),
@@ -148,14 +157,8 @@ class AuthPanelMixin:
         form = await request.post()
         username = str(form.get("username", ""))
         password = str(form.get("password", ""))
-        admin_password = str(form.get("admin_password", ""))
-        eff_user, eff_pass = self._effective_credentials()
-        if eff_pass and not self._verify_admin(eff_user, admin_password):
-            self._record_login_fail(ip)
-            return web.Response(text=render_register_page("当前管理员密码不正确", ok=False),
-                                content_type="text/html", charset="utf-8")
         ok, message = self.config_service.register_user(username, password)
-        return web.Response(text=render_register_page(message, ok=ok),
+        return web.Response(text=render_register_page(message, ok=ok, closed=False),
                             content_type="text/html", charset="utf-8")
 
     async def _handle_panel_logout(self, request: web.Request) -> web.Response:

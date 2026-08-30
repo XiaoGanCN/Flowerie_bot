@@ -18,12 +18,18 @@ from tests.test_config_service import FakeSettings
 from tests.test_web_ui import FakeRequest, _resp_data
 
 
-def _make_server():
+def _make_server(pwd: str = "legacy-env-pass"):
     tmp = tempfile.TemporaryDirectory()
     repo = SettingsRepository(os.path.join(tmp.name, "s.db"))
-    cfg = FakeSettings(WEB_UI_USERNAME="admin", WEB_UI_PASSWORD="legacy-env-pass")
+    cfg = FakeSettings(WEB_UI_USERNAME="admin", WEB_UI_PASSWORD=pwd)
     svc = ConfigService(cfg, repo)
     server = WebUIServer(cfg, svc)
+    return server, repo, cfg, tmp
+
+
+def _bootstrap_server():
+    """未初始化状态的 server（首次注册路径）。"""
+    server, repo, cfg, tmp = _make_server(pwd="")
     return server, repo, cfg, tmp
 
 
@@ -53,15 +59,19 @@ def test_verify_corrupt_hash_safe():
     assert verify_password("x", "scrypt$1$2$3$zz$yy") is False
 
 
-# ---------- 注册：只存哈希 ----------
+# ---------- 注册：只存哈希（仅未初始化状态可用） ----------
 def test_register_stores_hash_only():
-    server, repo, cfg, tmp = _make_server()
+    server, repo, cfg, tmp = _bootstrap_server()
+    assert server.config_service.admin_initialized() is False
     ok, msg = server.config_service.register_user("boss", "newpass123")
     assert ok and "注册成功" in msg
     stored = repo.get_config("WEB_UI_PASSWORD")
     assert is_hashed_password(stored)
     assert "newpass123" not in stored
     assert verify_password("newpass123", stored)
+    # 注册后公开注册关闭：第二次注册被拒（Bootstrap Lock）
+    ok2, msg2 = server.config_service.register_user("hacker", "another123")
+    assert not ok2 and "关闭" in msg2
     tmp.cleanup()
 
 
@@ -103,18 +113,30 @@ async def test_env_plaintext_login_still_works():
     tmp.cleanup()
 
 
-# ---------- 注册的 admin_password 校验（同样走哈希/迁移） ----------
-async def test_register_requires_current_hashed_password():
+# ---------- 已初始化后：公开注册关闭；改密走登录态 change_credentials ----------
+async def test_register_closed_when_initialized():
     server, repo, cfg, tmp = _make_server()
-    server.config_service.register_user("boss", "newpass123")
-    # 用正确当前密码（哈希校验）注册新账号成功
+    # 已初始化（.env 密码存在）：注册一律 403；即使带当前密码也不能自建第二账号
     resp = await server._handle_register(FakeRequest(
-        body={"username": "boss2", "password": "another123", "admin_password": "newpass123"}))
-    assert resp.status == 200
-    # 错误当前密码被拒
-    resp = await server._handle_register(FakeRequest(
-        body={"username": "hacker", "password": "x123456", "admin_password": "wrong"}))
+        body={"username": "boss2", "password": "another123", "admin_password": "legacy-env-pass"}))
     assert resp.status == 403
+
+
+async def test_change_credentials_updates_hash():
+    """登录态改密：只换凭据，状态保持 INITIALIZED（change_credentials 需当前密码）。"""
+    server, repo, cfg, tmp = _make_server(pwd="")
+    ok, _ = server.config_service.register_user("boss", "newpass123")
+    assert ok
+    ok, msg = server.config_service.change_credentials("boss2", "another123", "wrong")
+    assert not ok and "不正确" in msg
+    ok, msg = server.config_service.change_credentials("boss2", "another123", "newpass123")
+    assert ok
+    stored = repo.get_config("WEB_UI_PASSWORD")
+    assert is_hashed_password(stored)
+    assert verify_password("another123", stored)
+    # 状态仍 INITIALIZED：公开注册不回开
+    assert server.config_service.admin_initialized() is True
+    tmp.cleanup()
     tmp.cleanup()
 
 

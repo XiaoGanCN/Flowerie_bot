@@ -34,6 +34,14 @@ def _make_stack(tmp):
     return config, repo, svc, server, pmgr, mmgr
 
 
+def _plant_credentials(svc, user, pwd):
+    """直接种入管理凭据（hash_password），绕过 register 的 Bootstrap 状态限制——
+    这些测试聚焦注销/改密流程，而非首次注册。"""
+    from src.services.config_service import hash_password
+    svc.repository.set_config("WEB_UI_USERNAME", user)
+    svc.repository.set_config("WEB_UI_PASSWORD", hash_password(pwd))
+
+
 async def _login(server):
     resp = await server._handle_panel_login(
         FakeRequest(form={"username": "admin", "password": "secret123"}))
@@ -560,9 +568,8 @@ async def test_knowledge_config_moved_to_knowledge_tab():
 async def test_unregister_clears_only_credentials():
     with tempfile.TemporaryDirectory() as td:
         _, _, svc, server, _, _ = _make_stack(td)
-        # 预置：注册账号（写入 settings.db）+ 一条与账号无关的配置（.env + db 双写）
-        ok, _ = svc.register_user("admin2", "pass123")
-        assert ok
+        # 预置：种入注册凭据（写入 settings.db）+ 一条与账号无关的配置（.env + db 双写）
+        _plant_credentials(svc, "admin2", "pass123")
         svc.update("MAX_REPLY_LENGTH", "42")
         assert svc.repository.get_config("WEB_UI_USERNAME") == "admin2"
         # 注册后凭据变为 admin2/pass123，用它登录
@@ -593,7 +600,7 @@ async def test_unregister_clears_only_credentials():
 async def test_unregister_requires_current_password():
     with tempfile.TemporaryDirectory() as td:
         _, _, svc, server, _, _ = _make_stack(td)
-        svc.register_user("admin2", "pass123")
+        _plant_credentials(svc, "admin2", "pass123")
         resp = await server._handle_panel_login(FakeRequest(
             form={"username": "admin2", "password": "pass123"}))
         cookie = resp.cookies.get("fb_token").value
@@ -626,7 +633,7 @@ async def test_unregister_message_mentions_restart_note():
     """注销提示包含 WEB_UI_ENABLED 启动说明。"""
     with tempfile.TemporaryDirectory() as td:
         _, _, svc, server, _, _ = _make_stack(td)
-        svc.register_user("admin2", "pass123")
+        _plant_credentials(svc, "admin2", "pass123")
         resp = await server._handle_panel_login(FakeRequest(
             form={"username": "admin2", "password": "pass123"}))
         cookie = resp.cookies.get("fb_token").value
@@ -643,7 +650,7 @@ async def test_account_tab_renders_all_status():
     """用户状态页：当前管理员 / 注销表单 / 服务器状态 / MCP 状态 / API 连接状态。"""
     with tempfile.TemporaryDirectory() as td:
         _, _, svc, server, _, _ = _make_stack(td)
-        svc.register_user("admin2", "pass123")
+        _plant_credentials(svc, "admin2", "pass123")
         resp = await server._handle_panel_login(FakeRequest(
             form={"username": "admin2", "password": "pass123"}))
         cookie = resp.cookies.get("fb_token").value

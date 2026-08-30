@@ -9,13 +9,28 @@ def render_account_tab(username, credential_source, system_info, mcp_status, api
     if not enabled:
         return '<div class="msg err">用户状态页未接入</div>'
 
-    # ---- 账户信息 + 注销 ----
+    # ---- 账户信息 + 修改账号 + 注销 ----
     account_block = (
         '<fieldset class="group"><legend>当前管理员</legend>'
         '<div class="row"><label class="row-info"><span class="row-title">登录账号</span>'
         '<span class="row-key">username</span></label>'
         f'<div class="row-control"><code>{_esc(username)}</code>'
         f'<span class="hint">凭据来源：{_esc(credential_source)}</span></div></div>'
+        '<div class="row"><label class="row-info"><span class="row-title">修改登录账号</span>'
+        '<span class="row-key">credentials</span></label>'
+        '<div class="row-control">'
+        '<form method="post" action="/panel/account/credentials">'
+        '<div class="row-control" style="flex-direction:column;gap:8px;align-items:stretch">'
+        '<input type="text" name="username" placeholder="新用户名（3~32 字符）" '
+        'autocomplete="username" required>'
+        '<input type="password" name="password" placeholder="新密码（至少 6 位）" '
+        'autocomplete="new-password" required>'
+        '<input type="password" name="current_password" placeholder="当前密码（用于确认）" '
+        'autocomplete="current-password" required>'
+        '<button type="submit" class="btn">修改账号</button></div>'
+        '<span class="hint">已初始化的系统不允许公开注册；此处是唯一的账号修改入口'
+        '（需当前密码，改密后需重新登录）。</span>'
+        '</form></div></div>'
         '<div class="row"><label class="row-info"><span class="row-title">注销账号</span>'
         '<span class="row-key">unregister</span></label>'
         '<div class="row-control">'
@@ -26,6 +41,7 @@ def render_account_tab(username, credential_source, system_info, mcp_status, api
         '<button type="submit" class="btn danger">注销账号</button></div>'
         '<span class="hint">注销将<strong>只清除管理账号与密码</strong>（settings.db 与 .env 中的 '
         '<code>WEB_UI_USERNAME</code>/<code>WEB_UI_PASSWORD</code>），其他环境配置（API Key 等）一律不动；'
+        '注销=显式重置，系统回到 UNINITIALIZED（可重新首次注册）。'
         '若 <code>WEB_UI_ENABLED=true</code>，注销后需重新配置密码或注册才能登录。</span>'
         '</form></div></div></fieldset>'
     )
