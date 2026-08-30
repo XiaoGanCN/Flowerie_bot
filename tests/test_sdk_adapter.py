@@ -64,6 +64,20 @@ async def test_adapter_send_domain_message():
 
 
 @pytest.mark.asyncio
+async def test_adapter_reply_no_duplicate_segment():
+    """BotMessage 自带 reply_id 且显式传 reply_id：reply 段唯一（不双发）。"""
+    sender = FakeSender()
+    adapter = OneBotAdapter(sender)
+    await adapter.send("group", 1, BotMessage("hi").reply(77), reply_id=77)
+    segs = sender.last[2]
+    replys = [s for s in segs if s["type"] == "reply"]
+    assert len(replys) == 1 and replys[0]["data"]["id"] == 77
+    # str 场景显式 reply_id：正常补段
+    await adapter.send("group", 1, "plain", reply_id=88)
+    assert sender.last[2][0] == {"type": "reply", "data": {"id": 88}}
+
+
+@pytest.mark.asyncio
 async def test_adapter_error_semantics():
     class FailSender(FakeSender):
         async def send_msg_raw(self, target, target_id, message, reply_id=None, retries=2):

@@ -37,12 +37,15 @@ class OneBotAdapter(BotAdapter):
     # ---------- BotAdapter 实现 ----------
     async def send(self, target: str, target_id: int, message,
                    reply_id: Optional[int] = None) -> int:
+        # reply 段唯一来源：BotMessage 自带 reply_id 优先；否则用显式 reply_id。
+        # （绝不双段：BotMessage 场景 reply 段由 to_bot_message_payload 输出）
+        if isinstance(message, BotMessage) and message.reply_id is not None:
+            reply_id = message.reply_id
         payload = to_bot_message_payload(message)
-        # reply 段统一由下层补（BotMessage 已含 reply_id 时 to_bot_message_payload 会输出；
-        # str 场景在首部补 reply 段）
         if reply_id is not None:
             if isinstance(payload, list):
-                payload = [{"type": "reply", "data": {"id": int(reply_id)}}] + payload
+                if not (isinstance(message, BotMessage) and message.reply_id is not None):
+                    payload = [{"type": "reply", "data": {"id": int(reply_id)}}] + payload
             else:
                 payload = [{"type": "reply", "data": {"id": int(reply_id)}},
                            {"type": "text", "data": {"text": str(payload)}}]

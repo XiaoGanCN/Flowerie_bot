@@ -122,4 +122,15 @@ install-termux 版本脚注）
 
 ## 19. Review（黑白盒独立审查）
 
-> 独立 review 结果见对话回复；发现项如已修复同步记录。
+方式：架构审计子代理（只读全量审计，产出 docs/sdk-audit.md）+ 主模型白盒深审
+（权限映射完整性 / 三层零 OneBot 依赖 / 正则边界 / 协议调试全链路）+ 黑盒端到端
+（sdk_plugin 仅经协议交互）。
+
+发现并修复（白盒深审）：
+- [中] `disable/uninstall` 未清理 `_matchers`（残留干扰重装）→ 已清（+测试）
+- [中] `adapter.send` 在 BotMessage 自带 reply_id 且显式传 reply_id 时**双 reply 段**
+  → 统一 reply 段唯一来源（+测试，绝不双段）
+- [低] 插件正则无 ReDoS 防护 → 已截断 200 字符 + 文档注明仅受信插件
+- ✅ 验证：24 个 action 权限映射完整；中层零 OneBot 字段/import；事件投递
+  payload 最小化（at_list≤20/images≤10/text≤2000）；matcher_register 幂等；
+  撤回白名单（仅本 bot 发送记录）；SDK 无网络/数据库直接依赖
