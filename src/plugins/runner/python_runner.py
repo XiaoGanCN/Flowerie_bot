@@ -71,6 +71,44 @@ class PluginApi:
     def log(self, level: str, message: str) -> Dict[str, Any]:
         return self._send_action("log", {"level": level, "message": message})
 
+    # ---------- SDK 动作（消息/群管/匹配注册；无需插件感知 OneBot payload） ----------
+    def send_reply(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("send_reply", payload)
+
+    def delete_message(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("delete_message", payload)
+
+    def get_message(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("get_message", payload)
+
+    def get_group_history(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("get_group_history", payload)
+
+    def get_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("get_context", payload)
+
+    def get_group_member(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("get_group_member", payload)
+
+    def get_group_members(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("get_group_members", payload)
+
+    def group_ban(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("group_ban", payload)
+
+    def group_kick(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("group_kick", payload)
+
+    def is_group_admin(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("is_group_admin", payload)
+
+    def is_group_owner(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("is_group_owner", payload)
+
+    def matcher_register(self, matchers: list) -> Dict[str, Any]:
+        """批量注册 Matcher（SDK 启动时调用；返回注册摘要）。"""
+        return self._send_action("matcher_register", {"matchers": list(matchers or [])})
+
 
 class PluginRunner:
     """协议主体：初始化模块 → 分发事件 → 处理 action 请求（请求-响应嵌套循环）。"""
@@ -132,10 +170,17 @@ class PluginRunner:
         if os.path.islink(entry_path):
             return "入口文件不能是符号链接"
         try:
+            # 插件目录加入 sys.path：插件可 import 同目录模块与自带的 flowerie_sdk 包
+            # （python -I 只清初始化路径，运行时 sys.path 修改仍有效）
+            plugin_dir = self.plugin_dir
+            if plugin_dir not in sys.path:
+                sys.path.insert(0, plugin_dir)
             spec = importlib.util.spec_from_file_location(
                 f"flowerie_plugin_{self.plugin_id}", entry_path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
+            # 注册到 sys.modules（供插件 SDK 与其他模块识别；隔离不影响）
+            sys.modules[module.__name__] = module
             self.module = module
             return None
         except Exception as e:  # noqa: BLE001
@@ -156,7 +201,16 @@ class PluginRunner:
         except (TypeError, ValueError):  # 内置函数等无签名：按 2 参调用
             call_args = args
         try:
-            return hook(*call_args)
+            result = hook(*call_args)
+            # SDK 模式：async handler（如 bot.route）——runner 无事件循环，
+            # 用 asyncio.run 执行；await 语义保证 reply/recall 等在钩子内完成
+            if inspect.isawaitable(result):
+                import asyncio
+                try:
+                    result = asyncio.run(result)
+                except Exception as e:  # noqa: BLE001
+                    return {"__error__": f"{type(e).__name__}: {e}"}
+            return result
         except Exception as e:  # noqa: BLE001
             return {"__error__": f"{type(e).__name__}: {e}"}
 
@@ -201,10 +255,14 @@ class PluginRunner:
         hook_name = None
         if event == "message":
             hook_name = "on_message"
-        elif event == "group_message":
-            hook_name = "on_group_message"
         elif event == "command":
             hook_name = "on_command"
+        elif event == "notice":
+            hook_name = "on_notice"
+        elif event == "request":
+            hook_name = "on_request"
+        elif event == "lifecycle":
+            hook_name = "on_lifecycle"
         if hook_name is None:
             return []
         result = self._call_hook(hook_name, event_obj, self.api)

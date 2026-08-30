@@ -419,3 +419,30 @@ async def test_declarative_regex_and_priority_stop(env):
     # stop=true 高优先级命中 → 仅有 regex 规则执行（Matcher 阻断低优先级规则）
     raws = [s.get("result", {}).get("raw_text", "") for s in summary]
     assert "regex hit" in raws and "prefix hit" not in raws
+
+
+# ---------- SDK 模式端到端：matcher 注册 → 命中投递（matched）→ 插件 reply ----------
+@pytest.mark.asyncio
+async def test_sdk_plugin_matcher_end_to_end(env):
+    mgr, repo, sender, tmp = env
+    _deploy(tmp, "sdk_plugin")
+    mgr.discover()
+    ok, msg = await mgr.enable("sdk_plugin",
+                               approved_permissions=["read_message", "send_message"])
+    assert ok, msg
+    # 等子进程就绪 + on_startup 完成 matcher 注册（重试直至注册表非空）
+    for _ in range(40):
+        if mgr._matchers.get("sdk_plugin"):
+            break
+        await asyncio.sleep(0.1)
+    assert mgr._matchers.get("sdk_plugin"), "SDK matcher 未注册"
+    # 命中事件：!hi 世界（command 匹配）→ 插件 SDK 内联回复（send_reply action）
+    await mgr.dispatch_event("message", {
+        "group_id": 7, "user_id": 9, "message_id": 100,
+        "text": "!hi 世界", "scope": "group"})
+    assert sender.sent and sender.sent[-1] == ("group", 7, "你好呀", 100)
+    # 未命中事件：不投递，也不会误回复（SDK 模式只投递匹配事件）
+    before = len(sender.sent)
+    summary2 = await mgr.dispatch_event("message", {
+        "group_id": 7, "user_id": 9, "message_id": 101, "text": "无关内容", "scope": "group"})
+    assert summary2 == [] and len(sender.sent) == before

@@ -13,6 +13,7 @@ from src.core.command_handler import CommandHandler
 from src.core.message_assembler import MessageAssembler
 from src.core.policy_engine import PolicyEngine
 from src.core.sanitizer import validate_memory_content
+from src.sdk.onebot.transformer import to_bot_event
 from src.models import GroupMessage
 from src.services.ai_client import AIClient
 from src.services.file_parser import FileParser
@@ -199,14 +200,14 @@ class MessageRouter:
                 for seg in message_array if isinstance(seg, dict) and seg.get("type") == "text"
             )
         payload = {
+            "post_type": str(data.get("post_type") or "unknown"),
+            "message_type": data.get("message_type") or "",
             "group_id": data.get("group_id"),
             "user_id": data.get("user_id"),
             "message_id": data.get("message_id"),
             "time": data.get("time"),
             "text": text[:2000],
         }
-        if data.get("message_type") == "group":
-            payload["message_type"] = "group"
         notice_type = data.get("notice_type")
         if notice_type:
             payload["notice_type"] = notice_type

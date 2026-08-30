@@ -24,6 +24,10 @@ from src.core.sanitizer import validate_memory_content
 from src.plugins.http_action import plugin_http_request, redact_url
 from src.plugins.installer import PluginInstaller, PluginInstallError
 from src.plugins.manifest import PluginManifest, PluginManifestError
+from src.sdk.bot import Bot
+from src.sdk.event import BotEvent
+from src.sdk.matcher import Matcher
+from src.sdk.onebot.adapter import OneBotAdapter
 from src.plugins.permissions import PermissionManager
 from src.plugins.runtime import PluginRuntime
 from src.repositories.settings_repository import SettingsRepository
@@ -44,7 +48,7 @@ class PluginManager:
     def __init__(self, config, repository: SettingsRepository,
                  sender: Optional[Any] = None, memory_manager: Optional[Any] = None,
                  state_provider: Optional[Callable[[str, Any], Optional[dict]]] = None,
-                 installer: Optional[PluginInstaller] = None):
+                 installer: Optional[PluginInstaller] = None, context_manager: Optional[Any] = None):
         self.config = config
         self.repository = repository
         self.sender = sender
@@ -57,6 +61,9 @@ class PluginManager:
         self._started = False
         # 本实例（bot）已发送的 message_id 记录：插件只能撤回这些消息（防删他人消息）
         self._sent_message_ids: list = []
+        self._context_manager = context_manager   # SDK get_context 复用 ContextManager
+        self._matchers: Dict[str, list] = {}      # plugin_id -> [Matcher]（SDK 注册）
+        self._bot = None                          # SDK 匹配用 Bot（惰性构建）
 
     @property
     def plugin_dir(self) -> str:
@@ -353,8 +360,6 @@ class PluginManager:
 
     async def shutdown(self) -> None:
         self._started = False
-        # 本实例（bot）已发送的 message_id 记录：插件只能撤回这些消息（防删他人消息）
-        self._sent_message_ids: list = []
         for plugin_id in list(self._runtimes.keys()):
             rt = self._runtimes.pop(plugin_id, None)
             if rt is not None:
@@ -405,6 +410,13 @@ class PluginManager:
             if required not in approved:
                 continue  # 事件权限未批准：不投递（权限不是提示文字）
             manifest = self._manifest_of(row)
+            # SDK 模式：插件注册过 matcher → 只投递命中事件（payload 附带 matched 列表）
+            matchers = self._matchers.get(record_id)
+            if matchers:
+                hits = await self._match_plugin_payload(record_id, matchers, event_type, payload)
+                if not hits:
+                    continue
+                payload = {**payload, "matched": hits}
             if manifest is None:
                 continue
             try:
@@ -423,6 +435,27 @@ class PluginManager:
                 logger.error("plugin_event_error id=%s event=%s reason=%s", record_id, event_type, e,
                              extra={"event": "plugin_error"})
         return summary
+
+    async def _match_plugin_payload(self, plugin_id, matchers, event_type, payload):
+        """SDK Matcher 匹配：返回命中的 [{name, kind, args, block}]（priority 降序）。"""
+        try:
+            if self._bot is None and self.sender is not None:
+                self._bot = Bot(OneBotAdapter(self.sender, self._context_manager))
+            if self._bot is None:
+                return []  # 无 sender：匹配不可用 → 不投递（保守）
+            event = BotEvent.from_dict(payload)
+            hits = []
+            for m in sorted(matchers, key=lambda x: x.priority, reverse=True):
+                try:
+                    if await m.amatches(event, self._bot):
+                        hits.append({"name": m.name or "", "kind": m.kind,
+                                     "args": getattr(event, "matcher_args", ""),
+                                     "block": m.block})
+                except Exception:  # noqa: BLE001 - 匹配失败按不命中处理
+                    continue
+            return hits
+        except Exception:  # noqa: BLE001 - 匹配框架异常 → 不投递（保守）
+            return []
 
     # ================= 声明式 JSON 插件（进程内规则匹配，无代码执行） =================
     def _declarative_match(self, manifest: PluginManifest, event_type: str, payload: Dict[str, Any]) -> List[dict]:
@@ -659,6 +692,34 @@ class PluginManager:
                 return {"ok": False, "error": "group_admin 需要 group_id 与 user_id（或 sender 不可用）"}
             ok = await self.sender.set_group_admin(int(group_id), int(user_id), enable)
             return {"ok": ok, "group_id": int(group_id), "user_id": int(user_id), "enable": enable}
+        if action_type == "matcher_register":
+            # SDK matcher 注册（幂等）：插件上报匹配规则，主进程匹配后只投递命中事件
+            raw = payload.get("matchers") or []
+            if not isinstance(raw, list):
+                return {"ok": False, "error": "matcher_register 需要 matchers 数组"}
+            compiled, errors = [], []
+            for i, m in enumerate(raw):
+                try:
+                    compiled.append(Matcher(
+                        str(m.get("kind") or "keyword"), m.get("pattern"),
+                        priority=int(m.get("priority") or 0),
+                        block=bool(m.get("block", False)),
+                        name=str(m.get("name") or f"m{i}"),
+                        rule=_rule_from(m.get("rule") or {}),
+                    ))
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"matcher[{i}]: {e}")
+            if compiled:
+                self._matchers[plugin_id] = compiled
+            return {"ok": True, "count": len(compiled), "errors": errors}
+        if action_type in ("is_group_admin", "is_group_owner"):
+            group_id, user_id = payload.get("group_id"), payload.get("user_id")
+            if not group_id or not user_id or self.sender is None:
+                return {"ok": False, "error": f"{action_type} 需要 group_id 与 user_id（或 sender 不可用）"}
+            info = await self.sender.get_group_member_info(int(group_id), int(user_id))
+            role = str((info or {}).get("role") or "member")
+            wanted = "owner" if action_type == "is_group_owner" else ("owner", "admin")
+            return {"ok": True, "result": role in wanted}
         if action_type == "get_memory":
             user_id = payload.get("user_id")
             group_id = payload.get("group_id")
@@ -728,6 +789,12 @@ class PluginManager:
         with open(target, "w", encoding="utf-8") as f:
             f.write(data)
         return {"ok": True, "bytes": len(data.encode("utf-8"))}
+
+
+def _rule_from(conditions: dict):
+    """SDK rule 条件 dict → Rule 对象（用户/群/机器人角色条件）。"""
+    from src.sdk.matcher import Rule
+    return Rule(**dict(conditions or {}))
 
 
 def asyncio_create_task(coro) -> None:

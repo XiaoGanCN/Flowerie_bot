@@ -1,0 +1,10 @@
+{
+  "id": "sdk_plugin",
+  "name": "SDK Demo Plugin",
+  "version": "1.0.0",
+  "description": "SDK 模式最小示例：@command 匹配 + event.reply",
+  "runtime": "python",
+  "entry": "plugin.py",
+  "api_version": "1",
+  "permissions": ["read_message", "send_message", "read_message_history"]
+}
