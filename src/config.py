@@ -79,6 +79,32 @@ class Settings(BaseSettings):
     ACTIVE_CHAT_COOLDOWN: int = 180
     BOT_CONSECUTIVE_REPLY_COOLDOWN: int = 60
 
+    # ===== 主动发言概率（全部可配置，默认值 = 原硬编码值，行为零变化）=====
+    # 上下文随机回复概率（ContextManager.should_reply_by_context，1%~5% 那套逻辑）：
+    #   base        基础概率（0.03）
+    #   user_boost  最近 5 条中用户消息 >= 2 时的增量（+0.01）
+    #   single_user 最近消息全部来自同一用户时改用低概率（0.02，防单用户刷屏）
+    #   short_msg   最近一条消息 < 2 字符时改用低概率（0.02）
+    #   empty_ctx   群尚无上下文时使用（0.02）
+    #   bot_mult    最近 3 条中机器人 >= 2 条时乘以的衰减系数（0.3）
+    #   min/max     最终概率钳制区间（0.01 ~ 0.05）
+    PROACTIVE_MESSAGE_MIN_PROBABILITY: float = 0.01
+    PROACTIVE_MESSAGE_MAX_PROBABILITY: float = 0.05
+    PROACTIVE_MESSAGE_BASE_PROBABILITY: float = 0.03
+    PROACTIVE_MESSAGE_USER_BOOST: float = 0.01
+    PROACTIVE_MESSAGE_SINGLE_USER_PROBABILITY: float = 0.02
+    PROACTIVE_MESSAGE_SHORT_MESSAGE_PROBABILITY: float = 0.02
+    PROACTIVE_MESSAGE_EMPTY_CONTEXT_PROBABILITY: float = 0.02
+    PROACTIVE_MESSAGE_BOT_MULTIPLIER: float = 0.3
+    # 主动聊天循环（ActiveChatManager / MessageRouter._active_chat_loop）：
+    #   probability                       每次 should_active_chat 的触发概率（原硬编码 0.10）
+    #   interval_min/max_seconds          轮询间隔（原 hardcode random.randint(5,10)）
+    #   consecutive_cooldown_seconds      连续主动发言 >= 2 次后的冷却（原 1800 秒）
+    ACTIVE_CHAT_PROBABILITY: float = 0.10
+    ACTIVE_CHAT_INTERVAL_MIN_SECONDS: int = 5
+    ACTIVE_CHAT_INTERVAL_MAX_SECONDS: int = 10
+    ACTIVE_CHAT_CONSECUTIVE_COOLDOWN_SECONDS: int = 1800
+
     # Repeat
     REPEAT_WINDOW: int = 120
     REPEAT_THRESHOLD: int = 3
@@ -144,6 +170,29 @@ class Settings(BaseSettings):
     PERSONA_DEFAULT: str = "flowerie"      # 默认（兜底）人格 id
     MAX_PERSONA_PROMPT_LENGTH: int = 8000  # 单个人格 system_prompt 最大长度（字）
     PERSONA_MAX_COUNT: int = 200           # 自定义人格总数上限（内置不计，防无限增长）
+    # 管理员补充发言规则（每行一条；优先级：安全策略 > 人格 > 人格内置规则 > 本条；
+    # 不得覆盖安全策略——运行时策略/清洗/记忆校验不会被任何 prompt 文本绕过）
+    ADMIN_RESPONSE_RULES: List[str] = []
+
+    # ===== 插件系统（Plugin System v1：受控插件运行时） =====
+    # 插件目录：扫描其中的 */manifest.json 自动发现（发现 ≠ 自动执行，默认禁用）
+    PLUGIN_DIR: str = "./plugins"
+    # 插件保护级别：normal（推荐）/ relaxed / unsafe（仅可信插件，作者概不负责）
+    # 任何级别都保留：manifest 校验 / 管理员权限 / 进程隔离 / 日志 / 崩溃保护 /
+    # 资源限制 / 权限强制（PermissionManager 不被豁免）
+    PLUGIN_PROTECTION: str = "normal"
+    PLUGIN_MAX_COUNT: int = 100            # 注册表插件总数上限（防无限增长）
+    PLUGIN_URL_MAX_BYTES: int = 5242880    # URL 下载插件包大小上限（5MB）
+    PLUGIN_URL_TIMEOUT: int = 15           # URL 下载超时（秒）
+    PLUGIN_ZIP_MAX_UNZIPPED_BYTES: int = 52428800  # 解压后总大小上限（50MB，防 Zip Bomb）
+    PLUGIN_ZIP_MAX_FILES: int = 200        # 包内文件数上限
+
+    # ===== NapCat WebSocket（正向 / 反向 二选一） =====
+    # reverse：Flowerie 作为 WS 服务端（NapCat 连接过来，即原有行为）
+    # forward：Flowerie 作为客户端连接 NapCat 的正向 WS 服务（NAPCAT_WS_URL）
+    NAPCAT_WS_MODE: str = "reverse"
+    NAPCAT_WS_URL: str = ""                # forward 模式必填（ws:// 或 wss://）
+    NAPCAT_ACCESS_TOKEN: str = ""          # forward 鉴权 token（绝不清写入日志）
 
     # 群聊梗/黑话知识层（Meme Knowledge）：独立 knowledge.db，按群完全隔离
     MEME_LEARNING_ENABLED: bool = False            # 每日梗总结任务总开关（默认关）
@@ -216,10 +265,75 @@ class Settings(BaseSettings):
             raise ValueError(f"LOG_FORMAT 必须是 'text' 或 'json'，当前: {v!r}")
         return val
 
+    @field_validator("ADMIN_RESPONSE_RULES", mode="before")
+    @classmethod
+    def parse_response_rules(cls, v):
+        """管理员补充发言规则：支持 JSON 数组（Web UI 保存格式）或按行/逗号分隔的纯文本。"""
+        if isinstance(v, str):
+            raw = v.strip()
+            if raw.startswith("["):
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    return []
+                if isinstance(data, list):
+                    return [str(x).strip() for x in data if str(x).strip()]
+            return [x.strip() for x in raw.replace("\\n", "\n").split("\n") if x.strip()]
+        if isinstance(v, (list, tuple)):
+            return [str(x).strip() for x in v if str(x).strip()]
+        return []
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 def load_config() -> Settings:
     return Settings()
+
+
+def _finite_prob(value, name: str) -> float:
+    """把配置值规范化为 [0,1] 内的有限小数；非法（NaN/Inf/越界/非数字）抛 ValueError。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} 必须是数字（0.0~1.0），当前: {value!r}") from None
+    if v != v or v in (float("inf"), float("-inf")):  # NaN / ±Inf
+        raise ValueError(f"{name} 不能是 NaN/Infinity，当前: {value!r}")
+    if not (0.0 <= v <= 1.0):
+        raise ValueError(f"{name} 必须在 0.0~1.0 之间，当前: {value!r}")
+    return v
+
+
+def _validate_active_chat_probs(config: Settings) -> Optional[str]:
+    """主动发言概率合法性集中校验（min<=max、非负增量、衰减系数合法、间隔合理）。"""
+    keys = ("PROACTIVE_MESSAGE_MIN_PROBABILITY", "PROACTIVE_MESSAGE_MAX_PROBABILITY",
+            "PROACTIVE_MESSAGE_BASE_PROBABILITY", "PROACTIVE_MESSAGE_SINGLE_USER_PROBABILITY",
+            "PROACTIVE_MESSAGE_SHORT_MESSAGE_PROBABILITY", "PROACTIVE_MESSAGE_EMPTY_CONTEXT_PROBABILITY",
+            "PROACTIVE_MESSAGE_BOT_MULTIPLIER", "ACTIVE_CHAT_PROBABILITY")
+    values = {}
+    for k in keys:
+        try:
+            values[k] = _finite_prob(getattr(config, k, 0.1), k)
+        except ValueError as e:
+            return str(e)
+    try:
+        values["PROACTIVE_MESSAGE_USER_BOOST"] = _finite_prob(
+            getattr(config, "PROACTIVE_MESSAGE_USER_BOOST", 0.01), "PROACTIVE_MESSAGE_USER_BOOST")
+    except ValueError as e:
+        return str(e)
+    if values["PROACTIVE_MESSAGE_MIN_PROBABILITY"] > values["PROACTIVE_MESSAGE_MAX_PROBABILITY"]:
+        return (
+            f"主动发言概率区间非法: MIN({values['PROACTIVE_MESSAGE_MIN_PROBABILITY']}) > "
+            f"MAX({values['PROACTIVE_MESSAGE_MAX_PROBABILITY']})（要求 min <= max）")
+    try:
+        imin = int(getattr(config, "ACTIVE_CHAT_INTERVAL_MIN_SECONDS", 5))
+        imax = int(getattr(config, "ACTIVE_CHAT_INTERVAL_MAX_SECONDS", 10))
+    except (TypeError, ValueError):
+        return "ACTIVE_CHAT_INTERVAL_MIN/MAX_SECONDS 必须是整数"
+    if not (1 <= imin <= imax <= 3600):
+        return f"主动聊天轮询间隔非法: {imin}~{imax}（要求 1 <= min <= max <= 3600 秒）"
+    cd = int(getattr(config, "ACTIVE_CHAT_CONSECUTIVE_COOLDOWN_SECONDS", 1800))
+    if not (0 <= cd <= 86400):
+        return f"ACTIVE_CHAT_CONSECUTIVE_COOLDOWN_SECONDS 必须在 0~86400 之间（当前: {cd}）"
+    return None
 
 
 def parse_mcp_servers(raw: str, default_timeout: int = 15, default_tools: str = "",
@@ -373,3 +487,29 @@ def validate_config(config: Settings) -> None:
         raise ValueError("MAX_PERSONA_PROMPT_LENGTH 必须 >= 500")
     if int(getattr(config, "PERSONA_MAX_COUNT", 200)) < 1:
         raise ValueError("PERSONA_MAX_COUNT 必须 >= 1")
+    # ===== 主动发言概率（PROACTIVE_MESSAGE_* / ACTIVE_CHAT_*）=====
+    _err = _validate_active_chat_probs(config)
+    if _err:
+        raise ValueError(_err)
+    # ===== 插件系统 =====
+    protection = str(getattr(config, "PLUGIN_PROTECTION", "normal") or "normal").lower()
+    if protection not in ("normal", "relaxed", "unsafe"):
+        raise ValueError(f"PLUGIN_PROTECTION 必须是 normal/relaxed/unsafe，当前: {protection!r}")
+    if int(getattr(config, "PLUGIN_MAX_COUNT", 100)) < 1:
+        raise ValueError("PLUGIN_MAX_COUNT 必须 >= 1")
+    if int(getattr(config, "PLUGIN_URL_MAX_BYTES", 5242880)) < 1024:
+        raise ValueError("PLUGIN_URL_MAX_BYTES 必须 >= 1024")
+    if int(getattr(config, "PLUGIN_ZIP_MAX_FILES", 200)) < 1:
+        raise ValueError("PLUGIN_ZIP_MAX_FILES 必须 >= 1")
+    # ===== NapCat WebSocket 模式 =====
+    ws_mode = str(getattr(config, "NAPCAT_WS_MODE", "reverse") or "reverse").lower()
+    if ws_mode not in ("reverse", "forward"):
+        raise ValueError(f"NAPCAT_WS_MODE 必须是 reverse/forward，当前: {ws_mode!r}")
+    if ws_mode == "forward":
+        ws_url = (getattr(config, "NAPCAT_WS_URL", "") or "").strip()
+        if not ws_url:
+            raise ValueError("NAPCAT_WS_MODE=forward 时必须配置 NAPCAT_WS_URL")
+        from urllib.parse import urlsplit as _urlsplit
+        parts = _urlsplit(ws_url)
+        if parts.scheme not in ("ws", "wss") or not parts.hostname:
+            raise ValueError("NAPCAT_WS_URL 必须是 ws:// 或 wss:// 地址")

@@ -47,7 +47,9 @@ class ActiveChatManager:
         hour = time.localtime(now).tm_hour
         if self.config.NIGHT_SILENCE_START <= hour < self.config.NIGHT_SILENCE_END:
             return False
-        if random.random() < 0.10:
+        # 主动聊天循环触发概率（原硬编码 0.10，现走配置，默认值不变）
+        prob = float(getattr(self.config, "ACTIVE_CHAT_PROBABILITY", 0.10) or 0.10)
+        if random.random() < prob:
             return True
         return False
 
@@ -60,5 +62,7 @@ class ActiveChatManager:
         else:
             self.global_state.consecutive_active_count = 1
         if self.global_state.consecutive_active_count >= 2:
-            self.global_state.active_cooldown_until = now + 1800
-            logger.info("Entered 30min active cooldown after 2 consecutive active chats")
+            # 连续主动发言后的冷却（原硬编码 1800 秒，现走配置，默认值不变）
+            cooldown = int(getattr(self.config, "ACTIVE_CHAT_CONSECUTIVE_COOLDOWN_SECONDS", 1800) or 1800)
+            self.global_state.active_cooldown_until = now + cooldown
+            logger.info("Entered %ds active cooldown after 2 consecutive active chats", cooldown)

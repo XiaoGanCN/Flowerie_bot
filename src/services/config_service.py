@@ -14,6 +14,7 @@
 """
 import hashlib
 import json
+import math
 import os
 import secrets as _secrets
 from pathlib import Path
@@ -201,12 +202,79 @@ class ConfigService:
             )
         return applied
     def register_user(self, username: str, password: str) -> Tuple[bool, str]:
-        """注册/修改 Web UI 管理账号（持久化到 settings.db，优先级高于 .env）。
+        """注册 Web UI **第一个**管理员账号（持久化到 settings.db，优先级高于 .env）。
 
+        **Bootstrap Lock（安全设计）**：仅允许在 UNINITIALIZED 状态（系统从未初始化
+        管理员账号）时通过公开注册入口创建第一个管理员；一旦初始化完成，公开注册
+        一律 403（登录后通过 /panel/account/credentials 修改账号）。
+        原子 compare-and-set（admin_bootstrap 表）保证并发注册只有一个成功（防 race）。
         之后登录优先使用这里保存的账号；.env 的 WEB_UI_USERNAME / WEB_UI_PASSWORD
-        仅作未注册时的兜底。账号信息存入项目数据目录（data/settings.db），不依赖 .env。
-        安全：密码只存 scrypt 哈希，**绝不写明文**，也不写入任何日志。
+        仅作未注册时的兜底。安全：密码只存 scrypt 哈希，**绝不写明文**，也不写入任何日志。
         """
+        if self.admin_initialized():
+            return False, "系统已完成初始化，公开注册已关闭（请用现有账号登录后在「用户状态」页修改）"
+        # **先校验输入再 CAS**：非法输入绝不能把 bootstrap 状态锁死（否则系统将无法注册任何账号）
+        username = (username or "").strip()
+        if not (3 <= len(username) <= 32):
+            return False, "用户名长度需 3~32 字符"
+        if len(password or "") < 6:
+            return False, "密码至少 6 位"
+        # 原子 CAS：只有一个请求能把 uninitialized→initialized（并发注册仅一个成功）
+        if not self.repository.try_mark_bootstrap_initialized():
+            return False, "系统正在初始化中（并发注册冲突），请稍后再试"
+        password_hash = hash_password(password)
+        try:
+            self.repository.set_config("WEB_UI_USERNAME", username)
+            self.repository.set_config("WEB_UI_PASSWORD", password_hash)
+        except Exception:  # noqa: BLE001 - 写库失败：回滚 bootstrap 状态，避免系统锁死
+            try:
+                self.repository.mark_bootstrap_uninitialized()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        try:
+            setattr(self.config, "WEB_UI_USERNAME", username)
+            setattr(self.config, "WEB_UI_PASSWORD", password_hash)
+        except Exception:  # noqa: BLE001
+            pass
+        logger.info("web_ui account registered user=%s", username, extra={"event": "config_reload"})
+        return True, "注册成功，请用新账号登录"
+
+    def admin_initialized(self) -> bool:
+        """系统是否已完成管理员初始化（Bootstrap Lock 状态判定）。
+
+        判定来源（任一命中即视为已初始化，兼容历史数据迁移——旧版本已存在
+        注册/明文密码时自动视为 INITIALIZED，绝不因升级而开放注册）：
+        1. settings.db 已保存管理凭据（WEB_UI_PASSWORD / WEB_UI_USERNAME）
+        2. .env / 运行配置中的 WEB_UI_PASSWORD 非空
+        """
+        if self.repository.get_config("WEB_UI_PASSWORD") is not None:
+            return True
+        if self.repository.get_config("WEB_UI_USERNAME") is not None:
+            return True
+        if self.env_store is not None:
+            try:
+                env_values = self.env_store.read_values()
+                if str(env_values.get("WEB_UI_PASSWORD", "") or "").strip():
+                    return True
+                if str(env_values.get("WEB_UI_USERNAME", "") or "").strip():
+                    return True
+            except OSError:
+                pass
+        if str(getattr(self.config, "WEB_UI_PASSWORD", "") or "").strip():
+            return True
+        return False
+
+    def change_credentials(self, username: str, password: str,
+                           current_password: str) -> Tuple[bool, str]:
+        """登录态下修改管理员账号（调用方必须已通过认证）。
+
+        独立于公开注册：只替换凭据，不改变 Bootstrap Lock 状态（系统保持 INITIALIZED）。
+        需要当前密码二次验证（防会话劫持后直接改密）。
+        """
+        eff_user, eff_pass = self._effective_credentials_safe()
+        if not verify_password(current_password, eff_pass):
+            return False, "当前密码不正确"
         username = (username or "").strip()
         if not (3 <= len(username) <= 32):
             return False, "用户名长度需 3~32 字符"
@@ -220,8 +288,15 @@ class ConfigService:
             setattr(self.config, "WEB_UI_PASSWORD", password_hash)
         except Exception:  # noqa: BLE001
             pass
-        logger.info("web_ui account registered user=%s", username, extra={"event": "config_reload"})
-        return True, "注册成功，请用新账号登录"
+        logger.info("web_ui account changed user=%s", username, extra={"event": "config_reload"})
+        return True, "账号已更新，下次登录请使用新账号"
+
+    def _effective_credentials_safe(self) -> Tuple[str, str]:
+        repo_user = self.repository.get_config("WEB_UI_USERNAME")
+        repo_pass = self.repository.get_config("WEB_UI_PASSWORD")
+        user = repo_user if repo_user is not None else str(getattr(self.config, "WEB_UI_USERNAME", "admin"))
+        pwd = repo_pass if repo_pass is not None else str(getattr(self.config, "WEB_UI_PASSWORD", "") or "")
+        return user, pwd
 
     def unregister_account(self) -> Tuple[bool, str]:
         """注销管理员账号：只清除管理凭据（settings.db + .env 的
@@ -245,6 +320,9 @@ class ConfigService:
             setattr(self.config, "WEB_UI_PASSWORD", "")
         except Exception:  # noqa: BLE001
             pass
+        # Bootstrap Lock：显式回退到 UNINITIALIZED（这是管理员在认证上下文内的
+        # 明确操作——注销=重置；此后系统允许重新执行首次注册）
+        self.repository.mark_bootstrap_uninitialized()
         logger.info("web_ui account unregistered", extra={"event": "config_reload"})
         note = "；注意：若 WEB_UI_ENABLED=true，需在 .env 重新配置 WEB_UI_PASSWORD 或重新注册后才能登录"
         if removed_db:
@@ -286,6 +364,9 @@ class ConfigService:
         value = self._validate(key, ctype, raw)
         if value is None:
             return False, "配置值校验失败"
+        pair_err = self._pair_error({key: value}, {key: ctype})
+        if pair_err:
+            return False, pair_err
         try:
             self._commit({key: value}, {key: ctype})
         except OSError as e:
@@ -325,6 +406,9 @@ class ConfigService:
             return False, "未保存：" + "；".join(errors)
         if not validated:
             return False, "没有可保存的配置（密钥留空视为不修改）"
+        pair_err = self._pair_error(validated, ctypes)
+        if pair_err:
+            return False, "未保存：" + pair_err
         try:
             self._commit(validated, ctypes)
         except OSError as e:
@@ -352,6 +436,38 @@ class ConfigService:
     # ---------- 校验 / 类型 ----------
     # 枚举选项的显示/提交大小写（LOG_LEVEL 保持大写，loguru 对大小写敏感时也兼容）
 
+    # 成对配置的交叉校验（min <= max 语义）：键对 (下限键, 上限键)
+    _ORDERED_PAIRS = (
+        ("PROACTIVE_MESSAGE_MIN_PROBABILITY", "PROACTIVE_MESSAGE_MAX_PROBABILITY"),
+        ("ACTIVE_CHAT_INTERVAL_MIN_SECONDS", "ACTIVE_CHAT_INTERVAL_MAX_SECONDS"),
+    )
+
+    def _pair_current_value(self, key: str, validated: Dict[str, str]) -> float:
+        """成对校验时取某一侧的当前生效值（本次提交值 > 持久化值 > Settings 默认）。"""
+        if key in validated:
+            return float(validated[key])
+        override = self.repository.get_config(key)
+        if override is not None:
+            try:
+                return float(override)
+            except (TypeError, ValueError):
+                pass
+        return float(getattr(self.config, key, 0.0) or 0.0)
+
+    def _pair_error(self, validated: Dict[str, str], ctypes: Dict[str, str]) -> Optional[str]:
+        """成对配置交叉校验（如 min <= max）；返回错误文案或 None。"""
+        for lo_key, hi_key in self._ORDERED_PAIRS:
+            if lo_key not in validated and hi_key not in validated:
+                continue
+            try:
+                lo = self._pair_current_value(lo_key, validated)
+                hi = self._pair_current_value(hi_key, validated)
+            except (TypeError, ValueError):
+                return f"{lo_key} / {hi_key} 值非法"
+            if lo > hi:
+                return f"{lo_key} 不能大于 {hi_key}（当前 {lo} > {hi}）"
+        return None
+
     def _validate(self, key: str, ctype: str, raw: str) -> Optional[str]:
         """校验并返回规范化存储值；非法返回 None。"""
         raw = raw.strip()
@@ -365,7 +481,17 @@ class ConfigService:
                     return None
                 return str(v)
             if ctype == "float":
-                float(raw)  # 仅校验
+                try:
+                    v = float(raw)
+                except ValueError:
+                    return None
+                if not math.isfinite(v):  # NaN / Infinity 一律拒绝
+                    return None
+                lo, hi = self._RANGES.get(key, (None, None))
+                if lo is not None and v < lo:
+                    return None
+                if hi is not None and v > hi:
+                    return None
                 return raw
             if ctype == "bool":
                 if raw.lower() not in ("true", "false", "1", "0"):

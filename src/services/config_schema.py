@@ -33,6 +33,13 @@ SCHEMA: Dict[str, Tuple[str, str, bool, bool, str]] = {
     "WS_PORT": ("Connection", "int", False, False, "反向 WS 端口（需重启）"),
     "HTTP_API_BASE": ("Connection", "str", False, False, "NapCat HTTP API 地址（需重启）"),
     "WS_TOKEN": ("Connection", "secret", True, False, "反向 WS 鉴权 token（留空=不鉴权，需重启）"),
+    # NapCat WebSocket 正向/反向（二选一）；reverse=原有行为
+    "NAPCAT_WS_MODE": ("Connection", "str", False, False,
+                       "NapCat WS 模式（reverse=Flowerie 做服务端 / forward=连接正向 WS，需重启）"),
+    "NAPCAT_WS_URL": ("Connection", "str", False, False,
+                      "forward 模式的连接地址（ws:// 或 wss://，需重启）"),
+    "NAPCAT_ACCESS_TOKEN": ("Connection", "secret", True, False,
+                            "forward 模式鉴权 token（绝不写日志，需重启）"),
     # ---------- 行为与回复 ----------
     "CONTEXT_SIZE": ("Behavior", "int", False, True, "上下文条数"),
     "USER_COOLDOWN": ("Behavior", "int", False, True, "用户冷却（秒）"),
@@ -91,6 +98,31 @@ SCHEMA: Dict[str, Tuple[str, str, bool, bool, str]] = {
     "NIGHT_SILENCE_END": ("ActiveChat", "int", False, True, "夜间静默结束（小时 1-24）"),
     "ACTIVE_CHAT_COOLDOWN": ("ActiveChat", "int", False, True, "主动聊天冷却（秒）"),
     "BOT_CONSECUTIVE_REPLY_COOLDOWN": ("ActiveChat", "int", False, True, "连续回复后冷却（秒）"),
+    # 主动发言概率（上下文随机回复 1%~5% 那套逻辑，全部配置化；0.0~1.0）
+    "PROACTIVE_MESSAGE_MIN_PROBABILITY": ("ActiveChat", "float", False, True,
+                                          "主动发言概率下限（0.0~1.0，如 0.01=1%）"),
+    "PROACTIVE_MESSAGE_MAX_PROBABILITY": ("ActiveChat", "float", False, True,
+                                          "主动发言概率上限（0.0~1.0，如 0.05=5%；须 >= 下限）"),
+    "PROACTIVE_MESSAGE_BASE_PROBABILITY": ("ActiveChat", "float", False, True,
+                                           "主动发言基础概率（0.0~1.0，如 0.03=3%）"),
+    "PROACTIVE_MESSAGE_USER_BOOST": ("ActiveChat", "float", False, True,
+                                     "连续用户消息 >=2 条时的概率增量（0.0~1.0，如 0.01=+1%）"),
+    "PROACTIVE_MESSAGE_SINGLE_USER_PROBABILITY": ("ActiveChat", "float", False, True,
+                                                  "单用户连发时的低概率（0.0~1.0，防刷屏）"),
+    "PROACTIVE_MESSAGE_SHORT_MESSAGE_PROBABILITY": ("ActiveChat", "float", False, True,
+                                                    "最后一条消息过短（<2 字）时的低概率（0.0~1.0）"),
+    "PROACTIVE_MESSAGE_EMPTY_CONTEXT_PROBABILITY": ("ActiveChat", "float", False, True,
+                                                    "群尚无上下文时的回复概率（0.0~1.0）"),
+    "PROACTIVE_MESSAGE_BOT_MULTIPLIER": ("ActiveChat", "float", False, True,
+                                         "机器人连续发言 >=2 条时的概率衰减系数（0.0~1.0，1.0=不衰减）"),
+    "ACTIVE_CHAT_PROBABILITY": ("ActiveChat", "float", False, True,
+                                "主动聊天循环触发概率（0.0~1.0，如 0.10=10%）"),
+    "ACTIVE_CHAT_INTERVAL_MIN_SECONDS": ("ActiveChat", "int", False, True,
+                                         "主动聊天循环最小轮询间隔（秒）"),
+    "ACTIVE_CHAT_INTERVAL_MAX_SECONDS": ("ActiveChat", "int", False, True,
+                                         "主动聊天循环最大轮询间隔（秒；须 >= 最小间隔）"),
+    "ACTIVE_CHAT_CONSECUTIVE_COOLDOWN_SECONDS": ("ActiveChat", "int", False, True,
+                                                 "连续主动发言 >=2 次后的冷却（秒）"),
     # ---------- 复读与防刷 ----------
     "REPEAT_WINDOW": ("Repeat", "int", False, True, "复读检测窗口（秒）"),
     "REPEAT_THRESHOLD": ("Repeat", "int", False, True, "复读触发次数"),
@@ -129,6 +161,17 @@ SCHEMA: Dict[str, Tuple[str, str, bool, bool, str]] = {
     "PERSONA_DEFAULT": ("Persona", "str", False, True, "默认人格 id（兜底，立即生效）"),
     "MAX_PERSONA_PROMPT_LENGTH": ("Persona", "int", False, False, "人格 system_prompt 最大长度（需重启）"),
     "PERSONA_MAX_COUNT": ("Persona", "int", False, True, "自定义人格总数上限（内置不计）"),
+    "ADMIN_RESPONSE_RULES": ("Persona", "textarea", False, True,
+                             "管理员补充发言规则（每行一条；优先级：安全策略 > 人格 > 人格内置规则 > 本条）"),
+    # ---------- 插件系统（Plugin System v1） ----------
+    "PLUGIN_DIR": ("Plugin", "str", False, False, "插件目录（需重启；自动发现其中的 */manifest.json）"),
+    "PLUGIN_PROTECTION": ("Plugin", "str", False, True,
+                          "插件保护级别（normal/relaxed/unsafe；unsafe 风险自负）"),
+    "PLUGIN_MAX_COUNT": ("Plugin", "int", False, False, "注册表插件总数上限（需重启）"),
+    "PLUGIN_URL_MAX_BYTES": ("Plugin", "int", False, True, "URL 下载插件包大小上限（字节）"),
+    "PLUGIN_URL_TIMEOUT": ("Plugin", "int", False, True, "URL 下载超时（秒）"),
+    "PLUGIN_ZIP_MAX_UNZIPPED_BYTES": ("Plugin", "int", False, True, "解压后总大小上限（字节，防 Zip Bomb）"),
+    "PLUGIN_ZIP_MAX_FILES": ("Plugin", "int", False, True, "包内文件数上限"),
     # ---------- 群聊知识（Meme Knowledge） ----------
     "MEME_LEARNING_ENABLED": ("Knowledge", "bool", False, True, "每日梗总结任务开关"),
     "MEME_KNOWLEDGE_DB_PATH": ("Knowledge", "str", False, False, "梗知识库路径（需重启）"),
@@ -162,24 +205,29 @@ CATEGORY_LABELS: Dict[str, str] = {
     "Paths": "数据路径",
     "Persona": "人格（Persona）",
     "Knowledge": "群聊知识（Meme）",
+    "Plugin": "插件系统",
 }
 
 CATEGORY_ORDER: List[str] = [
     "AI", "Bot", "Connection", "Behavior", "Stability", "Memory", "Context",
     "Sticker", "MCP", "WebUI", "Logging", "Budget", "ActiveChat", "Repeat",
     "Poke", "FileParse", "Security", "Whitelist", "Archive", "Paths",
-    # 注意：Persona/Knowledge 分类的配置项已在 SCHEMA 中，但不在配置页展示——
-    # 它们由「人格」「群聊知识」页的专属配置区块管理（见 webui_panels/persona_panel 等）
+    # 注意：Persona/Knowledge/Plugin 分类的配置项已在 SCHEMA 中，但不在配置页展示——
+    # 它们由「人格」「群聊知识」「插件」页的专属配置区块管理（见 webui_panels/* 等）
 ]
 
 _ENUM_VALUES = {
     "LOG_LEVEL": {"debug", "info", "warning", "error", "critical"},
     "LOG_FORMAT": {"text", "json"},
+    "NAPCAT_WS_MODE": {"reverse", "forward"},
+    "PLUGIN_PROTECTION": {"normal", "relaxed", "unsafe"},
 }
 
 _ENUM_OPTIONS = {
     "LOG_LEVEL": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     "LOG_FORMAT": ["text", "json"],
+    "NAPCAT_WS_MODE": ["reverse", "forward"],
+    "PLUGIN_PROTECTION": ["normal", "relaxed", "unsafe"],
 }
 
 _RANGES = {
@@ -218,6 +266,19 @@ _RANGES = {
     "NIGHT_SILENCE_END": (1, 24),
     "ACTIVE_CHAT_COOLDOWN": (0, 86400),
     "BOT_CONSECUTIVE_REPLY_COOLDOWN": (0, 86400),
+    # 主动发言概率（0.0~1.0；min<=max 交叉校验在 ConfigService 层）
+    "PROACTIVE_MESSAGE_MIN_PROBABILITY": (0.0, 1.0),
+    "PROACTIVE_MESSAGE_MAX_PROBABILITY": (0.0, 1.0),
+    "PROACTIVE_MESSAGE_BASE_PROBABILITY": (0.0, 1.0),
+    "PROACTIVE_MESSAGE_USER_BOOST": (0.0, 1.0),
+    "PROACTIVE_MESSAGE_SINGLE_USER_PROBABILITY": (0.0, 1.0),
+    "PROACTIVE_MESSAGE_SHORT_MESSAGE_PROBABILITY": (0.0, 1.0),
+    "PROACTIVE_MESSAGE_EMPTY_CONTEXT_PROBABILITY": (0.0, 1.0),
+    "PROACTIVE_MESSAGE_BOT_MULTIPLIER": (0.0, 1.0),
+    "ACTIVE_CHAT_PROBABILITY": (0.0, 1.0),
+    "ACTIVE_CHAT_INTERVAL_MIN_SECONDS": (1, 3600),
+    "ACTIVE_CHAT_INTERVAL_MAX_SECONDS": (1, 3600),
+    "ACTIVE_CHAT_CONSECUTIVE_COOLDOWN_SECONDS": (0, 86400),
     "REPEAT_WINDOW": (1, 86400),
     "REPEAT_THRESHOLD": (2, 100),
     "TOXIC_WARNING_COOLDOWN": (0, 86400),
@@ -239,6 +300,11 @@ _RANGES = {
     "WS_PORT": (1, 65535),
     "MAX_PERSONA_PROMPT_LENGTH": (500, 100000),
     "PERSONA_MAX_COUNT": (1, 100000),
+    "PLUGIN_MAX_COUNT": (1, 100000),
+    "PLUGIN_URL_MAX_BYTES": (1024, 104857600),
+    "PLUGIN_URL_TIMEOUT": (1, 300),
+    "PLUGIN_ZIP_MAX_UNZIPPED_BYTES": (1024, 1048576000),
+    "PLUGIN_ZIP_MAX_FILES": (1, 100000),
     "MEME_SUMMARY_INTERVAL_HOURS": (1, 8760),
     "MAX_GROUP_MEMES": (10, 100000),
     "MEME_BUFFER_PER_GROUP": (50, 100000),

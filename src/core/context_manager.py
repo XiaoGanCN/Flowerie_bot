@@ -47,27 +47,48 @@ class ContextManager:
             lines.append(f"[{idx}] {who}: {msg_text}")
         return "\n".join(lines)
 
-    # ---------- 回复概率 ----------
+    # ---------- 回复概率（主动发言概率全部配置化，默认值=原硬编码，行为零变化） ----------
+    @staticmethod
+    def _prob(value, default: float) -> float:
+        """防御性取值：非法配置（NaN/Inf/越界）兜底为默认值，不抛异常（运行期不炸）。"""
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return default
+        if v != v or v in (float("inf"), float("-inf")):  # NaN / Inf
+            return default
+        if not (0.0 <= v <= 1.0):
+            return default
+        return v
+
     def should_reply_by_context(self, group_id: int) -> bool:
         state = self.get_group_state(group_id)
+        cfg = self.config
         recent_msgs = list(state.context)[-5:]
         if not recent_msgs:
-            return random.random() < 0.02
+            prob = self._prob(
+                getattr(cfg, "PROACTIVE_MESSAGE_EMPTY_CONTEXT_PROBABILITY", 0.02), 0.02)
+            return random.random() < prob
         user_msgs = [m for m in recent_msgs if not m["is_bot"]]
         if not user_msgs:
             return False
-        prob = 0.03
+        prob = self._prob(getattr(cfg, "PROACTIVE_MESSAGE_BASE_PROBABILITY", 0.03), 0.03)
         if len(user_msgs) >= 2:
-            prob += 0.01
+            prob += self._prob(getattr(cfg, "PROACTIVE_MESSAGE_USER_BOOST", 0.01), 0.01)
         if len(set(m["user_id"] for m in user_msgs)) == 1:
-            prob = 0.02
+            prob = self._prob(
+                getattr(cfg, "PROACTIVE_MESSAGE_SINGLE_USER_PROBABILITY", 0.02), 0.02)
         last_msg = recent_msgs[-1]
         if last_msg and not last_msg.get("is_bot", False) and len(str(last_msg.get("message", ""))) < 2:
-            prob = 0.02
+            prob = self._prob(
+                getattr(cfg, "PROACTIVE_MESSAGE_SHORT_MESSAGE_PROBABILITY", 0.02), 0.02)
         bot_count = sum(1 for m in recent_msgs[-3:] if m.get("is_bot", False))
         if bot_count >= 2:
-            prob *= 0.3
-        prob = max(0.01, min(0.05, prob))
+            prob *= self._prob(getattr(cfg, "PROACTIVE_MESSAGE_BOT_MULTIPLIER", 0.3), 0.3)
+        prob = max(
+            self._prob(getattr(cfg, "PROACTIVE_MESSAGE_MIN_PROBABILITY", 0.01), 0.01),
+            min(self._prob(getattr(cfg, "PROACTIVE_MESSAGE_MAX_PROBABILITY", 0.05), 0.05), prob),
+        )
         roll = random.random()
         logger.debug(f"Context reply prob for group {group_id}: {prob:.2f}, roll={roll:.2f}")
         return roll < prob
