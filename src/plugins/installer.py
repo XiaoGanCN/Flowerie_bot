@@ -151,7 +151,7 @@ class PluginInstaller:
                     total = 0
                     content_type = ""
                     async with client.stream("GET", url, headers={
-                            "User-Agent": "flowerie-plugin-installer/1.3.0"}) as resp:
+                            "User-Agent": "flowerie-plugin-installer/1.4.0"}) as resp:
                         if resp.status_code >= 300:
                             raise PluginInstallError(
                                 f"下载失败（HTTP {resp.status_code}，重定向一律拒绝）")

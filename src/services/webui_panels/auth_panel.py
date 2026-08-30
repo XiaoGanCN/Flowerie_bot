@@ -91,7 +91,7 @@ class AuthPanelMixin:
         if not self._check_token(request):
             return web.json_response({"error": "未认证"}, status=401)
         status = {
-            "version": "1.3.0",
+            "version": "1.4.0",
             "uptime_seconds": int(time.time() - self._started_at),
             "config_count": len(self.config_service.list_configs()),
         }

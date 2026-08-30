@@ -139,7 +139,7 @@ class McpClient:
         await self._rpc("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "flowerie-bot", "version": "1.3.0"},
+            "clientInfo": {"name": "flowerie-bot", "version": "1.4.0"},
         })
         self._initialized = True
 

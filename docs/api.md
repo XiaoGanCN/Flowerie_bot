@@ -42,6 +42,21 @@ notice_kind / request_kind
 (匹配命中时) matched=[{name, kind, args, block}]
 ```
 
+## v1.4 能力（OneBot 现有直接包装 / 自造轻量）
+
+| 分组 | API | 权限 |
+| --- | --- | --- |
+| 请求处理 | `handle_friend_request(flag, approve, remark)` / `handle_group_request(flag, approve, reason)` | request_handle |
+| 定时 | `@bot.schedule(interval/delay/daily)` / `schedule_cancel/list` | scheduler |
+| 多轮 | `wait_for(cond, timeout)` / `ask` / `confirm` / `select` | 无（事件驱动） |
+| 命令 | `event.args`（shlex）/ 子命令（名含 `.`）/ `cool_down(key, s)` | 无 |
+| KV | `kv_get/set/delete/list` | storage |
+| HTTP | `http_put` / `http_delete` / `http_head` / `http_download` | http_request |
+| 记忆 | `mem_update` / `mem_clear` | read_memory |
+| AI | `ai_chat(message, system)` | ai_chat（独立预算，自限频） |
+| 工具 | `random_choice` / `random_int` / `now` / `format_time` | 无 |
+| 多媒体 | `BotMessage.video/voice/file/add_segment` | send_message |
+
 ## 经典插件动作（协议层，未用 SDK 也可用）
 
 send_message · send_private_message · send_reply · delete_message · get_message ·
@@ -54,5 +69,5 @@ file_read · file_write · log · test
 
 send_message · read_message · read_group_info · read_user_info · read_memory ·
 write_memory · http_request · filesystem_read · filesystem_write · delete_message ·
-read_message_history · group_manage · execute_process(保留，v1 拒绝) ·
+read_message_history · group_manage · request_handle · scheduler · storage · ai_chat · execute_process(保留，v1 拒绝) ·
 webhook(保留，v1 拒绝)

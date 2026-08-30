@@ -2,6 +2,41 @@
 
 本文件记录 Flowerie_bot 的版本变更。版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [1.4.0] - 2026-08-31
+
+### Added（高频能力补齐；原则：OneBot 已有直接包装，没有的自造但要轻）
+
+- **请求处理**：好友/加群请求同意/拒绝（`handle_friend_request` / `handle_group_request`）
+- **定时任务**：`@bot.schedule(interval=60 / delay=10 / daily="09:30")`；
+  主进程轻量调度（asyncio Task，无 cron 依赖）；`schedule_cancel/list`
+- **等待与多轮**：`bot.wait_for` / `ask` / `confirm` / `select`（插件侧 Session）
+- **命令系统**：`event.args`（shlex 参数拆分）；子命令=命令名含 `.`；
+  `bot.cool_down(key, seconds)` 命令级冷却（限频/防刷）
+- **KV / 插件缓存**：`bot.kv_get/set/delete/list`（plugin_kv 表按插件隔离；权限 storage）
+- **HTTP 扩展**：PUT / DELETE / HEAD（复用既有 SSRF 防线）+ `http_download`
+  （≤10MB 落插件目录）
+- **记忆**：`mem_update` / `mem_clear`
+- **AI（受限）**：`bot.ai_chat(message, system)`（权限 ai_chat；独立于聊天预算，建议自限频）
+- **工具类**：`random_choice` / `random_int` / `now` / `format_time`（内建）
+- **多媒体消息**：`BotMessage` 支持 `video()` / `voice()` / `file()`（可带名字）/
+  `add_segment()`（通用段，如键盘 UI 平台相关透传）
+- 事件负载 + `trace_id`；`event.trigger/schedule_id`
+- 权限新增：`request_handle` / `scheduler` / `storage` / `ai_chat`
+
+### Fixed
+
+- 插件事件负载真正领域化（`kind/scope/text/at_list/images`；CQ 码在下层阉割）；
+  `_plugin_event_type` 返回领域 kind（不再 group_message/meta_event）
+- `route` 等待队列先于 api 检查（wait_for 未 attach 亦可接收）
+- delay 调度触发即清理；shutdown 清理全部调度任务（防泄漏）
+
+### Tests
+
+- +14：KV 往返/隔离、请求处理、调度注册/触发/cancel/list、工具、HTTP 扩展、
+  AI（注入与未注入）、记忆、cool_down、args（引号）、等待消息（命中与超时）、
+  schedule 装饰器与路由、多媒体 Builder
+- 本地 147 通过；ruff 0
+
 ## [1.3.0] - 2026-08-31
 
 ### Added

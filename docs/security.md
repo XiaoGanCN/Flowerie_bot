@@ -122,3 +122,19 @@ Memory / MCP / Plugin / Knowledge  （用户记忆 / 工具结果 / 插件输出
   并在命令上加 `rule(is_group_admin=True)` 守卫。
 - **匹配注册**：`matcher_register`（read_message）只影响事件筛选与投递，
   不授予任何副作用。
+
+## v1.4 新增边界
+
+- **请求处理**（request_handle）：好友/加群同意是**社交副作用**——只批准给明确处理
+  申请场景的插件；approve 必须回传原 flag（伪造 flag 无效）。
+- **调度器**（scheduler）：定时任务在主进程执行（asyncio Task）；**间隔下限 1 秒**
+  （防刷）；插件进程异常不影响调度器；shutdown 全部清理。任务数不设上限 → 文档
+  建议每插件 ≤20 个任务；同插件同名注册幂等（覆盖）。
+- **KV**（storage）：plugin_kv 表**按插件命名空间隔离**（key 前缀 plugin_id），
+  其他插件不可读；单值 64KB；值为 JSON 或字符串。
+- **AI**（ai_chat）：**独立于主聊天预算与三层限频**——插件可无限制消耗 token！
+  仅在信任插件批准，且建议命令级冷却（cool_down）自限频。
+- **HTTP 扩展**：PUT/DELETE/HEAD 与下载**全部复用** http_action 防线
+  （字面量 + DNS 双闸、头过滤、不重定向）；下载 ≤10MB 且只能写插件目录
+  （save_to 相对路径校验 + 真实路径公共前缀校验）。
+- **记忆写入**：mem_update/mem_clear 复用现有 MemoryManager（审计与 TTL 不变）。

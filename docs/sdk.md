@@ -250,7 +250,136 @@ async def weather(event):
 
 ---
 
-## 7. 权限与安全
+## 7. 多轮交互与等待（Session）
+
+> 轻量实现：插件进程内「未来 + 条件闭包」——事件到达时先喂等待队列。
+> **注意**：同一插件若注册了 Matcher，只会收到匹配事件——等待场景建议拆成
+> 独立插件（或该插件不注册 matcher），否则 wait_for 可能永远等不到。
+
+```python
+@command("打卡")
+async def checkin(event):
+    await event.reply("请回复群号：")
+    answer = await bot.wait_for(lambda e: e.scope == "group" and e.text.isdigit(), timeout=30)
+    if answer is None:
+        await event.reply("超时了，打卡作废")
+        return
+    await event.reply(f"已登记群 {answer.text}")
+
+@command("问卷")
+async def survey(event):
+    ok = await bot.confirm(event, "确认要执行吗？", timeout=20)
+    if ok:
+        choice = await bot.select(event, "选择方案：", [
+            {"label": "方案A", "answer": "a"}, {"label": "方案B", "answer": "b"}])
+        await event.reply(f"你选择了 {choice}" if choice else "未选择")
+```
+
+| API | 说明 |
+| --- | --- |
+| `await bot.wait_for(cond, timeout=60)` | 等待满足 `cond(event)->bool` 的下一条消息；超时/超时返回 None |
+| `await bot.ask(event, prompt, timeout=60)` | 发送提问并等待回答（同一会话用户下一条消息） |
+| `await bot.confirm(event, prompt, timeout=60)` | 是/否解析（是/好/可以/确定=真；否/不要/取消=假） |
+| `await bot.select(event, prompt, options, timeout=60)` | 编号/文本选择；返回选中项 `answer` |
+
+await 语义：handler 为 `async def` 时直接 await；插件运行时内同一次事件处理中
+读等待队列仅对**事件消息**生效（notice 不满足消息条件即可忽略）。
+
+## 8. 定时任务（轻量）
+
+```python
+@bot.schedule(interval=60)
+async def hourly(event):            # event.trigger="interval"；event.name/schedule_id
+    bot.log("info", "hourly job")
+
+@bot.schedule(daily="09:30")
+async def morning(event):
+    await bot.send(("group", 123456), "早安！")
+
+@bot.schedule(delay=10)
+async def one_shot(event):          # 一次性延时任务，触发后自动清理
+    ...
+```
+
+- 三种模式：`interval`（秒，1~86400）/ `delay`（秒，一次性）/ `daily`（"HH:MM"）
+- 由主进程轻量调度（asyncio Task；**无完整 cron**——需要 cron 请用多个 daily 或插件内自行组合）
+- `await bot.schedule_list()` / `bot.schedule_cancel(schedule_id)`（通过 action 返回的
+  schedule_id）；同插件同名注册幂等（覆盖）
+- 权限：`scheduler`；handler 建议 `async def job(event)`（event.trigger/name/schedule_id）
+
+## 9. 命令参数 / 子命令 / 冷却
+
+```python
+@command("add")          # !add 1 "2 3"
+async def add(event):
+    print(event.args)    # ['1', '2 3'] —— shlex 拆分（引号/空白处理）
+
+@command("admin.ban")    # 子命令约定：命令名含 "." 即子命令（!admin.ban 123）
+async def sub_command(event):
+    ...
+
+@command("签到")
+async def daily(event):
+    if not await bot.cool_down("cmd:signin", 3600):   # 一小时冷却
+        await event.reply("今天已签过啦")
+        return
+    bot.mark_cooled("cmd:signin")
+    ...
+```
+
+| API | 说明 |
+| --- | --- |
+| `event.args` | shlex 拆分后的参数列表（`@command` 命中后） |
+| `await bot.cool_down(key, seconds)` | 冷却检查+标记一体：冷却中 False；否则标记并 True |
+| `bot.is_cooled(key, seconds)` / `bot.mark_cooled(key)` | 手动组合 |
+
+## 10. 请求处理（好友/加群）
+
+```python
+@bot.listen("request")
+async def on_request(event):
+    if event.request_kind == "friend":
+        bot.log("info", f"好友申请 {event.user_id}")
+        bot.handle_friend_request(event.flag, approve=True, remark="你好")
+    elif event.request_kind == "group":
+        bot.handle_group_request(event.flag, approve=False, reason="暂不加群")
+```
+
+> event.flag：请求唯一标识（approve 必须携带）；权限 `request_handle`。
+
+## 11. AI（受限）/ 记忆 / KV / 网络扩展
+
+```python
+reply = await bot.ai_chat("今天花璃怎么样", system="你是花璃的助手")   # 权限 ai_chat
+
+await bot.mem_update(event.user_id, event.group_id, "nick", "小璃")   # 更新记忆
+n = await bot.mem_clear(event.user_id, event.group_id)                 # 清除记忆（返回条数）
+
+bot.kv_set("count", 1)                    # 插件私有 KV（跨重启持久）
+bot.kv_get("count") / bot.kv_delete("count") / bot.kv_list()
+
+r = bot.http_put("https://api.example.com/x", json={"a": 1})           # 权限 http_request
+r = bot.http_delete("https://api.example.com/x/1")
+r = bot.http_head("https://api.example.com")
+bytes_ = bot.http_download("https://example.com/a.png", save_to="assets/a.png")  # 落插件目录
+```
+
+- KV：按插件命名空间隔离（其他插件读不到）；单值 ≤64KB；权限 `storage`
+- http_download：SSRF 双闸校验（字面量+DNS）+ ≤10MB + `save_to` 仅限插件目录内相对路径
+- AI：**独立于主聊天预算/三层限频**——请务必用命令冷却或自己的频控；权限 `ai_chat`
+
+## 12. 工具类（内建，无权限）
+
+```python
+bot.random_choice(["a", "b", "c"])      # 随机选一个
+bot.random_int(1, 100)                  # 随机整数
+bot.now()                               # {timestamp, iso}
+bot.format_time(1700000000, "%Y-%m-%d %H:%M:%S")
+```
+
+## 13. 权限与安全
+
+
 
 **角色判定**（`await bot.check_permission(event, kind)`）：
 
@@ -268,7 +397,10 @@ async def weather(event):
 未批准的动作在协议层强制拒绝（不是提示文字）。权限清单：
 `send_message` / `read_message` / `read_group_info` / `read_user_info` /
 `read_memory` / `write_memory` / `http_request` / `filesystem_read` /
-`filesystem_write` / `delete_message` / `read_message_history` / `group_manage`。
+`filesystem_write` / `delete_message` / `read_message_history` / `group_manage` /
+`request_handle` / `scheduler` / `storage` / `ai_chat`（v1.4 新增）。
+建议最小授权：只有明确需要才批准 `group_manage` / `storage` / `ai_chat` /
+`filesystem_write`。
 
 ---
 

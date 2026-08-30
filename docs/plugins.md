@@ -44,6 +44,13 @@ def on_message(event, api=None):
 批准权限后启用；风险权限（filesystem_write / group_manage / delete_message /
 read_message_history）按需最小授权。
 
+## 高频能力速查（v1.4）
+
+多轮/Session（wait_for/ask/confirm/select）· 定时（@bot.schedule）· 冷却（cool_down）·
+命令参数（event.args·子命令）· KV（kv_*）· 请求处理（handle_friend_request）·
+AI（ai_chat 受限）· HTTP 扩展（http_put/delete/head/download）· 记忆（mem_update/clear）·
+工具（random_choice/random_int/now/format_time）——完整示例与章节见 [sdk.md](sdk.md)。
+
 ## 检查清单（上线前）
 
 - [ ] `manifest.permissions` 只声明必要项（批准 ⊆ 声明，声明 ⊆ 需求）
