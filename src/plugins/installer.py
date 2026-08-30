@@ -248,8 +248,6 @@ class PluginInstaller:
                         name = _norm_name(info.filename)
                         if prefix and name.startswith(prefix + "/"):
                             name = name[len(prefix) + 1:]
-                        if name == "manifest.json":
-                            continue
                         member_path = os.path.join(target_dir, name)
                         # 纵深防御：realpath 必须仍在 target_dir 下（路径穿越不可能到达这里，
                         # 但对已存在的成员名做最终校验）
@@ -258,6 +256,10 @@ class PluginInstaller:
                         os.makedirs(os.path.dirname(member_path), exist_ok=True)
                         with open(member_path, "wb") as out:
                             shutil.copyfileobj(zf.open(info), out)
+                    # 统一的 manifest.json 落地（发现/扫描/更新都以磁盘 manifest 为准）
+                    manifest_path = os.path.join(target_dir, "manifest.json")
+                    with open(manifest_path, "w", encoding="utf-8") as f:
+                        f.write(manifest.to_json())
                     entry_path = os.path.join(target_dir, manifest.entry) if manifest.entry else ""
                     if manifest.runtime in ("python", "node"):
                         if not entry_path or not os.path.isfile(entry_path):

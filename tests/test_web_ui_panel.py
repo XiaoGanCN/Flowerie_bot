@@ -102,8 +102,8 @@ async def test_panel_contains_all_config_keys():
         for key in ConfigService.SCHEMA.keys():
             if key == "MCP_SERVERS":
                 continue  # 渲染为专用编辑器（卡片），由 test_mcp_editor_renders_in_config_page 覆盖
-            if ConfigService.SCHEMA[key][0] in ("Persona", "Knowledge"):
-                continue  # 这两个分类已移到「人格」「群聊知识」页专属区块
+            if ConfigService.SCHEMA[key][0] in ("Persona", "Knowledge", "Plugin"):
+                continue  # 人格/知识/插件分类已移到各自专属页区块
             assert f'name="{key}"' in text, f"面板缺少配置项 {key}"
         # 人格/知识配置项不在配置页（已移走）
         for key in ("PERSONA_DEFAULT", "MEME_LEARNING_ENABLED"):

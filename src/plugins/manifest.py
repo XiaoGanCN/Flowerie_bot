@@ -26,7 +26,7 @@ _ALLOWED_KEYS = frozenset({
     "entry", "api_version", "permissions", "config", "declarations",
 })
 
-_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 # 条目路径：无前导 / 、无 .. 段、无反斜杠、每段 [A-Za-z0-9_.-]
 _ENTRY_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-/]{0,127}$")
@@ -109,7 +109,7 @@ class PluginManifest:
         if runtime in ("python", "node"):
             if not _ENTRY_RE.fullmatch(entry):
                 raise PluginManifestError(
-                    "entry 必须是相对路径文件名（仅字母/数字/下划线/点/短横线/斜杠，"
+                    "entry 非法路径：必须是相对路径文件名（仅字母/数字/下划线/点/短横线/斜杠，"
                     "禁止绝对路径与 .. 段）")
             if entry.startswith("/") or "\\" in entry or ".." in entry.split("/"):
                 raise PluginManifestError("entry 包含非法路径（绝对路径/.. /反斜杠）")

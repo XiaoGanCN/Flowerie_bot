@@ -43,6 +43,10 @@ def _copy_plugin(tmp_path, name):
     shutil.copytree(src, dst)
 
 
+def _auth(token):
+    return {"headers": {"Authorization": f"Bearer {token}"}}
+
+
 async def _login(server):
     from tests.test_web_ui import _resp_data
     resp = await server._handle_login(FakeRequest(body={"username": "admin", "password": "secret123"}))
@@ -70,8 +74,8 @@ async def test_plugin_page_renders(tmp_path):
 async def test_refresh_discovers_disabled(tmp_path):
     server, mgr, repo, cfg, tmp = _make(tmp_path)
     _copy_plugin(tmp_path, "minimal_plugin")
-    await _login(server)
-    resp = await server._handle_panel_plugins_refresh(FakeRequest())
+    token = await _login(server)
+    resp = await server._handle_panel_plugins_refresh(FakeRequest(**_auth(token)))
     assert resp.status == 302
     row = repo.get_plugin("minimal_plugin")
     assert row and row["enabled"] == 0
@@ -79,8 +83,7 @@ async def test_refresh_discovers_disabled(tmp_path):
 
 async def test_upload_install_disabled_by_default(tmp_path):
     server, mgr, repo, cfg, tmp = _make(tmp_path)
-    await _login(server)
-    # 构造 zip 包（最小插件）
+    token = await _login(server)
     import zipfile
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
@@ -107,7 +110,7 @@ async def test_upload_install_disabled_by_default(tmp_path):
             return self._d[:n]
 
     form = {"plugin_file": _File(data)}
-    resp = await server._handle_panel_plugins_upload(FakeRequest(form=form))
+    resp = await server._handle_panel_plugins_upload(FakeRequest(form=form, **_auth(token)))
     assert resp.status == 302
     assert repo.get_plugin("uploaded_plugin")["enabled"] == 0  # 安装后默认禁用
 
@@ -115,37 +118,39 @@ async def test_upload_install_disabled_by_default(tmp_path):
 async def test_enable_disable_uninstall_flow(tmp_path):
     server, mgr, repo, cfg, tmp = _make(tmp_path)
     _copy_plugin(tmp_path, "minimal_plugin")
-    await _login(server)
-    await server._handle_panel_plugins_refresh(FakeRequest())
+    token = await _login(server)
+    await server._handle_panel_plugins_refresh(FakeRequest(**_auth(token)))
     resp = await server._handle_panel_plugins_enable(
-        FakeRequest(form={"id": "minimal_plugin", "perm": ["read_message"]}))
+        FakeRequest(form={"id": "minimal_plugin", "perm": ["read_message"]}, **_auth(token)))
     assert resp.status == 302
     assert repo.get_plugin("minimal_plugin")["enabled"] == 1
-    resp = await server._handle_panel_plugins_disable(FakeRequest(form={"id": "minimal_plugin"}))
+    resp = await server._handle_panel_plugins_disable(FakeRequest(form={"id": "minimal_plugin"}, **_auth(token)))
     assert resp.status == 302
     assert repo.get_plugin("minimal_plugin")["enabled"] == 0
-    resp = await server._handle_panel_plugins_uninstall(FakeRequest(form={"id": "minimal_plugin"}))
+    resp = await server._handle_panel_plugins_uninstall(FakeRequest(form={"id": "minimal_plugin"}, **_auth(token)))
     assert resp.status == 302
     assert repo.get_plugin("minimal_plugin") is None
 
 
 async def test_protection_switch_via_panel(tmp_path):
     server, mgr, repo, cfg, tmp = _make(tmp_path)
-    await _login(server)
-    resp = await server._handle_panel_plugins_protection(FakeRequest(form={"protection": "unsafe"}))
+    token = await _login(server)
+    resp = await server._handle_panel_plugins_protection(
+        FakeRequest(form={"protection": "unsafe"}, **_auth(token)))
     assert resp.status == 302
     assert cfg.PLUGIN_PROTECTION == "unsafe"
     assert mgr._protection_level() == "unsafe"
-    resp = await server._handle_panel_plugins_protection(FakeRequest(form={"protection": "bogus"}))
+    resp = await server._handle_panel_plugins_protection(
+        FakeRequest(form={"protection": "bogus"}, **_auth(token)))
     assert resp.status == 302
     assert cfg.PLUGIN_PROTECTION == "unsafe"  # 非法值不生效
 
 
 async def test_plugin_config_save(tmp_path):
     server, mgr, repo, cfg, tmp = _make(tmp_path)
-    await _login(server)
+    token = await _login(server)
     resp = await server._handle_panel_plugins_config(FakeRequest(form={
-        "PLUGIN_URL_MAX_BYTES": "999999", "PLUGIN_ZIP_MAX_FILES": "42"}))
+        "PLUGIN_URL_MAX_BYTES": "999999", "PLUGIN_ZIP_MAX_FILES": "42"}, **_auth(token)))
     assert resp.status == 302
     assert cfg.PLUGIN_URL_MAX_BYTES == 999999
     assert cfg.PLUGIN_ZIP_MAX_FILES == 42
@@ -153,14 +158,15 @@ async def test_plugin_config_save(tmp_path):
 
 async def test_upload_rejects_oversize(tmp_path):
     server, mgr, repo, cfg, tmp = _make(tmp_path)
-    await _login(server)
+    token = await _login(server)
     big = b"x" * (7 * 1024 * 1024)
 
     class _File:
         filename = "big.zip"
         file = type("R", (), {"read": lambda self, n=None: big})()
 
-    resp = await server._handle_panel_plugins_upload(FakeRequest(form={"plugin_file": _File()}))
+    resp = await server._handle_panel_plugins_upload(
+        FakeRequest(form={"plugin_file": _File()}, **_auth(token)))
     assert resp.status == 302
     assert "err=1" in resp.headers.get("Location", "")
     assert "大小上限" in resp.headers.get("Location", "")

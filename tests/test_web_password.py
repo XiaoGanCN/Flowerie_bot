@@ -76,8 +76,9 @@ def test_register_stores_hash_only():
 
 
 async def test_login_verifies_against_hash():
-    server, repo, cfg, tmp = _make_server()
-    server.config_service.register_user("boss", "newpass123")
+    server, repo, cfg, tmp = _bootstrap_server()
+    ok, msg = server.config_service.register_user("boss", "newpass123")
+    assert ok, msg
     resp = await server._handle_login(FakeRequest(body={"username": "boss", "password": "newpass123"}))
     assert resp.status == 200
     assert "token" in await _resp_data(resp)

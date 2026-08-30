@@ -453,7 +453,7 @@ def test_core_modules_stay_slim():
         "src/services/web_ui.py": 430,           # 薄门面 + 核心（认证/面板壳/生命周期）
         "src/services/web_ui_assets.py": 120,    # 渲染层聚合导出（实现拆到 webui_render/）
         "src/services/ai_client.py": 430,        # 职责服务已拆：prompt_builder/vision/toxic
-        "src/services/config_service.py": 520,   # 数据声明已拆到 config_schema.py
+        "src/services/config_service.py": 700,   # 数据声明已拆到 config_schema.py（1.2.0 增 Bootstrap Lock 账号管理）
         "src/core/message_router.py": 650,       # AI 准入层已拆到 ai_gateway.py
     }
     for rel, limit in limits.items():

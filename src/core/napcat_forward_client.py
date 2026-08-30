@@ -37,7 +37,7 @@ def redact_ws_url(url: str) -> str:
     """去除 URL 查询串（access_token 等敏感参数绝不进日志/UI）。"""
     try:
         parts = urlparse(url)
-        return urlunparse((parts.scheme, parts.netloc, parts.path, "", parts.fragment))
+        return urlunparse((parts.scheme, parts.netloc, parts.path, "", "", parts.fragment))
     except ValueError:
         return "<invalid-url>"
 
@@ -110,7 +110,7 @@ class NapCatForwardClient:
             # 鉴权：Authorization 头 + URL access_token 参数（OneBot11 约定；日志只记脱敏 URL）
             headers = {"Authorization": f"Bearer {self._token}"}
             parsed = urlparse(self._url)
-            connect_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path,
+            connect_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "",
                                       "access_token=" + self._token, parsed.fragment))
         logger.info("napcat_ws_connecting url=%s", redact_ws_url(self._url),
                     extra={"event": "ws_connecting"})

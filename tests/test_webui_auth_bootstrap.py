@@ -89,7 +89,8 @@ async def test_registration_race_only_one_succeeds():
 
     results = await asyncio.gather(try_register("alpha"), try_register("beta"))
     statuses = sorted(r.status for r in results)
-    assert statuses == [200, 400]  # 一个成功，一个被 CAS 拒绝
+    # 一个成功（200），另一个要么 CAS 冲突（400）要么注册已关闭（403）
+    assert statuses[0] == 200 and statuses[1] in (400, 403)
     # 只创建了一个管理员凭据
     assert server.config_service.admin_initialized() is True
     tmp.cleanup()
@@ -148,7 +149,7 @@ async def test_change_credentials_requires_auth_and_current_password():
     resp = await server._handle_panel_change_credentials(FakeRequest(
         cookies={"fb_token": token},
         form={"username": "boss", "password": "newpass123", "current_password": "wrong"}))
-    assert "不正确" in resp.headers.get("Location", "")
+    assert "err=1" in resp.headers.get("Location", "")
     # 正确 → 成功，新账号登录、旧账号失效
     resp = await server._handle_panel_change_credentials(FakeRequest(
         cookies={"fb_token": token},

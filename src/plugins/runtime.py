@@ -26,8 +26,10 @@ from src.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)
 
-# 环境变量白名单：插件进程不继承任何 Secret（API Key / Token 全部不注入）
-_ENV_WHITELIST = ("PATH", "HOME", "LANG", "TMPDIR", "TEMP", "TMP", "NODE_PATH")
+# 环境变量白名单：插件进程不继承任何 Secret（API Key / Token 全部不注入）。
+# LD_LIBRARY_PATH 仅含系统/解释器库目录（不含源码路径），共享库构建的解释器需要它。
+_ENV_WHITELIST = ("PATH", "HOME", "LANG", "TMPDIR", "TEMP", "TMP", "NODE_PATH",
+                  "LD_LIBRARY_PATH")
 
 
 class PluginTimeoutError(Exception):
@@ -71,10 +73,12 @@ class PluginRuntime:
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,   # 捕获尾 4KB（诊断 + 日志），不落盘
             env=env,
             cwd=self.plugin_dir,
         )
+        self._stderr_tail = b""
+        self._stderr_task = asyncio.create_task(self._stderr_loop())
         self._reader_task = asyncio.create_task(self._reader_loop())
         try:
             await asyncio.wait_for(
@@ -123,14 +127,34 @@ class PluginRuntime:
         logger.info("plugin_stopped id=%s reason=%s", self.plugin_id, reason,
                     extra={"event": "plugin_lifecycle"})
 
+    async def _stderr_loop(self) -> None:
+        """收集插件 stderr 尾 4KB（超出丢弃；供崩溃诊断，不落盘）。"""
+        try:
+            while self.proc is not None and self.proc.stderr is not None:
+                chunk = await self.proc.stderr.read(4096)
+                if not chunk:
+                    break
+                self._stderr_tail = (self._stderr_tail + chunk)[-4096:]
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            return
+
+    def _stderr_diagnostic(self) -> str:
+        tail = str(getattr(self, "_stderr_tail", b"") or b"")[-4096:]
+        try:
+            return tail.decode("utf-8", errors="replace").strip()
+        except Exception:  # noqa: BLE001
+            return ""
+
     def _cleanup(self) -> None:
         for fut in self._pending.values():
             if not fut.done():
                 fut.cancel()
         self._pending.clear()
-        if self._reader_task is not None and not self._reader_task.done():
-            self._reader_task.cancel()
-        self._reader_task = None
+        for task, attr in ((getattr(self, "_reader_task", None), "_reader_task"),
+                           (getattr(self, "_stderr_task", None), "_stderr_task")):
+            if task is not None and not task.done():
+                task.cancel()
+            setattr(self, attr, None)
         self.proc = None
 
     # ---------- 命令构造 ----------
@@ -270,6 +294,11 @@ class PluginRuntime:
         await self._write({"id": req_id, "result": result})
 
     def _notify_exit(self, reason: str, code: int) -> None:
+        diag = self._stderr_diagnostic()
+        if diag:
+            logger.warning("plugin_stderr id=%s reason=%s code=%s stderr=%s",
+                           self.plugin_id, reason, code, diag[:500],
+                           extra={"event": "plugin_crash"})
         if self._on_exit is not None:
             try:
                 self._on_exit(self.plugin_id, reason, code)

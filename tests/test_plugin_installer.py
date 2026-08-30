@@ -192,20 +192,33 @@ class _FakeResp:
 
 
 async def _fake_client_monkey(monkeypatch, resp, downloader):
-    """monkeypatch 掉 DNS 校验与 URL 校验，让安装器对 127.0.0.1 的本地 server 进行真实下载。"""
+    """monkeypatch 掉 DNS/URL 校验与 httpx.AsyncClient：安装器全程走假 client（黑盒可控）。"""
+    import httpx
+
     import src.plugins.installer as inst_mod
 
     async def _ok_dns(parts):
         return True, ""
 
-    async def _fake_connect(url, timeout=None, follow_redirects=None, max_redirects=None,
-                            headers=None):
-        class _FakeClient:
-            async def stream(self, *a, **k):
-                return resp
-        return _FakeClient()
+    class _FakeClient:
+        """httpx.AsyncClient 替身：stream() 返回预设响应（可配置状态/头/字节流）。"""
+
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def stream(self, *a, **k):
+            return resp
+
     monkeypatch.setattr(inst_mod, "validate_mcp_server_url", lambda u, allowed=None: (True, ""))
     monkeypatch.setattr(downloader, "_check_dns", _ok_dns)
+    # installer 在函数内 import httpx（同一模块对象）：替换其 AsyncClient 即全链路生效
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
 
 
 @pytest.mark.asyncio
