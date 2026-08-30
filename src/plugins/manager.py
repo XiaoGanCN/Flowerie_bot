@@ -16,6 +16,7 @@ manifest 校验、进程隔离、日志、崩溃保护、资源限制、权限�
 """
 import json
 import os
+import re
 import shutil
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -54,6 +55,8 @@ class PluginManager:
         self._runtimes: Dict[str, PluginRuntime] = {}
         self._manifest_cache: Dict[str, Optional[PluginManifest]] = {}
         self._started = False
+        # 本实例（bot）已发送的 message_id 记录：插件只能撤回这些消息（防删他人消息）
+        self._sent_message_ids: list = []
 
     @property
     def plugin_dir(self) -> str:
@@ -350,6 +353,8 @@ class PluginManager:
 
     async def shutdown(self) -> None:
         self._started = False
+        # 本实例（bot）已发送的 message_id 记录：插件只能撤回这些消息（防删他人消息）
+        self._sent_message_ids: list = []
         for plugin_id in list(self._runtimes.keys()):
             rt = self._runtimes.pop(plugin_id, None)
             if rt is not None:
@@ -425,7 +430,9 @@ class PluginManager:
             return []
         wants = "message" if event_type in ("message", "group_message") else "notice"
         actions: List[dict] = []
-        for rule in manifest.declarations:
+        # 优先级大者先执行；stop=true 的规则命中后，本插件剩余规则不再匹配（Matcher 阻断）
+        rules = sorted(manifest.declarations, key=lambda r: int(r.get("priority") or 0), reverse=True)
+        for rule in rules:
             if rule["event"] != wants:
                 continue
             match = rule["match"]
@@ -436,6 +443,8 @@ class PluginManager:
                     "type": str(a.get("type") or ""),
                     "payload": self._substitute(a.get("payload") or {}, payload),
                 })
+            if rule.get("stop"):  # Matcher 阻断：插件内后续规则不再匹配（跨插件不阻断，保隔离）
+                break
         return actions
 
     @staticmethod
@@ -447,6 +456,34 @@ class PluginManager:
             elif key == "text_prefix":
                 if not str(payload.get("text", "")).startswith(str(value)):
                     return False
+            elif key == "text_exact":
+                if str(payload.get("text", "")) != str(value):
+                    return False
+            elif key == "text_suffix":
+                if not str(payload.get("text", "")).endswith(str(value)):
+                    return False
+            elif key == "text_regex":
+                try:
+                    if re.search(str(value)[:200], str(payload.get("text", ""))) is None:
+                        return False
+                except re.error:
+                    return False
+            elif key == "command":
+                # 命令匹配：与消息开头（可选前缀）解析的命令名及参数
+                import shlex
+                text = str(payload.get("text", "")).strip()
+                parts = shlex.split(text) if text else []
+                if not parts:
+                    return False
+                cmd_name, cmd_args = parts[0].lstrip("/!."), parts[1:]
+                wanted = str(value)
+                okay = cmd_name in {wanted, wanted.lstrip("/!.")}
+                if not okay:
+                    return False
+                if isinstance(match.get("args"), (list, tuple)) and match.get("args"):
+                    if len(cmd_args) < len(match["args"]):
+                        return False
+                return True
             elif key == "user_id":
                 try:
                     if int(payload.get("user_id", -1)) != int(value):
@@ -519,24 +556,64 @@ class PluginManager:
             logger.info("plugin_log id=%s level=%s message=%s", plugin_id, level, message,
                         extra={"event": "plugin_log"})
             return {"ok": True}
-        if action_type == "send_message":
+        if action_type in ("send_message", "send_private_message", "send_reply"):
+            # 消息发送三者共用：message 支持 str（含 [CQ:...]）或 OneBot 段数组 list
             group_id = payload.get("group_id")
-            message = str(payload.get("message") or "")[:2000]
-            if not group_id or not message:
-                return {"ok": False, "error": "send_message 需要 group_id 与 message"}
-            if self.sender is None:
-                return {"ok": False, "error": "sender 未注入（不可用）"}
-            ok = await self.sender.send_group_message(int(group_id), message)
-            return {"ok": ok, "group_id": int(group_id)}
-        if action_type == "send_private_message":
             user_id = payload.get("user_id")
-            message = str(payload.get("message") or "")[:2000]
-            if not user_id or not message:
-                return {"ok": False, "error": "send_private_message 需要 user_id 与 message"}
+            message = payload.get("message")
+            reply_id = payload.get("reply_id")
+            if action_type == "send_private_message":
+                target, target_id = "private", user_id
+            else:
+                target, target_id = "group", group_id
+            if not target_id or not message:
+                return {"ok": False, "error": f"{action_type} 需要目标与 message"}
             if self.sender is None:
                 return {"ok": False, "error": "sender 未注入（不可用）"}
-            ok = await self.sender.send_private_message(int(user_id), message)
-            return {"ok": ok, "user_id": int(user_id)}
+            result = await self.sender.send_msg_raw(target, int(target_id), message, reply_id=reply_id)
+            if isinstance(message, str):
+                result.setdefault("raw_text", str(message)[:2000])
+            if result.get("ok") and result.get("message_id"):
+                self._sent_message_ids.append(int(result["message_id"]))
+                if len(self._sent_message_ids) > 200:  # 只保留最近 200 条（撤回窗口）
+                    self._sent_message_ids = self._sent_message_ids[-200:]
+            return {"ok": bool(result.get("ok")), "target": target, "target_id": int(target_id),
+                    "message_id": result.get("message_id"),
+                    "raw_text": result.get("raw_text", str(message)[:2000] if isinstance(message, str) else "")}
+        if action_type == "delete_message":
+            # 撤回：只允许撤回本 bot 发送过（且由本实例记录）的消息
+            message_id = payload.get("message_id")
+            if message_id is None:
+                return {"ok": False, "error": "delete_message 需要 message_id"}
+            if int(message_id) not in self._sent_message_ids:
+                return {"ok": False, "denied": True,
+                        "error": "只能撤回本 bot 发送的消息（message_id 未被记录）"}
+            if self.sender is None:
+                return {"ok": False, "error": "sender 未注入（不可用）"}
+            ok = await self.sender.delete_msg(int(message_id))
+            if ok:
+                try:
+                    self._sent_message_ids.remove(int(message_id))
+                except ValueError:
+                    pass
+            return {"ok": ok, "message_id": int(message_id)}
+        if action_type == "get_message":
+            message_id = payload.get("message_id")
+            if message_id is None or self.sender is None:
+                return {"ok": False, "error": "get_message 需要 message_id（或 sender 不可用）"}
+            return await self.sender.get_msg(int(message_id))
+        if action_type == "get_group_history":
+            group_id = payload.get("group_id")
+            count = int(payload.get("count") or 15)
+            if not group_id or self.sender is None:
+                return {"ok": False, "error": "get_group_history 需要 group_id（或 sender 不可用）"}
+            return await self.sender.get_group_msg_history(int(group_id), count)
+        if action_type == "get_context":
+            # 群上下文：最近 10 条（与主进程上下文同理的轻量版）
+            group_id = payload.get("group_id")
+            if not group_id or self.sender is None:
+                return {"ok": False, "error": "get_context 需要 group_id（或 sender 不可用）"}
+            return await self.sender.get_group_msg_history(int(group_id), 10)
         if action_type == "get_group":
             group_id = payload.get("group_id")
             if not group_id:
@@ -549,6 +626,39 @@ class PluginManager:
                 return {"ok": False, "error": "get_user 需要 user_id"}
             info = self._state_lookup("user", int(user_id)) or {}
             return {"ok": True, "user_id": int(user_id), "info": info}
+        if action_type == "get_group_member":
+            group_id, user_id = payload.get("group_id"), payload.get("user_id")
+            if not group_id or not user_id or self.sender is None:
+                return {"ok": False, "error": "get_group_member 需要 group_id 与 user_id（或 sender 不可用）"}
+            return await self.sender.get_group_member_info(int(group_id), int(user_id))
+        if action_type == "get_group_members":
+            group_id = payload.get("group_id")
+            if not group_id or self.sender is None:
+                return {"ok": False, "error": "get_group_members 需要 group_id（或 sender 不可用）"}
+            return await self.sender.get_group_member_list(int(group_id))
+        if action_type == "group_ban":
+            group_id, user_id = payload.get("group_id"), payload.get("user_id")
+            duration = int(payload.get("duration") or 0)
+            if not group_id or not user_id or self.sender is None:
+                return {"ok": False, "error": "group_ban 需要 group_id 与 user_id（或 sender 不可用）"}
+            if duration < 0 or duration > 30 * 24 * 3600:
+                return {"ok": False, "error": "group_ban duration 0~2592000 秒"}
+            ok = await self.sender.set_group_ban(int(group_id), int(user_id), duration)
+            return {"ok": ok, "group_id": int(group_id), "user_id": int(user_id), "duration": duration}
+        if action_type == "group_kick":
+            group_id, user_id = payload.get("group_id"), payload.get("user_id")
+            reject_add = bool(payload.get("reject_add", False))
+            if not group_id or not user_id or self.sender is None:
+                return {"ok": False, "error": "group_kick 需要 group_id 与 user_id（或 sender 不可用）"}
+            ok = await self.sender.set_group_kick(int(group_id), int(user_id), reject_add)
+            return {"ok": ok, "group_id": int(group_id), "user_id": int(user_id)}
+        if action_type == "group_admin":
+            group_id, user_id = payload.get("group_id"), payload.get("user_id")
+            enable = bool(payload.get("enable", False))
+            if not group_id or not user_id or self.sender is None:
+                return {"ok": False, "error": "group_admin 需要 group_id 与 user_id（或 sender 不可用）"}
+            ok = await self.sender.set_group_admin(int(group_id), int(user_id), enable)
+            return {"ok": ok, "group_id": int(group_id), "user_id": int(user_id), "enable": enable}
         if action_type == "get_memory":
             user_id = payload.get("user_id")
             group_id = payload.get("group_id")

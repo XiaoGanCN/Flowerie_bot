@@ -174,14 +174,32 @@ class PluginManifest:
             if not isinstance(match, dict):
                 raise PluginManifestError(f"declarations[{i}] match 必须是对象")
             for key in match:
-                if key not in ("text_contains", "text_prefix", "user_id", "group_id"):
+                if key not in ("text_contains", "text_prefix", "text_exact", "text_suffix",
+                               "text_regex", "command", "user_id", "group_id"):
                     raise PluginManifestError(f"declarations[{i}] match.{key} 不支持")
                 if key in ("user_id", "group_id") and not isinstance(match[key], int):
                     raise PluginManifestError(f"declarations[{i}] match.{key} 必须是整数")
-                if key in ("text_contains", "text_prefix") and not isinstance(match[key], str):
-                    raise PluginManifestError(f"declarations[{i}] match.{key} 必须是字符串")
+                if key in ("text_exact", "text_suffix"):
+                    if not isinstance(match[key], str):
+                        raise PluginManifestError(f"declarations[{i}] match.{key} 必须是字符串")
+                if key == "text_regex":
+                    if not isinstance(match[key], str):
+                        raise PluginManifestError(f"declarations[{i}] match.text_regex 必须是字符串")
+                    import re as _re
+                    try:
+                        _re.compile(match[key])
+                    except _re.error as e:
+                        raise PluginManifestError(f"declarations[{i}] match.text_regex 非法正则: {e}") from None
+                if key == "command" and not isinstance(match[key], str):
+                    raise PluginManifestError(f"declarations[{i}] match.command 必须是字符串")
                 if len(str(match[key])) > 200:
                     raise PluginManifestError(f"declarations[{i}] match.{key} 过长")
+            priority = rule.get("priority", 0)
+            if not isinstance(priority, int) or not (-1000 <= priority <= 1000):
+                raise PluginManifestError(f"declarations[{i}] priority 必须是 -1000~1000 的整数")
+            stop = rule.get("stop", False)
+            if not isinstance(stop, bool):
+                raise PluginManifestError(f"declarations[{i}] stop 必须是布尔值")
             actions = rule.get("actions")
             if not isinstance(actions, list) or not actions:
                 raise PluginManifestError(f"declarations[{i}] 必须有 actions 数组")
@@ -190,7 +208,8 @@ class PluginManifest:
             for j, act in enumerate(actions):
                 if not isinstance(act, dict) or not str(act.get("type") or "").strip():
                     raise PluginManifestError(f"declarations[{i}].actions[{j}] 必须是含 type 的对象")
-            result.append({"event": event, "match": match, "actions": actions})
+            result.append({"event": event, "match": match, "actions": actions,
+                           "priority": priority, "stop": stop})
         return result
 
     # ---------- 序列化 ----------

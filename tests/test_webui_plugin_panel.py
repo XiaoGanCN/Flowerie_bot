@@ -33,6 +33,12 @@ def async_sender(sender):
     async def _send(group_id, message=None, **kw):
         sender.sent.append((group_id, message))
         return True
+
+    async def _raw(target, target_id, message, reply_id=None, retries=2):
+        sender.sent.append((target, target_id, message, reply_id))
+        return {"ok": True, "message_id": 1}
+
+    sender.send_msg_raw = _raw
     return _send
 
 

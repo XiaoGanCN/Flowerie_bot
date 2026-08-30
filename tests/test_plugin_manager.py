@@ -14,8 +14,21 @@ TESTS_PLUGINS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugin
 
 
 class FakeSender:
+    """OneBot11 发送桩：记录调用；支持消息类/群管 API（与 sender.py 同形）。"""
+
     def __init__(self):
         self.sent = []
+        self.deleted = []
+        self.sent_mid = 9000
+        self.group_members = [{"user_id": 1, "role": "owner", "card": "", "nickname": "a"}]
+
+    async def send_msg_raw(self, target, target_id, message, reply_id=None, retries=2):
+        self.sent.append((target, target_id, message, reply_id))
+        self.sent_mid += 1
+        if target == "group" and isinstance(message, str):
+            # 与旧 send_group_message 兼容的断言形式（旧测试依赖）
+            pass
+        return {"ok": True, "message_id": self.sent_mid}
 
     async def send_group_message(self, group_id, message=None, **kw):
         self.sent.append(("group", group_id, message))
@@ -23,6 +36,32 @@ class FakeSender:
 
     async def send_private_message(self, user_id, message=None, **kw):
         self.sent.append(("private", user_id, message))
+        return True
+
+    async def delete_msg(self, message_id):
+        self.deleted.append(message_id)
+        return True
+
+    async def get_msg(self, message_id):
+        return {"ok": True, "message_id": message_id, "user_id": 1, "time": 1, "text": "hi"}
+
+    async def get_group_msg_history(self, group_id, count=15):
+        return {"ok": True, "messages": [{"message_id": 1, "user_id": 2, "time": 1, "text": "x"}]}
+
+    async def get_group_member_info(self, group_id, user_id):
+        return {"ok": True, "group_id": group_id, "user_id": user_id, "role": "member",
+                "card": "", "nickname": "n"}
+
+    async def get_group_member_list(self, group_id):
+        return {"ok": True, "group_id": group_id, "members": self.group_members}
+
+    async def set_group_ban(self, group_id, user_id, duration_seconds):
+        return True
+
+    async def set_group_kick(self, group_id, user_id, reject_add=False):
+        return True
+
+    async def set_group_admin(self, group_id, user_id, enable):
         return True
 
 
@@ -100,7 +139,7 @@ async def test_permission_denied_at_runtime(env):
     summary = await mgr.dispatch_event("message", {"group_id": 7, "user_id": 9, "text": "hello world"})
     # 匹配规则 → send_message 执行成功
     assert any(s["action"] == "send_message" and s["ok"] for s in summary)
-    assert sender.sent and sender.sent[0] == ("group", 7, "你好 9")
+    assert sender.sent and sender.sent[0] == ("group", 7, "你好 9", None)  # send_msg_raw(reply_id=None)
     # 未批准 http_request → 强制拒绝（即使转发给 _execute_action 也一样）
     denied = await mgr._execute_action("declarative_plugin", {"type": "http_request", "payload": {}})
     assert denied[0]["denied"] is True and denied[0]["ok"] is False
@@ -221,7 +260,7 @@ async def test_declarative_plugin_greeting(env):
     await mgr.enable("declarative_plugin", approved_permissions=["send_message", "read_message"])
     summary = await mgr.dispatch_event("message", {"group_id": 42, "user_id": 100, "text": "hello there"})
     assert summary and any(s["action"] == "send_message" and s["ok"] for s in summary)
-    assert sender.sent[0] == ("group", 42, "你好 100")
+    assert sender.sent[0] == ("group", 42, "你好 100", None)  # send_msg_raw(reply_id=None)
     # 不匹配前缀 → 无动作
     summary = await mgr.dispatch_event("message", {"group_id": 42, "user_id": 100, "text": "bye"})
     assert summary == []
@@ -287,3 +326,96 @@ async def test_unsafe_level_still_enforces_permissions(env):
     summary = await mgr.dispatch_event("message", {"group_id": 3, "user_id": 4, "text": "hello there"})
     assert summary and all(s["denied"] is True for s in summary)
     assert sender.sent == []
+
+
+# ---------- 消息类 API（v1.2+）：回复引用 / 撤回白名单 / 详情·历史·上下文 ----------
+@pytest.mark.asyncio
+async def test_send_reply_and_record_message_id(env):
+    mgr, repo, sender, tmp = env
+    _deploy(tmp, "minimal_plugin")
+    mgr.discover()
+    await mgr.enable("minimal_plugin", approved_permissions=["read_message", "send_message"])
+    res = await mgr._execute_action("minimal_plugin", {
+        "type": "send_reply",
+        "payload": {"group_id": 1, "message": "收到", "reply_id": 12345}})
+    assert res[0]["ok"] and res[0]["result"]["message_id"]
+    # reply 段通过 send_msg_raw(reply_id=12345) 透传
+    assert sender.sent[-1] == ("group", 1, "收到", 12345)
+    # 发送记录被维护（可撤回）
+    mid = res[0]["result"]["message_id"]
+    assert mid in mgr._sent_message_ids
+
+
+@pytest.mark.asyncio
+async def test_delete_message_only_own_sent(env):
+    mgr, repo, sender, tmp = env
+    _deploy(tmp, "minimal_plugin")
+    mgr.discover()
+    await mgr.enable("minimal_plugin",
+                     approved_permissions=["read_message", "send_message", "delete_message"])
+    # 未知 message_id（不是本 bot 发的）→ 拒绝（防删他人消息）
+    res = await mgr._execute_action("minimal_plugin", {"type": "delete_message", "payload": {"message_id": 88888}})
+    # 业务级拒绝（result.denied）——权限已批但 message_id 未记录：只能撤回本 bot 发的
+    assert res[0]["ok"] is False and res[0]["result"].get("denied") is True
+    assert sender.deleted == []
+    # 先发一条，再撤回自己的 → 成功
+    sent = await mgr._execute_action("minimal_plugin", {
+        "type": "send_message", "payload": {"group_id": 2, "message": "hi"}})
+    mid = sent[0]["result"]["message_id"]
+    res2 = await mgr._execute_action("minimal_plugin", {"type": "delete_message", "payload": {"message_id": mid}})
+    assert res2[0]["ok"] is True and sender.deleted == [mid]
+
+
+@pytest.mark.asyncio
+async def test_message_query_actions(env):
+    mgr, repo, sender, tmp = env
+    _deploy(tmp, "minimal_plugin")
+    mgr.discover()
+    await mgr.enable("minimal_plugin", approved_permissions=["read_message", "read_message_history"])
+    get_msg = await mgr._execute_action("minimal_plugin", {"type": "get_message", "payload": {"message_id": 1}})
+    assert get_msg[0]["ok"] and get_msg[0]["result"]["text"] == "hi"
+    hist = await mgr._execute_action("minimal_plugin", {"type": "get_group_history", "payload": {"group_id": 1}})
+    assert hist[0]["ok"] and hist[0]["result"]["messages"][0]["text"] == "x"
+    ctx = await mgr._execute_action("minimal_plugin", {"type": "get_context", "payload": {"group_id": 1}})
+    assert ctx[0]["ok"] and ctx[0]["result"]["messages"]
+
+
+# ---------- 匹配扩展：正则 / 优先级 / Matcher 阻断 ----------
+def _decl(rule):
+    import io as _io
+    import json as _json
+    import shutil as _sh
+    import tempfile as _tf
+    tmp = _tf.mkdtemp()
+    d = _tf.mkdtemp()
+    p = os.path.join(d, "m.json")
+    open(p, "w", encoding="utf-8").write(_json.dumps({
+        "id": "m", "name": "M", "version": "1.0.0", "runtime": "json", "entry": "",
+        "api_version": "1", "permissions": ["read_message"], "declarations": rule}))
+    return p, d
+
+
+@pytest.mark.asyncio
+async def test_declarative_regex_and_priority_stop(env):
+    mgr, repo, sender, tmp = env
+    pdir = tmp / "plugins" / "m"
+    pdir.mkdir(parents=True)
+    manifest = {
+        "id": "m", "name": "M", "version": "1.0.0", "runtime": "json", "entry": "",
+        "api_version": "1", "permissions": ["read_message", "send_message"],
+        "declarations": [
+            {"event": "message", "priority": 10, "stop": True, "match": {"text_regex": "^!hi\\s"},
+             "actions": [{"type": "send_message",
+                          "payload": {"group_id": "${group_id}", "message": "regex hit"}}]},
+            {"event": "message", "priority": 1, "match": {"text_prefix": "!hi"},
+             "actions": [{"type": "send_message",
+                          "payload": {"group_id": "${group_id}", "message": "prefix hit"}}]},
+        ]}
+    (pdir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    mgr.discover()
+    ok, msg = await mgr.enable("m", approved_permissions=["read_message", "send_message"])
+    assert ok, msg
+    summary = await mgr.dispatch_event("message", {"group_id": 3, "user_id": 9, "text": "!hi 世界"})
+    # stop=true 高优先级命中 → 仅有 regex 规则执行（Matcher 阻断低优先级规则）
+    raws = [s.get("result", {}).get("raw_text", "") for s in summary]
+    assert "regex hit" in raws and "prefix hit" not in raws

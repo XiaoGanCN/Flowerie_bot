@@ -7,6 +7,11 @@
   "runtime": "python",
   "entry": "plugin.py",
   "api_version": "1",
-  "permissions": ["read_message"],
+  "permissions": [
+    "read_message",
+    "send_message",
+    "delete_message",
+    "read_message_history"
+  ],
   "config": {}
 }

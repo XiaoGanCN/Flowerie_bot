@@ -37,11 +37,24 @@ ALL_PERMISSIONS = frozenset({
     "filesystem_write",
     "execute_process",
     "webhook",
+    "delete_message",        # 撤回（仅限本 bot 发送过的消息）
+    "read_message_history",  # 消息详情/群历史/上下文读取
+    "group_manage",          # 群管理写操作（禁言/踢人/管理员）
 })
 
 # Action 类型 → 所需权限（None = 无需权限：log / test 等无害动作）
 ACTION_PERMISSIONS: Dict[str, Optional[str]] = {
     "send_message": "send_message",
+    "send_reply": "send_message",
+    "delete_message": "delete_message",
+    "get_message": "read_message_history",
+    "get_group_history": "read_message_history",
+    "get_context": "read_message_history",
+    "get_group_member": "read_group_info",
+    "get_group_members": "read_group_info",
+    "group_ban": "group_manage",
+    "group_kick": "group_manage",
+    "group_admin": "group_manage",
     "send_private_message": "send_message",
     "get_group": "read_group_info",
     "get_user": "read_user_info",
