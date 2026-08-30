@@ -103,3 +103,7 @@ python main.py           # 启动机器人
 ---
 
 [← 返回 README](../README.md)
+
+## v1.3.0 说明
+
+安装方式不变；新增插件 SDK（`plugin_sdk/`）随仓库一起分发，无需额外安装步骤。

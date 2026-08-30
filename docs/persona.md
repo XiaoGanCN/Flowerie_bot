@@ -110,3 +110,8 @@ Built-in Default（内置默认，PERSONA_DEFAULT，默认 flowerie）
 
 `tests/test_persona_manager.py`：内置播种幂等 / 层级解析与回退 / CRUD 与校验 /
 持久化 / 群隔离 / 切换不污染记忆 / ATRI 结构与安全框架不变量 / 注入顺序 / Router 集成。
+
+## v1.3.0 说明
+
+人格系统由主进程注入（persona_manager），插件不参与人格组装；
+SDK 事件负载不含人格信息。

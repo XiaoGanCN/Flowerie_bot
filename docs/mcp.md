@@ -73,3 +73,8 @@ MCP_ALLOWED_TOOLS=            # 各 server 未单独指定 allowed_tools 时回�
 ## 指标
 
 工具调用在 Metrics 中单独统计，与 AI 请求分离。
+
+## v1.3.0 说明
+
+MCP 工具调用仍由主进程统一出口（SSRF/域名白名单校验）；插件侧网络请求走
+`http_request` 动作（受同一套校验），SDK 不提供绕过路径。

@@ -18,3 +18,8 @@ STICKER_DIR=/path/to/stickers   # 放图片即可（jpg/png/gif/webp/bmp）
 
 - Vision 失败：记录失败状态，不阻塞启动，不每次消息重试（24 小时后自动重试）
 - 路径安全：只允许 `STICKER_DIR` 目录内的文件，路径穿越一律拒绝
+
+## v1.3.0 说明
+
+Sticker/Vision 缓存仍由主进程管理；插件图片能力经 `BotMessage().image(...)`
+或 `send_message` 段数组透传（下层转换）。

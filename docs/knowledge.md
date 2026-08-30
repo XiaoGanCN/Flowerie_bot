@@ -92,3 +92,8 @@
 `tests/test_meme_knowledge.py`（隔离/CRUD/去重含并发/上限/持久化/检索/清洗/可信度）、
 `tests/test_meme_summary.py`（批量/防重/重试放弃/MCP 按需/降级/解析防御/群数上限）、
 `tests/test_web_ui_persona_knowledge.py`（管理页 UI/隔离/认证/零 JS）。
+
+## v1.3.0 说明
+
+群梗知识层由主进程管理（meme_manager），插件如需检索请调用 `get_memory` 等动作；
+知识文件路径与隔离策略不变。
