@@ -2,6 +2,44 @@
 
 本文件记录 Flowerie_bot 的版本变更。版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [1.3.0] - 2026-08-31
+
+### Added
+
+- **Bot SDK（插件生态第一阶段，三层架构）**：
+  - 上层 `plugin_sdk/flowerie_sdk/`：FlowerieBot（send/reply/recall/get_message/
+    get_context/群 API/权限）+ Matcher 装饰器（command/keyword/regex/prefix/exact）
+    + Builder（add_text/at/image/reply）；插件零依赖 HTTP/JSON/SQLite，不接触 OneBot payload
+  - 中层 `src/sdk/`：BotEvent（kind/scope 领域语义，零 OneBot 命名）/ BotMessage /
+    Matcher（priority 大者先 + block + 可扩展 Rule）/ EventDispatcher（优先级/异常隔离/
+    stop/shutdown）/ PermissionChecker（user/group_member/group_admin/group_owner/
+    bot_admin/bot_owner，复用 ADMIN_QQ_IDS）/ BotAdapter 抽象
+  - 下层 `src/sdk/onebot/`：DTO 瘦身 + Transformer（OneBot raw→BotEvent，CQ 码阉割为
+    at_list/images/reply_id；BotMessage→段数组出站）+ OneBotAdapter（复用 Sender；
+    错误统一 BotError 体系：BotAPIError/BotTimeoutError/BotPermissionError/
+    MessageNotFoundError/UnsupportedOperationError）
+- **消息 API 扩展**：send_reply（引用回复）/ delete_message（撤回，仅限本 bot 已发送
+  记录）/ get_message / get_group_history / get_context（复用 ContextManager）
+- **群 API**：get_group_member(s) / is_group_admin / is_group_owner / group_ban /
+  group_kick（OneBot11）
+- **事件投递领域化**：kind/scope/text/at_list/images/reply_id/notice_kind；
+  notice/request/lifecycle 钩子（on_notice/on_request/on_lifecycle）
+- 新权限：delete_message / read_message_history / group_manage
+- 文档：docs/sdk.md（三层架构与 API）、docs/api.md（API 总表）、docs/plugins.md（插件开发入口）
+
+### Changed
+
+- 插件事件负载字段（post_type/message_type/notice_type/sub_type →
+  kind/scope/notice_kind；CQ 段不再下沉，use at_list/images）
+- `NAPCAT_WS_AUTH_MODE`（header/query 互斥鉴权，默认 header 单通道）见 v1.2.x 说明
+
+### Tests
+
+- 新增 SDK 测试（+24）：BotMessage/Transformer CQ 阉割/Event kind 映射/Matcher 5 型
+  + priority + Rule async/Listener 优先级·隔离·stop/Adapter 错误语义·超时·context
+  复用/Permission/端到端 SDK 插件（@command → event.reply 全链路 + 未命中不投递）
+- 并发 100 事件/matcher 不互相污染
+
 ## [1.2.0] - 2026-08-31
 
 ### Added

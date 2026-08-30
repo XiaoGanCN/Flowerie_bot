@@ -102,9 +102,12 @@ async def main():
             except Exception:  # noqa: BLE001
                 return None
 
+        # policy_engine（含 ContextManager）先于插件管理器构造：
+        # 插件 SDK 的 get_context 复用现有 ContextManager（领域数据源，不重造）
+        policy_engine = PolicyEngine(config, memory_manager)
         plugin_manager = PluginManager(
             config, settings_repo, sender=sender, memory_manager=memory_manager,
-            state_provider=_plugin_state_provider,
+            state_provider=_plugin_state_provider, context_manager=policy_engine.context,
         )
         if config.WEB_UI_ENABLED:
             def _status_provider():
@@ -119,7 +122,6 @@ async def main():
                 plugin_manager=plugin_manager,
             )
         file_parser = FileParser(config)
-        policy_engine = PolicyEngine(config, memory_manager)
         # 共享 AI 预算实例：聊天与每日梗总结复用同一套全局/群计数（总结不绕过预算）
         from src.core.budget_manager import BudgetManager
         budget_manager = BudgetManager(config, policy_engine.global_state, sender)

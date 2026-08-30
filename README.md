@@ -18,7 +18,7 @@
 ---
 ## 这是什么
 
-**花璃** 是一个基于 **DeepSeek API** 的 **QQ 群聊机器人**：像真实群友一样聊天、识图、看转发、记记忆、被戳会回应，还能自定义人格、发表情包、用 MCP 工具上网查信息，并且可以通过 Web UI 管理配置（当前版本 **v1.2.0**）。
+**花璃** 是一个基于 **DeepSeek API** 的 **QQ 群聊机器人**：像真实群友一样聊天、识图、看转发、记记忆、被戳会回应，还能自定义人格、发表情包、用 MCP 工具上网查信息，并且可以通过 Web UI 管理配置（当前版本 **v1.3.0**）。
 
 ## 功能
 
@@ -172,6 +172,15 @@ OneBot WebSocket connected
 Web UI「人格」页管理；详细设计见 [docs/persona.md](docs/persona.md)。
 
 ## 插件系统（Plugin System v1）
+插件开发支持 **SDK 模式**（推荐）与经典声明式模式：SDK 提供统一 Event /
+Message / Matcher / Permission 与 Bot Adapter 分层，插件**不接触 OneBot payload**。
+最小示例：`@command("hello") async def hello(event): await event.reply("你好")`
+
+- [SDK 三层架构与 API](docs/sdk.md)
+- [API 概览](docs/api.md)
+- [插件开发](docs/plugins.md)
+- [插件开发指南（完整）](docs/plugin-developer-guide.md)
+
 
 受控插件运行时：插件以**独立子进程**运行（Python / Node），或为**进程内声明式规则**（JSON，无代码执行），
 通过 stdin/stdout JSON-Lines 协议与 Flowerie 通信，由 PermissionManager 强制检查动作权限。

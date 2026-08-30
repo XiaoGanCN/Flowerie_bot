@@ -391,3 +391,12 @@ guarded_chat(group_id, user_id, ...)
 - `test_account_tab_is_js_free`：用户状态页零 JS
 - `test_login_and_register_username_input_width_consistent`：登录/注册框一致
 - 结构防回归测试补 AccountPanelMixin
+
+## v1.3.0 SDK 审计摘要
+
+- 插件通道 OneBot 耦合已收入下层 `src/sdk/onebot/`（DTO/Transformer/Adapter）；
+  中层零 OneBot 命名（grep 校验通过），上层插件零网络依赖。
+- 消息/群/权限能力复用现有 Sender 与 ADMIN_QQ_IDS，未重写 Router/Memory/Context。
+- 已知边界：主流程（_handle_message 内）仍直接访问 OneBot 字段（Router 稳定性优先，
+  下阶段可逐步迁移至 transformer）；`get_user_info`/`get_group_info` 平台无标准端点，
+  SDK 抛 UnsupportedOperationError（文档说明）。

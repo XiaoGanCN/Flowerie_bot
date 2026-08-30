@@ -83,7 +83,7 @@
   - 多行/JSON → textarea
 - **保存**：服务端校验（类型/范围/枚举/JSON/列表），通过后**真正写入项目根 `.env`**，并热更新运行配置；需重启的项在页面标注"已保存，部分配置将在服务器重启后生效"。
 
-### 分组新增项（v1.2.0）
+### 分组新增项（v1.3.0）
 
 - **连接（Connection）**：本组新增 NapCat WebSocket 配置——`NAPCAT_WS_MODE`（`reverse`/`forward` 二选一，枚举下拉）、
   forward 时必填的 `NAPCAT_WS_URL`（`ws://` 或 `wss://`）、`NAPCAT_ACCESS_TOKEN` 与

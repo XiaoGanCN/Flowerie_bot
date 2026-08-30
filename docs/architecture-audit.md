@@ -292,3 +292,23 @@ guarded_chat(group_id, user_id, ...)
 2. **ExpiringMap**（轻量 TTL 容器，monotonic + 惰性过期 + max_size 淘汰）：统一 user_last_time / user_ai_last_call / poke_last_time / last_toxic_warning / group breakers——状态自治，不再依赖 backup loop
 3. **inactive 群清理**：GroupState 增加 last_activity，超过 24h 无活动的群从 groups 移除（context 短期记忆随群清理，长期记忆在 SQLite 不受影响）
 4. **Metrics**：新增 ai_attempts_total / ai_circuit_rejections_total{level}，确认无 group_id/user_id label（低 cardinality）
+
+## v1.3.0：SDK 分层（上/中/下，依赖倒置）
+
+```text
+插件（上层 plugin_sdk/）
+   ↓ 依赖
+中层 src/sdk/（BotEvent / BotMessage / Matcher / Rule / Listener / Permission —— 零 OneBot 命名）
+   ↑ 被实现
+下层 src/sdk/onebot/（sdk_dto 瘦身 + Transformer CQ 阉割 + OneBotAdapter＝复用 Sender）
+   ↓
+NapCat / OneBot
+```
+
+- 事件流入：NapCat WS 两端 → `message_router.process_event` →（插件通道）下层
+  `Transformer.to_bot_event` 机械转换 → 领域 payload（kind/scope/text/at_list/images/reply_id）
+  → `PluginManager.dispatch_event`（权限门 read_message）→ 匹配（SDK matcher 注册后仅投递
+  命中事件，payload 附带 matched）→ 插件进程 SDK `route` → handler → `event.reply` →
+  动作协议 → `manager._run_action`（权限门）→ `Sender`（OneBot HTTP）。
+- 副作用出口保持唯一（`manager._run_action`，先过 PermissionManager）；
+  主流程（AI/Memory/Context/Persona）与插件路径解耦。

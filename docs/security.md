@@ -108,3 +108,17 @@ Memory / MCP / Plugin / Knowledge  （用户记忆 / 工具结果 / 插件输出
 - **Secret 脱敏**：API Key 只在 UI 显示掩码，留空提交不覆盖；日志不记录密钥明文。
 - **双层熔断 / 预算**：AI 熔断 + 群级熔断、三层 AI 预算，防风暴与滥用。
 - **SSRF 通用防线**：MCP / 图片 / 插件 URL 均走地址校验与本地-内网白名单。
+
+## Bot SDK 安全边界（v1.3.0）
+
+- **三层隔离**：插件（上层）→ 领域层（中层，零 OneBot 命名）→ OneBot 适配层（下层，
+  唯一 import OneBot 语义处）。**插件不接触 OneBot payload / HTTP endpoint / 网络库**；
+  所有网络能力经主进程动作出口，SSRF 防护与权限门继续生效。
+- **CQ 码阉割**：`[CQ:at,qq=x]` 等段码在中层转换为结构化 `at_list` / `images`，
+  插件见不到底层格式；发送侧插件用 `BotMessage`（text/at/image/reply），由下层拼段。
+- **撤回边界**：`delete_message` 权限仅允许撤回**本 bot 已发送并记录**的消息
+  （`_sent_message_ids` 上限 200）；未记录的 message_id 一律拒绝（防删他人消息）。
+- **群管理**：`group_manage` 权限（mute/kick）单独授权；建议只给受信任插件，
+  并在命令上加 `rule(is_group_admin=True)` 守卫。
+- **匹配注册**：`matcher_register`（read_message）只影响事件筛选与投递，
+  不授予任何副作用。
