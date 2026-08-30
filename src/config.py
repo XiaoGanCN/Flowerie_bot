@@ -423,8 +423,6 @@ def validate_config(config: Settings) -> None:
                 "Web UI 的本地回环端口不能与 NapCat 反向 WS 端口一致，请修改 WEB_UI_PORT")
         # Bootstrap Lock：WEB_UI_PASSWORD 允许为空（= UNINITIALIZED），此时公开注册页
         # 是唯一入口，用于创建第一个管理员（无凭据时 _verify_admin 拒绝一切登录）。
-        if not getattr(config, "WEB_UI_USERNAME", ""):
-            raise ValueError("WEB_UI_ENABLED=true 时必须设置 WEB_UI_USERNAME（用于登录页展示）")
     # MCP：MCP_ENABLED=true 时必须完整配置，fail-fast，绝不静默降级。
     # 支持插件式多 server（MCP_SERVERS JSON）与 legacy 单 server（MCP_SERVER_URL）。
     if getattr(config, "MCP_ENABLED", False):

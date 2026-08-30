@@ -185,7 +185,8 @@ async def test_change_credentials_invalidates_old_session():
         form={"username": "admin", "password": "newpass456", "current_password": "secret123"}))
     assert resp.status == 302 and "不正确" not in resp.headers.get("Location", "")
     resp = await server._handle_panel(FakeRequest(cookies={"fb_token": token}))
-    assert resp.status == 302  # 旧 token 失效 → 被踢回登录页
+    assert resp.status == 200  # 旧 token 失效 → 渲染登录页（未认证语义）
+    assert "登录" in await _resp_text(resp)
     # 新凭据可登录
     resp = await server._handle_login(FakeRequest(body={"username": "admin", "password": "newpass456"}))
     assert resp.status == 200
@@ -202,5 +203,6 @@ async def test_unregister_invalidates_all_sessions():
     assert resp.status == 302
     # 注销后旧 token 立即失效
     resp = await server._handle_panel(FakeRequest(cookies={"fb_token": token}))
-    assert resp.status == 302
+    assert resp.status == 200  # 渲染登录页（未认证语义）
+    assert "登录" in await _resp_text(resp)
     tmp.cleanup()

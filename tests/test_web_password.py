@@ -171,9 +171,11 @@ def test_register_recovers_from_stale_bootstrap_marker():
     server, repo, cfg, tmp = _bootstrap_server()
     ok, _ = server.config_service.register_user("first", "pass123456")
     assert ok
-    # 模拟中断残留：凭据被删除、行仍标记 initialized
+    # 模拟中断残留：凭据被删除（db + 运行期 config 同步重置，等效重启后 .env 为空）
     repo.delete_config("WEB_UI_USERNAME")
     repo.delete_config("WEB_UI_PASSWORD")
+    cfg.WEB_UI_PASSWORD = ""
+    cfg.WEB_UI_USERNAME = "admin"
     assert server.config_service.admin_initialized() is False
     # 再次注册必须成功（不因残留行而永久锁死）
     ok2, msg2 = server.config_service.register_user("second", "pass123456")

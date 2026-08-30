@@ -27,11 +27,11 @@ def test_web_ui_port_ok_when_different():
     validate_config(cfg)  # 不抛
 
 
-def test_web_ui_requires_password():
+def test_web_ui_empty_password_means_uninitialized():
+    """Bootstrap Lock：空密码 = UNINITIALIZED（合法，走首次注册页）。"""
     cfg = make_config(DEEPSEEK_API_KEY="sk-real-key-123456", WS_PORT=3001,
                       WEB_UI_ENABLED=True, WEB_UI_PORT=8080, WEB_UI_PASSWORD="")
-    with pytest.raises(ValueError):
-        validate_config(cfg)
+    validate_config(cfg)  # 不抛：空密码是新语义（未初始化）
 
 
 def test_web_ui_disabled_skips_checks():
