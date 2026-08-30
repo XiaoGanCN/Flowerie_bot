@@ -183,19 +183,6 @@ async def test_forward_malformed_and_garbage_events_survive():
 
 
 # ---------- WS 鉴权：header / query 二选一，绝不同时发送（NAPCAT_WS_AUTH_MODE） ----------
-def _auth_roundtrip(cfg, token, mode="header", wait=2.0):
-    """连接本地 WS server，返回服务端看到的 (auth_header, query)。"""
-    seen = {}
-
-    async def handler(ws):
-        req = ws.request
-        seen["auth"] = req.headers.get("Authorization", "")
-        seen["query"] = urlparse(req.path).query
-        await asyncio.sleep(0.1)
-
-    return handler, seen
-
-
 async def test_ws_auth_header():
     """默认（header）：只发 Authorization: Bearer；URL/路径不带 token。"""
     from urllib.parse import urlparse as _up
