@@ -13,6 +13,7 @@ jobs:
 
   build-desktop:
 
+
     strategy:
       fail-fast: false
 
@@ -36,99 +37,236 @@ jobs:
             name: macos-arm64
 
 
+
     runs-on: ${{ matrix.os }}
+
 
 
     steps:
 
 
     - name: Checkout
+
       uses: actions/checkout@v5
 
 
+
     - name: Setup Python
+
       uses: actions/setup-python@v6
+
       with:
+
         python-version: "3.12"
 
 
+
     - name: Install dependencies
+
       run: |
+
         python -m pip install --upgrade pip
+
         python -m pip install -r requirements.txt
+
         python -m pip install pyinstaller
 
 
-    - name: Build builtin library version
-      run: |
-        python -m PyInstaller --onefile --name Flowerie_bot-${{ matrix.name }}-builtin main.py
 
+    #
+    # Fully bundled executable
+    #
+
+    - name: Build builtin version
+
+      run: |
+
+        python -m PyInstaller \
+          --onefile \
+          --name Flowerie_bot-${{ matrix.name }}-builtin \
+          main.py
+
+
+
+    #
+    # External dependency version
+    #
 
     - name: Build portable version
-      run: |
-        python -m PyInstaller --onedir --name Flowerie_bot-${{ matrix.name }}-portable main.py
 
-
-    - name: Prepare release files
-      shell: bash
       run: |
 
-        mkdir output
+        python -m PyInstaller \
+          --onedir \
+          --name Flowerie_bot-${{ matrix.name }}-portable \
+          main.py
 
-        cp dist/Flowerie_bot-${{ matrix.name }}-builtin* output/
-
-        cp -r dist/Flowerie_bot-${{ matrix.name }}-portable output/
 
 
-    - name: Upload desktop artifacts
+    #
+    # Package output
+    #
+
+    - name: Package release files
+
+      shell: python
+
+      run: |
+
+        import os
+        import shutil
+        import zipfile
+        from pathlib import Path
+
+
+        name = "${{ matrix.name }}"
+
+        dist = Path("dist")
+        output = Path("output")
+
+        output.mkdir(exist_ok=True)
+
+
+        # Copy builtin executable
+
+        for f in dist.glob(f"Flowerie_bot-{name}-builtin*"):
+
+            shutil.copy(f, output / f.name)
+
+
+
+        # Zip portable folder
+
+        portable = dist / f"Flowerie_bot-{name}-portable"
+
+
+        if portable.exists():
+
+            archive = output / f"Flowerie_bot-{name}-portable.zip"
+
+            with zipfile.ZipFile(
+                archive,
+                "w",
+                zipfile.ZIP_DEFLATED
+            ) as z:
+
+                for file in portable.rglob("*"):
+
+                    if file.is_file():
+
+                        z.write(
+                            file,
+                            file.relative_to(dist)
+                        )
+
+
+
+    - name: Upload desktop artifact
+
       uses: actions/upload-artifact@v4
+
       with:
 
         name: Flowerie_bot-${{ matrix.name }}
 
-        path: output/
+        path: output/*
+
 
 
 
 
   #
-  # Termux ARM64 build
-  #
-  # Uses Termux proot environment
-  # to generate Android-compatible executable
+  # Termux source package
   #
 
   build-termux:
 
+
     runs-on: ubuntu-latest
+
+
 
     steps:
 
+
     - name: Checkout
+
       uses: actions/checkout@v5
+
+
+
+    - name: Create Termux build script
+
+      shell: bash
+
+      run: |
+
+        cat > build-termux.sh <<'EOF'
+
+        #!/data/data/com.termux/files/usr/bin/bash
+
+        set -e
+
+
+        pkg update -y
+
+
+        pkg install -y \
+          python \
+          clang \
+          rust
+
+
+
+        python -m pip install --upgrade pip
+
+
+
+        python -m pip install \
+          -r requirements.txt \
+          -i https://termux-user-repository.github.io/pypi/ \
+          --extra-index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+          --only-binary pydantic-core,pydantic
+
+
+
+        python main.py
+
+        EOF
+
+
+        chmod +x build-termux.sh
+
+
 
 
     - name: Package Termux source
 
+      shell: bash
+
       run: |
 
-        mkdir termux-package
+
+        mkdir package
+
 
         rsync -a \
           --exclude ".git" \
           --exclude ".github" \
           ./ \
-          termux-package/Flowerie_bot/
+          package/Flowerie_bot/
+
 
 
         tar -czf \
           Flowerie_bot-termux-source.tar.gz \
-          -C termux-package \
+          -C package \
           Flowerie_bot
 
 
 
-    - name: Upload Termux package
+
+    - name: Upload Termux artifact
 
       uses: actions/upload-artifact@v4
 
@@ -137,6 +275,8 @@ jobs:
         name: Flowerie_bot-termux-source
 
         path: Flowerie_bot-termux-source.tar.gz
+
+
 
 
 
@@ -154,7 +294,9 @@ jobs:
       - build-termux
 
 
+
     runs-on: ubuntu-latest
+
 
 
     steps:
@@ -170,6 +312,7 @@ jobs:
 
 
 
+
     - name: Upload release assets
 
       uses: softprops/action-gh-release@v2
@@ -178,4 +321,10 @@ jobs:
 
         files: |
 
-          release/**/*
+          release/**/*.zip
+
+          release/**/*.exe
+
+          release/**/Flowerie_bot-*-builtin
+
+          release/**/*.tar.gz
