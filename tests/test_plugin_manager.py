@@ -30,6 +30,16 @@ class FakeSender:
             pass
         return {"ok": True, "message_id": self.sent_mid}
 
+    async def set_friend_add_request(self, flag, approve, remark=""):
+        self.friend_requests = getattr(self, "friend_requests", [])
+        self.friend_requests.append((flag, bool(approve), remark))
+        return True
+
+    async def set_group_add_request(self, flag, approve, reason=""):
+        self.group_requests = getattr(self, "group_requests", [])
+        self.group_requests.append((flag, bool(approve), reason))
+        return True
+
     async def send_group_message(self, group_id, message=None, **kw):
         self.sent.append(("group", group_id, message))
         return True

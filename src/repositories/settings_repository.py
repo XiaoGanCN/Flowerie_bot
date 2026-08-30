@@ -13,6 +13,7 @@
 import os
 import sqlite3
 import threading
+import time
 from typing import List, Optional, Tuple
 
 
@@ -92,6 +93,13 @@ class SettingsRepository:
                 key TEXT PRIMARY KEY,
                 state TEXT NOT NULL,
                 updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS plugin_kv (
+                plugin_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (plugin_id, key)
             );
             """)
             self._conn.commit()
@@ -366,6 +374,35 @@ class SettingsRepository:
                 (time.time(),),
             )
             self._conn.commit()
+
+    # ---------- 插件 KV（权限 storage；按插件命名空间隔离） ----------
+    def get_plugin_kv(self, plugin_id: str, key: str) -> Optional[str]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM plugin_kv WHERE plugin_id=? AND key=?",
+                (plugin_id, key)).fetchone()
+            return row[0] if row else None
+
+    def set_plugin_kv(self, plugin_id: str, key: str, value: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO plugin_kv(plugin_id, key, value, updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(plugin_id, key) DO UPDATE SET value=excluded.value, "
+                "updated_at=excluded.updated_at",
+                (plugin_id, key, value, time.time()))
+            self._conn.commit()
+
+    def delete_plugin_kv(self, plugin_id: str, key: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM plugin_kv WHERE plugin_id=? AND key=?",
+                               (plugin_id, key))
+            self._conn.commit()
+
+    def list_plugin_kv(self, plugin_id: str) -> List[tuple]:
+        with self._lock:
+            return self._conn.execute(
+                "SELECT key, value FROM plugin_kv WHERE plugin_id=? ORDER BY key",
+                (plugin_id,)).fetchall()
 
     def close(self) -> None:
         with self._lock:

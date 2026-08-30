@@ -154,5 +154,16 @@ def to_bot_message_payload(message: Any) -> Any:
             segments.append({"type": "at", "data": {"qq": str(uid)}})
         for img in message.images:
             segments.append({"type": "image", "data": {"file": str(img)}})
+        for v in message.videos:
+            segments.append({"type": "video", "data": {"file": str(v)}})
+        for v in message.voices:
+            segments.append({"type": "record", "data": {"file": str(v)}})
+        for f in message.files:
+            seg: Dict[str, Any] = {"type": "file", "data": {"file": str(f)}}
+            name = message._extra.get("file_names", {}).get(str(f))
+            if name:
+                seg["data"]["name"] = str(name)
+            segments.append(seg)
+        segments.extend(message.segments)   # 进阶/平台相关段（keyboard/json 等）
         return segments
     return message  # str/CQ 或段数组原样透传（由 OneBot 服务端解析）

@@ -23,6 +23,7 @@ class BotEvent:
                                   images=self.images, reply_id=self.reply_id)
         self._bot = bot
         self._stopped = False
+        self._event_dict = dict(data)
 
     @property
     def is_group(self) -> bool:
@@ -35,6 +36,27 @@ class BotEvent:
     @property
     def matcher_name(self) -> str:
         return self._bot._matched_name if self._bot is not None else ""
+
+    @property
+    def args(self) -> list:
+        """命令参数（shlex 拆分；@command 命中后）。"""
+        import shlex
+        try:
+            return shlex.split(str(self.matcher_args or ""))
+        except ValueError:
+            return str(self.matcher_args or "").split()
+
+    @property
+    def raw_message(self) -> str:
+        return str(self.text or "")
+
+    @property
+    def schedule_id(self) -> str:
+        return str(self._event_dict.get("schedule_id") or "")
+
+    @property
+    def trigger(self) -> str:
+        return str(self._event_dict.get("trigger") or "")
 
     @property
     def matcher_args(self) -> str:

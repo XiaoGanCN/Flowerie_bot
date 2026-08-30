@@ -6,5 +6,21 @@
   "runtime": "python",
   "entry": "plugin.py",
   "api_version": "1",
-  "permissions": ["read_message", "send_message", "read_message_history"]
+  "permissions": [
+    "read_message",
+    "send_message",
+    "read_message_history",
+    "read_group_info",
+    "read_memory",
+    "write_memory",
+    "http_request",
+    "filesystem_read",
+    "filesystem_write",
+    "delete_message",
+    "group_manage",
+    "request_handle",
+    "scheduler",
+    "storage",
+    "ai_chat"
+  ]
 }

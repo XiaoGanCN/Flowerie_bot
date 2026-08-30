@@ -40,6 +40,10 @@ ALL_PERMISSIONS = frozenset({
     "delete_message",        # 撤回（仅限本 bot 发送过的消息）
     "read_message_history",  # 消息详情/群历史/上下文读取
     "group_manage",          # 群管理写操作（禁言/踢人/管理员）
+    "request_handle",        # 好友/加群请求处理（approve/deny）
+    "scheduler",             # 定时任务（interval/delay/daily）
+    "storage",               # 插件 KV 存储
+    "ai_chat",               # 受限 AI 对话（独立于聊天预算，务必自限频）
 })
 
 # Action 类型 → 所需权限（None = 无需权限：log / test 等无害动作）
@@ -58,6 +62,26 @@ ACTION_PERMISSIONS: Dict[str, Optional[str]] = {
     "matcher_register": "read_message",
     "is_group_admin": "read_group_info",
     "is_group_owner": "read_group_info",
+    "handle_friend_request": "request_handle",
+    "handle_group_request": "request_handle",
+    "schedule_register": "scheduler",
+    "schedule_cancel": "scheduler",
+    "schedule_list": "scheduler",
+    "kv_get": "storage",
+    "kv_set": "storage",
+    "kv_delete": "storage",
+    "kv_list": "storage",
+    "ai_chat": "ai_chat",
+    "mem_update": "read_memory",
+    "mem_clear": "read_memory",
+    "random_choice": None,
+    "random_int": None,
+    "now": None,
+    "format_time": None,
+    "http_put": "http_request",
+    "http_delete": "http_request",
+    "http_head": "http_request",
+    "http_download": "http_request",
     "send_private_message": "send_message",
     "get_group": "read_group_info",
     "get_user": "read_user_info",
@@ -115,8 +139,8 @@ class PermissionManager:
             return False  # v1 不支持：即使批准也拒绝（诚实接口）
         permission = ACTION_PERMISSIONS.get(action)
         if permission is None:
-            # 白名单原则：仅内建无副作用动作放行；未知 action 一律拒绝
-            return action in _BUILTIN_ACTIONS
+            # 白名单原则：内建动作（log/test/工具类：随机/时间）放行；未知 action 一律拒绝
+            return action in _BUILTIN_ACTIONS or action in ACTION_PERMISSIONS
         return permission in self.approved
 
     def denied_reason(self, action: str) -> str:
@@ -124,7 +148,8 @@ class PermissionManager:
             return f"action {action!r} 在 Plugin API v1 未实现（保留权限）"
         permission = ACTION_PERMISSIONS.get(action)
         if permission is None:
-            return "未知 action，不允许执行（白名单外）" if action not in _BUILTIN_ACTIONS else ""
+            return "" if (action in _BUILTIN_ACTIONS or action in ACTION_PERMISSIONS) \
+                else "未知 action，不允许执行（白名单外）"
         return f"需要权限 {permission!r}（管理员未批准）"
 
     # ---------- 保护级别对应的资源限制 ----------

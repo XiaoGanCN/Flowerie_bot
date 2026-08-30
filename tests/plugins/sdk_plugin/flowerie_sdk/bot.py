@@ -26,7 +26,11 @@ class FlowerieBot:
     def __init__(self):
         self._api = None
         self._handlers: List[tuple] = []  # (matcher定义, handler)
-        self._listeners: Dict[str, List[tuple]] = {}  # post_type -> [(priority, handler)]
+        self._listeners: Dict[str, List[tuple]] = {}  # kind -> [(priority, stop, handler)]
+        self._waiters: List[dict] = []   # 等待中的消息（wait_for/ask/confirm/select）
+        self._schedules: List[tuple] = []  # (name, kind, when, handler) 待注册
+        self._cooldowns: Dict[str, float] = {}  # key -> last mark 时间戳
+        self._registered_schedules: List[tuple] = []  # (name, kind, when, schedule_id)
         self._matched_name = ""
         self._last_args = ""
         self._registered = False
@@ -66,6 +70,8 @@ class FlowerieBot:
                         if inspect.isfunction(val):
                             for m in collect(val):
                                 self._handlers.append((m, val))
+        if self._schedules:
+            self._collect_schedules()
         if not self._handlers:
             return None
         matchers = [{"kind": m["kind"], "pattern": m["pattern"], "priority": m["priority"],
@@ -84,13 +90,15 @@ class FlowerieBot:
 
     # ---------- 路由 ----------
     async def route(self, event_dict: Dict[str, Any]):
-        """事件入口（插件 on_message/on_notice 调用）：按 matched 或监听器分发。
+        """事件入口（插件 on_message/on_notice 调用）：先喂等待队列，再按 matched/监听器分发。
 
         返回 actions 结果列表（SDK 模式下通常为空=无动作回传）。
         """
+        # 等待队列先行（wait_for/ask 不依赖 api；未 attach 也可 receive）
+        event = BotEvent(event_dict, self)
+        await self._feed_waiters(event)
         if self._api is None:
             return None
-        event = BotEvent(event_dict, self)
         matched = event_dict.get("matched") or {}
         if isinstance(matched, list):
             matched = matched[0] if matched else {}   # 主进程按 priority 降序；命中链第一优先
@@ -102,7 +110,7 @@ class FlowerieBot:
                     await self._invoke(handler, event)
                     break
         else:
-            listeners = sorted(self._listeners.get(event.post_type, []),
+            listeners = sorted(self._listeners.get(event.kind, []),
                                key=lambda x: x[0], reverse=True)
             for _priority, stop, handler in listeners:
                 if event._stopped:
@@ -115,12 +123,166 @@ class FlowerieBot:
                     break
         return None
 
+    async def route_schedule(self, event_dict: Dict[str, Any]) -> None:
+        """定时任务事件（on_schedule 钩子）→ 按 name 分发到 @bot.schedule handler。"""
+        name = str((event_dict or {}).get("name") or "")
+        for sched in self._schedules:   # (name, kind, when, func)
+            if sched[0] == name:
+                await self._invoke_schedule(sched[3], event_dict)
+                return
+
+    # ---------- 等待消息 / Session（插件侧轻量实现；勿与 matcher 同一插件混用） ----------
+    async def wait_for(self, condition, timeout: float = 60.0):
+        """等待下一条满足 condition(event)->bool 的消息（超时返回 None）。
+
+        需要插件**不注册 matcher**（否则只收匹配事件，wait_for 会饿死）。
+        """
+        import asyncio
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        waiter = {"cond": condition, "fut": fut}
+        self._waiters.append(waiter)
+        try:
+            return await asyncio.wait_for(fut, timeout=float(timeout or 60))
+        except asyncio.TimeoutError:
+            return None
+        finally:
+            if waiter in self._waiters:
+                self._waiters.remove(waiter)
+
+    async def ask(self, event, prompt, timeout: float = 60.0) -> Optional[str]:
+        """提问并等待回答（发送 prompt；下一消息视为回答）。"""
+        await self.reply(event, prompt)
+        return await self.wait_for(
+            lambda ev: ev.scope == event.scope
+            and ev.group_id == getattr(event, "group_id", None)
+            and ev.user_id == getattr(event, "user_id", None)
+            and ev.text and ev.text.strip() != "",
+            timeout=timeout)
+
+    async def confirm(self, event, prompt, timeout: float = 60.0) -> bool:
+        """Ask + 是/否解析（是/好/可以/对/确定=真；否/不要/不行/取消=假）。"""
+        reply_text = await self.ask(event, prompt, timeout=timeout)
+        if reply_text is None:
+            return False
+        t = str(reply_text).strip().lower()
+        if t in ("是", "好", "可以", "对", "确定", "yes", "y", "ok", "1"):
+            return True
+        if t in ("否", "不要", "不行", "取消", "no", "n", "0"):
+            return False
+        return False
+
+    async def select(self, event, prompt, options, timeout: float = 60.0):
+        """Ask + 选项匹配（返回选中项文本；未选返回 None）。选项可为文本或带答案的 dict。"""
+        lines = "\n".join(f"{i + 1}. {o if isinstance(o, str) else o.get('label')}"
+                           for i, o in enumerate(options))
+        reply_text = await self.ask(event, f"{prompt}\n{lines}", timeout=timeout)
+        if reply_text is None:
+            return None
+        t = str(reply_text).strip()
+        if t.isdigit():
+            idx = int(t) - 1
+            if 0 <= idx < len(options):
+                return options[idx] if isinstance(options[idx], str) else options[idx].get("answer")
+        for o in options:
+            label = o if isinstance(o, str) else o.get("label")
+            if t == str(label):
+                return o if isinstance(o, str) else o.get("answer")
+        return None
+
+    async def _feed_waiters(self, event) -> None:
+        if not self._waiters:
+            return
+        for waiter in list(self._waiters):
+            fut = waiter.get("fut")
+            if fut is None or fut.done():
+                self._waiters.remove(waiter)
+                continue
+            try:
+                ok = waiter["cond"](event)
+            except Exception:  # noqa: BLE001
+                ok = False
+            if ok and not fut.done():
+                fut.set_result(event)
+                self._waiters.remove(waiter)
+
+    # ---------- 调度（轻量：interval/delay/daily；无第三方依赖） ----------
+    def schedule(self, *, interval: Optional[float] = None,
+                 delay: Optional[float] = None, daily: Optional[str] = None,
+                 name: str = ""):
+        """注册定时任务：@bot.schedule(interval=60) / (delay=10) / (daily="09:30")。
+
+        必须实现为 async def job(event)：event.schedule_id/name/trigger 可用。
+        """
+        if interval is not None:
+            kind, when = "interval", float(interval)
+        elif delay is not None:
+            kind, when = "delay", float(delay)
+        elif daily is not None:
+            kind, when = "daily", str(daily)
+        else:
+            raise ValueError("schedule 需要 interval/delay/daily 之一")
+
+        def deco(func):
+            self._schedules.append((str(name or func.__name__), kind, when, func))
+            return func
+        return deco
+
+    def _collect_schedules(self):
+        """on_startup 后由 register() 调用：上报全部调度定义（重复注册幂等）。"""
+        if self._api is None:
+            return
+        for name, kind, when, _func in self._schedules:
+            self._r(self._api.schedule_register(kind, when, name))
+
+    # ---------- 冷却（插件进程内轻量实现） ----------
+    def is_cooled(self, key: str, seconds: float) -> bool:
+        """key 在 seconds 秒内是否已触发过（未触发过=False）。"""
+        import time
+        last = self._cooldowns.get(str(key))
+        return last is not None and (time.time() - last) < float(seconds)
+
+    def mark_cooled(self, key: str) -> None:
+        import time
+        self._cooldowns[str(key)] = time.time()
+
+    async def cool_down(self, key: str, seconds: float) -> bool:
+        """一键冷却检查：冷却中返回 False；否则标记并返回 True（推荐用法）。"""
+        if self.is_cooled(key, seconds):
+            return False
+        self.mark_cooled(key)
+        return True
+
     @staticmethod
     async def _invoke(handler, event) -> None:
         import asyncio
         result = handler(event)
         if asyncio.iscoroutine(result):
             await result
+
+    @staticmethod
+    async def _invoke_schedule(handler, event_dict) -> None:
+        import asyncio
+        import inspect as _inspect
+        args = [BotEvent(dict(event_dict or {}))] if _inspect.signature(handler).parameters             else []
+        if not args:
+            result = handler()
+        else:
+            result = handler(args[0])
+        if asyncio.iscoroutine(result):
+            await result
+
+    # ---------- 日志（插件级：级别 + 消息；跟随主进程结构化日志与审计） ----------
+    def log(self, level: str, message: str) -> None:
+        """插件日志规范入口：level=debug/info/warning/error；message≤500 字符。
+
+        规范：关键动作 info / 可恢复问题 warning / 异常 error（附异常类型与摘要）。
+        日志由主进程统一写入（含 plugin_id/事件上下文），切勿 print 到 stdout
+        （stdout 是协议通道，污染会导致插件异常）。
+        """
+        if self._api is None:
+            raise BotAPIError("bot 未 attach")
+        self._r(self._api.log(str(level or "info")[:16], str(message or "")[:500]))
 
     # ---------- 消息 API（经协议 action，插件不碰 OneBot） ----------
     def _r(self, result):
@@ -129,6 +291,79 @@ class FlowerieBot:
         if result.get("ok") is False or result.get("error"):
             raise BotAPIError(str(result.get("error") or result.get("reason") or "动作失败"))
         return result
+
+    # ---------- v1.4 能力（请求处理/群管理/存储/AI/记忆/工具/网络） ----------
+    def handle_friend_request(self, flag: str, approve: bool, remark: str = "") -> dict:
+        """处理好友请求（权限 request_handle）。"""
+        return self._r(self._api.handle_friend_request(str(flag), bool(approve), str(remark)[:30]))
+
+    def handle_group_request(self, flag: str, approve: bool, reason: str = "") -> dict:
+        """处理加群请求（权限 request_handle）。"""
+        return self._r(self._api.handle_group_request(str(flag), bool(approve), str(reason)[:30]))
+
+    def get_group_info(self, group_id) -> dict:
+        """群状态信息（复用主进程状态查询；返回 info 字典）。"""
+        return self._r(self._api.get_group_info({"group_id": int(group_id)}))
+
+    def set_group_admin(self, group_id, user_id, enable: bool = True) -> dict:
+        """设置/取消群管理员（权限 group_manage）。"""
+        return self._r(self._api.group_admin(
+            {"group_id": int(group_id), "user_id": int(user_id), "enable": bool(enable)}))
+
+    def kv_get(self, key: str):
+        res = self._r(self._api.kv_get(str(key)))
+        return res.get("value") if res.get("ok") and res.get("exists") else None
+
+    def kv_set(self, key: str, value) -> bool:
+        import json as _json
+        val = value if isinstance(value, str) else _json.dumps(value, ensure_ascii=False)
+        return bool(self._r(self._api.kv_set(str(key)[:128], val)).get("ok"))
+
+    def kv_delete(self, key: str) -> bool:
+        return bool(self._r(self._api.kv_delete(str(key))).get("ok"))
+
+    def kv_list(self) -> list:
+        return list(self._r(self._api.kv_list()).get("items") or [])
+
+    async def ai_chat(self, message: str, system: str = "") -> Optional[str]:
+        """受限 AI 对话（权限 ai_chat；独立于聊天预算——务必命令级冷却限制频次）。"""
+        res = self._r(self._api.ai_chat(str(message)[:2000], str(system)[:1000]))
+        return res.get("reply") if res.get("ok") else None
+
+    async def mem_update(self, user_id, group_id, key: str, value: str) -> bool:
+        return bool(self._r(self._api.mem_update(int(user_id), int(group_id), str(key),
+                                                 str(value)[:2000])).get("ok"))
+
+    async def mem_clear(self, user_id, group_id) -> Optional[int]:
+        res = self._r(self._api.mem_clear(int(user_id), int(group_id)))
+        return res.get("cleared") if res.get("ok") else None
+
+    def random_choice(self, choices: list):
+        return self._r(self._api.random_choice(list(choices))).get("choice")
+
+    def random_int(self, low: int, high: int):
+        return self._r(self._api.random_int(int(low), int(high))).get("value")
+
+    def now(self) -> dict:
+        return self._r(self._api.now())
+
+    def format_time(self, timestamp: float = 0, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+        return str(self._r(self._api.format_time(float(timestamp), str(fmt))).get("text") or "")
+
+    def http_put(self, url: str, body=None, json=None, headers=None, timeout: float = 15) -> dict:
+        return self._r(self._api.http_put({"url": url, "body": body, "json": json,
+                                           "headers": headers, "timeout": timeout}))
+
+    def http_delete(self, url: str, timeout: float = 15) -> dict:
+        return self._r(self._api.http_delete({"url": url, "timeout": timeout}))
+
+    def http_head(self, url: str, timeout: float = 15) -> dict:
+        return self._r(self._api.http_head({"url": url, "timeout": timeout}))
+
+    def http_download(self, url: str, save_to: str) -> Optional[int]:
+        """下载到插件目录相对路径（SSRF 校验 + 10MB 上限；返回字节数）。"""
+        res = self._r(self._api.http_download({"url": url, "save_to": save_to}))
+        return res.get("bytes") if res.get("ok") else None
 
     async def send(self, target, message, *, reply_id=None) -> int:
         if self._api is None:
@@ -207,5 +442,16 @@ def to_onebot(message) -> Any:
             segments.append({"type": "at", "data": {"qq": str(uid)}})
         for img in message.images:
             segments.append({"type": "image", "data": {"file": str(img)}})
+        for v in message.videos:
+            segments.append({"type": "video", "data": {"file": str(v)}})
+        for v in message.voices:
+            segments.append({"type": "record", "data": {"file": str(v)}})
+        for f in message.files:
+            seg = {"type": "file", "data": {"file": str(f)}}
+            name = getattr(message, "_file_names", {}).get(str(f))
+            if name:
+                seg["data"]["name"] = str(name)
+            segments.append(seg)
+        segments.extend(getattr(message, "segments", []))
         return segments
     return message

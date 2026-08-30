@@ -82,3 +82,30 @@ def test_to_bot_message_payload_outbound():
     ]
     # str 透传（CQ 码由平台解析）
     assert to_bot_message_payload("plain") == "plain"
+
+
+# ---------- 多媒体 BotMessage（v1.3 扩展） ----------
+def test_bot_message_multimedia_builder():
+    m = (BotMessage().add_text("好消息").at(1).image("http://a/i.png")
+         .video("http://a/v.mp4").voice("file:///data/voice.amr")
+         .file("http://a/doc.pdf", name="文档.pdf"))
+    assert m.has("video") and m.has("voice") and m.has("file")
+    assert m.videos == ["http://a/v.mp4"]
+    assert m.voices == ["file:///data/voice.amr"]
+    assert m.files == ["http://a/doc.pdf"]
+    kinds = [k for k, _ in m]
+    assert kinds == ["text", "at", "image", "video", "voice", "file"]
+    m2 = BotMessage().add_text("a").merge(BotMessage().add_text("b").at(9))
+    assert m2.text == "ab" and m2.at_list == ["9"]
+
+
+def test_to_bot_message_payload_multimedia():
+    m = (BotMessage("截图").image("http://a/i.png").video("http://a/v.mp4")
+         .voice("file:///v.amr").file("http://a/f.pdf", name="报告.pdf")
+         .add_segment("keyboard", {"buttons": [{"text": "确定"}]}))
+    segs = to_bot_message_payload(m)
+    types = [s["type"] for s in segs]
+    assert types == ["text", "image", "video", "record", "file", "keyboard"]
+    file_seg = segs[4]
+    assert file_seg["data"]["file"] == "http://a/f.pdf"
+    assert file_seg["data"]["name"] == "报告.pdf"

@@ -108,6 +108,7 @@ async def main():
         plugin_manager = PluginManager(
             config, settings_repo, sender=sender, memory_manager=memory_manager,
             state_provider=_plugin_state_provider, context_manager=policy_engine.context,
+            ai_client=ai_client,
         )
         if config.WEB_UI_ENABLED:
             def _status_provider():

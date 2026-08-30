@@ -3,7 +3,7 @@
 - 仅 http/https + 无 userinfo + 回环/私网/链路本地/组播/保留/0.0.0.0/.local 拒绝
 - DNS 解析结果再校验（防 DNS rebinding）
 - 不跟随重定向（3xx 判失败，防 redirect 到内网）
-- 仅 GET / POST；请求体与响应体都有大小上限；响应体截断返回
+- 仅 GET / POST / PUT / DELETE / HEAD；请求体与响应体都有大小上限；响应体截断返回
 - 日志不记录任何 URL 查询串（防 access_token 泄漏）
 """
 import asyncio
@@ -15,7 +15,7 @@ from src.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)
 
-ALLOWED_METHODS = ("GET", "POST")
+ALLOWED_METHODS = ("GET", "POST", "PUT", "DELETE", "HEAD")
 DEFAULT_MAX_BODY_BYTES = 256 * 1024      # 请求体上限 256KB
 DEFAULT_MAX_RESPONSE_BYTES = 256 * 1024  # 响应体上限 256KB
 DEFAULT_TIMEOUT = 10.0
@@ -32,6 +32,15 @@ def redact_url(url: str) -> str:
 
 class PluginHttpError(Exception):
     pass
+
+
+async def assert_ssrf_ok(url: str) -> None:
+    """SSRF 双闸校验（字面量 + DNS 解析结果），供下载等扩展复用；失败抛 PluginHttpError。"""
+    ok, reason = validate_mcp_server_url(url)
+    if not ok:
+        raise PluginHttpError(reason)
+    parts = urlsplit(url)
+    await _check_dns(parts)
 
 
 async def _check_dns(parts) -> None:
@@ -93,8 +102,16 @@ async def plugin_http_request(payload: Dict[str, Any],
                 req = client.post(url, headers=clean_headers,
                                   content=body if body is not None else None,
                                   json=json_data)
-            else:
+            elif method == "GET":
                 req = client.get(url, headers=clean_headers)
+            elif method == "PUT":
+                req = client.put(url, headers=clean_headers,
+                                 content=body if body is not None else None,
+                                 json=json_data)
+            elif method == "HEAD":
+                req = client.head(url, headers=clean_headers)
+            else:  # DELETE
+                req = client.delete(url, headers=clean_headers)
             async with req as resp:
                 if resp.status_code >= 300:
                     return {"ok": False, "error": f"HTTP {resp.status_code}（重定向一律拒绝）",

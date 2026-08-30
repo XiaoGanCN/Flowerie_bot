@@ -16,8 +16,11 @@ manifest 校验、进程隔离、日志、崩溃保护、资源限制、权限�
 """
 import json
 import os
+import random
 import re
 import shutil
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.core.sanitizer import validate_memory_content
@@ -48,7 +51,8 @@ class PluginManager:
     def __init__(self, config, repository: SettingsRepository,
                  sender: Optional[Any] = None, memory_manager: Optional[Any] = None,
                  state_provider: Optional[Callable[[str, Any], Optional[dict]]] = None,
-                 installer: Optional[PluginInstaller] = None, context_manager: Optional[Any] = None):
+                 installer: Optional[PluginInstaller] = None, context_manager: Optional[Any] = None,
+                 ai_client: Optional[Any] = None):
         self.config = config
         self.repository = repository
         self.sender = sender
@@ -62,8 +66,11 @@ class PluginManager:
         # 本实例（bot）已发送的 message_id 记录：插件只能撤回这些消息（防删他人消息）
         self._sent_message_ids: list = []
         self._context_manager = context_manager   # SDK get_context 复用 ContextManager
+        self._ai_client = ai_client               # ai_chat 调用注入
         self._matchers: Dict[str, list] = {}      # plugin_id -> [Matcher]（SDK 注册）
         self._bot = None                          # SDK 匹配用 Bot（惰性构建）
+        self._schedules: Dict[str, dict] = {}     # schedule_id -> {plugin_id,name,kind,...}
+        self._schedule_tasks: Dict[str, Any] = {} # schedule_id -> asyncio.Task
 
     @property
     def plugin_dir(self) -> str:
@@ -362,6 +369,7 @@ class PluginManager:
 
     async def shutdown(self) -> None:
         self._started = False
+        self.cancel_all_schedules()  # 清理全部定时任务（防 task 泄漏）
         for plugin_id in list(self._runtimes.keys()):
             rt = self._runtimes.pop(plugin_id, None)
             if rt is not None:
@@ -722,6 +730,139 @@ class PluginManager:
             role = str((info or {}).get("role") or "member")
             wanted = "owner" if action_type == "is_group_owner" else ("owner", "admin")
             return {"ok": True, "result": role in wanted}
+        if action_type == "handle_friend_request":
+            flag = str(payload.get("flag") or "")
+            approve = bool(payload.get("approve", False))
+            if not flag or self.sender is None:
+                return {"ok": False, "error": "handle_friend_request 需要 flag（或 sender 不可用）"}
+            ok = await self.sender.set_friend_add_request(flag, approve, str(payload.get("remark") or ""))
+            return {"ok": ok, "flag": flag, "approve": approve}
+        if action_type == "handle_group_request":
+            flag = str(payload.get("flag") or "")
+            approve = bool(payload.get("approve", False))
+            if not flag or self.sender is None:
+                return {"ok": False, "error": "handle_group_request 需要 flag（或 sender 不可用）"}
+            ok = await self.sender.set_group_add_request(flag, approve, str(payload.get("reason") or ""))
+            return {"ok": ok, "flag": flag, "approve": approve}
+        if action_type == "schedule_register":
+            # 轻量调度：interval（秒循环）/ delay（一次性延时）/ daily（HH:MM 每日）
+            name = str(payload.get("name") or f"task{len(self._schedules) + 1}")[:50]
+            kind = str(payload.get("kind") or "interval")
+            when = payload.get("when")
+            if kind == "interval":
+                seconds = float(when or 60)
+                if not (1 <= seconds <= 86400):
+                    return {"ok": False, "error": "interval 必须 1~86400 秒"}
+            elif kind == "delay":
+                seconds = float(when or 0)
+                if not (0 < seconds <= 86400 * 7):
+                    return {"ok": False, "error": "delay 必须 0~604800 秒"}
+            elif kind == "daily":
+                if not re.match(r"^\d{2}:\d{2}$", str(when or "")):
+                    return {"ok": False, "error": "daily 需要 HH:MM（如 09:30）"}
+            else:
+                return {"ok": False, "error": f"未知 schedule kind: {kind}"}
+            # 同插件同名覆盖（幂等）
+            for sid, sched in list(self._schedules.items()):
+                if sched.get("plugin_id") == plugin_id and sched.get("name") == name:
+                    await self._cancel_schedule(sid)
+            sid = f"{plugin_id}:{name}"
+            self._schedules[sid] = {"plugin_id": plugin_id, "name": name, "kind": kind,
+                                    "when": when, "created": time.time()}
+            task = asyncio_create_task(self._schedule_loop(sid, kind, when))
+            self._schedule_tasks[sid] = task
+            return {"ok": True, "schedule_id": sid, "name": name, "kind": kind}
+        if action_type == "schedule_cancel":
+            sid = str(payload.get("schedule_id") or "")
+            sched = self._schedules.get(sid)
+            if sched is None or sched.get("plugin_id") != plugin_id:
+                return {"ok": False, "error": "schedule 不存在（或不属于本插件）"}
+            await self._cancel_schedule(sid)
+            return {"ok": True, "schedule_id": sid}
+        if action_type == "schedule_list":
+            mine = [{**s, "schedule_id": sid} for sid, s in self._schedules.items()
+                    if s.get("plugin_id") == plugin_id]
+            return {"ok": True, "schedules": mine}
+        if action_type == "kv_get":
+            key = str(payload.get("key") or "")
+            if not key or len(key) > 128:
+                return {"ok": False, "error": "kv_get 需要 key（≤128 字符）"}
+            value = self.repository.get_plugin_kv(plugin_id, key)
+            if value is None:
+                return {"ok": True, "exists": False, "value": None}
+            return {"ok": True, "exists": True, "value": value}
+        if action_type in ("kv_set", "kv_delete"):
+            key = str(payload.get("key") or "")
+            if not key or len(key) > 128:
+                return {"ok": False, "error": f"{action_type} 需要 key（≤128 字符）"}
+            if action_type == "kv_set":
+                value = payload.get("value")
+                serialized = _json_dumps(value) if not isinstance(value, str) else value
+                if len(serialized) > 64 * 1024:
+                    return {"ok": False, "error": "kv 值过大（>64KB）"}
+                self.repository.set_plugin_kv(plugin_id, key, serialized)
+                return {"ok": True, "key": key}
+            self.repository.delete_plugin_kv(plugin_id, key)
+            return {"ok": True, "key": key}
+        if action_type == "kv_list":
+            items = self.repository.list_plugin_kv(plugin_id)
+            return {"ok": True, "items": [{"key": k, "value": _json_loads(v)} for k, v in items]}
+        if action_type == "ai_chat":
+            user_message = str(payload.get("message") or "")[:2000]
+            if not user_message:
+                return {"ok": False, "error": "ai_chat 需要 message"}
+            if self._ai_client is None:
+                return {"ok": False, "error": "ai_chat 不可用（未注入 ai_client）"}
+            try:
+                reply = await self._ai_client.chat_once(
+                    user_message=user_message, context="", custom_prompt=(
+                        str(payload.get("system") or "")[:1000] or ""))
+                return {"ok": True, "reply": str(reply or "")[:3000]}
+            except Exception as e:  # noqa: BLE001 - AI 失败按错误回传
+                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        if action_type == "mem_update":
+            user_id, group_id = payload.get("user_id"), payload.get("group_id")
+            key = str(payload.get("key") or "")
+            if not user_id or not group_id or not key or self.memory_manager is None:
+                return {"ok": False, "error": "mem_update 需要 user_id/group_id/key（或 memory 不可用）"}
+            await self.memory_manager.update_memory(int(user_id), int(group_id), key,
+                                                    str(payload.get("value") or "")[:2000])
+            return {"ok": True, "key": key}
+        if action_type == "mem_clear":
+            user_id, group_id = payload.get("user_id"), payload.get("group_id")
+            if not user_id or not group_id or self.memory_manager is None:
+                return {"ok": False, "error": "mem_clear 需要 user_id/group_id（或 memory 不可用）"}
+            count = await self.memory_manager.clear_user_memory(int(user_id), int(group_id))
+            return {"ok": True, "cleared": count}
+        if action_type == "random_choice":
+            choices = payload.get("choices") or []
+            if not isinstance(choices, list) or not choices:
+                return {"ok": False, "error": "random_choice 需要非空 choices 数组"}
+            return {"ok": True, "choice": str(random.choice([str(c)[:200] for c in choices]))}
+        if action_type == "random_int":
+            low, high = int(payload.get("low") or 0), int(payload.get("high") or 100)
+            if low > high:
+                return {"ok": False, "error": "random_int 需要 low<=high"}
+            return {"ok": True, "value": random.randint(low, min(high, low + 10_000_000))}
+        if action_type == "now":
+            return {"ok": True, "timestamp": time.time(),
+                    "iso": datetime.now(timezone.utc).isoformat()}
+        if action_type == "format_time":
+            raw_ts = payload.get("timestamp")
+            ts = float(raw_ts) if raw_ts is not None else time.time()
+            fmt = str(payload.get("format") or "%Y-%m-%d %H:%M:%S")[:64]
+            try:
+                return {"ok": True, "text": datetime.fromtimestamp(ts).strftime(fmt)}
+            except (ValueError, OverflowError):
+                return {"ok": False, "error": "format_time 非法 timestamp/format"}
+        if action_type in ("http_put", "http_delete", "http_head", "http_download"):
+            return await self._http_ext(plugin_id, action_type, payload)
+        if action_type == "get_group_info":
+            group_id = payload.get("group_id")
+            if not group_id:
+                return {"ok": False, "error": "get_group_info 需要 group_id"}
+            info = self._state_lookup("group", int(group_id)) or {}
+            return {"ok": True, "group_id": int(group_id), "info": info}
         if action_type == "get_memory":
             user_id = payload.get("user_id")
             group_id = payload.get("group_id")
@@ -765,6 +906,120 @@ class PluginManager:
         except Exception:  # noqa: BLE001
             return None
 
+    async def _schedule_loop(self, sid: str, kind: str, when) -> None:
+        """轻量调度执行：interval/delay/daily（asyncio Task；无第三方依赖）。"""
+        import asyncio as _asyncio
+        try:
+            if kind == "delay":
+                await _asyncio.sleep(float(when or 0))
+                await self._dispatch_schedule(sid)
+                # delay 一次性任务：触发即清理（interval/daily 保留）
+                self._schedule_tasks.pop(sid, None)
+                self._schedules.pop(sid, None)
+            elif kind == "interval":
+                seconds = float(when or 60)
+                while sid in self._schedule_tasks:
+                    await _asyncio.sleep(seconds)
+                    if sid not in self._schedule_tasks:
+                        break
+                    await self._dispatch_schedule(sid)
+            elif kind == "daily":
+                hh, mm = str(when or "00:00").split(":")
+                while sid in self._schedule_tasks:
+                    now = datetime.now()
+                    nxt = now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+                    if nxt <= now:
+                        nxt = nxt + timedelta(days=1)
+                    await _asyncio.sleep(max(1.0, (nxt - now).total_seconds()))
+                    if sid not in self._schedule_tasks:
+                        break
+                    await self._dispatch_schedule(sid)
+        except _asyncio.CancelledError:
+            return
+        except Exception:  # noqa: BLE001 - 调度器异常不拖垮管理器
+            return
+
+    async def _dispatch_schedule(self, sid: str) -> None:
+        sched = self._schedules.get(sid)
+        if sched is None:
+            return
+        payload = {"kind": "schedule", "schedule_id": sid, "name": sched["name"],
+                   "trigger": sched["kind"], "plugin_id": sched["plugin_id"],
+                   "trace_id": ""}
+        try:
+            await self.dispatch_event("schedule", payload)
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _cancel_schedule(self, sid: str) -> None:
+        task = self._schedule_tasks.pop(sid, None)
+        self._schedules.pop(sid, None)
+        if task is not None:
+            try:
+                task.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def cancel_all_schedules(self) -> None:
+        """shutdown 时清理全部调度器。"""
+        for sid in list(self._schedule_tasks.keys()):
+            task = self._schedule_tasks.pop(sid, None)
+            if task is not None:
+                task.cancel()
+        self._schedules.clear()
+
+    async def _http_ext(self, plugin_id: str, action_type: str, payload: dict) -> dict:
+        """HTTP 扩展：PUT/DELETE/HEAD 与下载到插件目录（全部复用 http_action 防线）。
+
+        - PUT/DELETE/HEAD：走 plugin_http_request（SSRF/DNS/头清理/大小上限/不重定向）
+        - http_download：SSRF 校验后读取（≤10MB）写入插件目录（save_to 相对路径）
+        """
+        url = str(payload.get("url") or "")[:800]
+        if not url or not (url.startswith("http://") or url.startswith("https://")):
+            return {"ok": False, "error": "http 扩展需要 http(s) url"}
+        from src.plugins.http_action import plugin_http_request
+        if action_type in ("http_put", "http_delete", "http_head"):
+            req_payload = {"url": url,
+                           "method": {"http_put": "PUT", "http_delete": "DELETE",
+                                      "http_head": "HEAD"}[action_type]}
+            if payload.get("headers") is not None:
+                req_payload["headers"] = payload["headers"]
+            if payload.get("body") is not None:
+                req_payload["body"] = str(payload["body"])[:200_000]
+            if payload.get("json") is not None:
+                req_payload["json"] = payload["json"]
+            return await plugin_http_request(req_payload)
+        # http_download：SSRF 双闸复用（字面量 + DNS 结果校验）
+        import httpx
+
+        from src.plugins.http_action import assert_ssrf_ok
+        try:
+            await assert_ssrf_ok(url)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"SSRF 防护拒绝: {e}"}
+        rel = str(payload.get("save_to") or "download.bin")[:120]
+        if not rel or ".." in rel.split("/") or rel.startswith("/") or "\\" in rel:
+            return {"ok": False, "error": "save_to 必须是插件目录内相对路径"}
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5.0),
+                                         follow_redirects=False) as client:
+                async with client.get(url) as resp:
+                    if resp.status_code != 200:
+                        return {"ok": False, "error": f"HTTP {resp.status_code}"}
+                    data = await resp.aread()
+        except httpx.HTTPError as e:
+            return {"ok": False, "error": f"下载失败: {type(e).__name__}"}
+        if len(data) > 10 * 1024 * 1024:
+            return {"ok": False, "error": "下载超过 10MB 上限"}
+        base = os.path.realpath(os.path.join(self.plugin_dir, plugin_id))
+        target = os.path.realpath(os.path.join(base, rel))
+        if os.path.commonpath([base, target]) != base:
+            return {"ok": False, "error": "save_to 路径越界"}
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "wb") as f:
+            f.write(data)
+        return {"ok": True, "bytes": len(data), "saved_to": rel}
+
     def _file_read(self, plugin_id: str, rel: str) -> dict:
         """filesystem_read：仅允许读取插件自身目录内的文件（真实路径校验）。"""
         base = os.path.realpath(os.path.join(self.plugin_dir, plugin_id))
@@ -791,6 +1046,19 @@ class PluginManager:
         with open(target, "w", encoding="utf-8") as f:
             f.write(data)
         return {"ok": True, "bytes": len(data.encode("utf-8"))}
+
+
+def _json_dumps(value) -> str:
+    import json as _j
+    return _j.dumps(value, ensure_ascii=False)
+
+
+def _json_loads(value: str):
+    import json as _j
+    try:
+        return _j.loads(value)
+    except Exception:  # noqa: BLE001
+        return value
 
 
 def _rule_from(conditions: dict):

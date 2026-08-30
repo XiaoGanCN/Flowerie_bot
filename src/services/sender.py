@@ -267,6 +267,29 @@ class Sender:
         except Exception:
             return False
 
+    async def set_friend_add_request(self, flag: str, approve: bool, remark: str = "") -> bool:
+        """处理好友请求（OneBot11 /set_friend_add_request）。"""
+        try:
+            async with self.session.post(
+                    f"{self.config.HTTP_API_BASE}/set_friend_add_request",
+                    json={"flag": str(flag), "approve": bool(approve), "remark": str(remark)[:30]},
+                    timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    async def set_group_add_request(self, flag: str, approve: bool, reason: str = "") -> bool:
+        """处理加群请求（OneBot11 /set_group_add_request）。"""
+        try:
+            async with self.session.post(
+                    f"{self.config.HTTP_API_BASE}/set_group_add_request",
+                    json={"flag": str(flag), "approve": bool(approve),
+                          "reason": str(reason)[:30]},
+                    timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
     async def send_private_message(self, user_id: int, message: str) -> bool:
         if not message:
             return False

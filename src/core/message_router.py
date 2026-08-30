@@ -14,6 +14,7 @@ from src.core.message_assembler import MessageAssembler
 from src.core.policy_engine import PolicyEngine
 from src.core.sanitizer import validate_memory_content
 from src.models import GroupMessage
+from src.sdk.onebot.transformer import to_bot_event  # 插件通道领域化（唯一转换入口）
 from src.services.ai_client import AIClient
 from src.services.file_parser import FileParser
 from src.services.mcp_tool_manager import McpToolManager
@@ -181,36 +182,48 @@ class MessageRouter:
 
     @staticmethod
     def _plugin_event_type(data: Dict[str, Any]) -> str:
-        post_type = str(data.get("post_type") or "unknown")
-        if post_type == "message" and data.get("message_type") == "group":
-            return "group_message"
-        return post_type
+        """插件投递事件类型 = 领域 kind（message/notice/request/lifecycle）。"""
+        try:
+            return to_bot_event(data).kind
+        except Exception:  # noqa: BLE001 - 未知结构按 message 兜底
+            return "message"
 
     @staticmethod
     def _plugin_payload(data: Dict[str, Any]) -> Dict[str, Any]:
-        """投递给插件的事件负载（只含必要字段，不透传原始段数组以外的敏感信息）。"""
-        text = ""
-        message_array = data.get("message", [])
-        if isinstance(message_array, str):
-            text = message_array
-        elif isinstance(message_array, list):
-            text = "".join(
-                str(seg.get("data", {}).get("text", ""))
-                for seg in message_array if isinstance(seg, dict) and seg.get("type") == "text"
-            )
-        payload = {
-            "post_type": str(data.get("post_type") or "unknown"),
-            "message_type": data.get("message_type") or "",
-            "group_id": data.get("group_id"),
-            "user_id": data.get("user_id"),
-            "message_id": data.get("message_id"),
-            "time": data.get("time"),
-            "text": text[:2000],
+        """投递给插件的事件负载（领域语义；不透视原始段/敏感信息；CQ 码在下层阉割）。"""
+        try:
+            from src.utils.trace import get_trace_id
+            trace_id = get_trace_id()
+        except Exception:  # noqa: BLE001
+            trace_id = ""
+        try:
+            event = to_bot_event(data)
+        except Exception:  # noqa: BLE001 - 结构异常按原始投射兜底
+            event = None
+        if event is None:
+            return {"kind": str(data.get("post_type") or "unknown"), "scope": "",
+                    "trace_id": trace_id}
+        payload: Dict[str, Any] = {
+            "kind": event.kind,
+            "scope": event.scope,
+            "group_id": event.group_id,
+            "user_id": event.user_id,
+            "message_id": event.message_id,
+            "time": event.time,
+            "text": event.text[:2000],
+            "at_list": event.at_list[:20],
+            "images": event.images[:10],
+            "reply_id": event.reply_id,
+            "operator_id": event.operator_id,
+            "trace_id": trace_id,
         }
-        notice_type = data.get("notice_type")
-        if notice_type:
-            payload["notice_type"] = notice_type
-            payload["sub_type"] = data.get("sub_type", "")
+        # kind 专属字段
+        if event.kind == "notice":
+            payload["notice_kind"] = event.notice_kind
+        elif event.kind == "request":
+            payload["request_kind"] = event.request_kind
+        elif event.kind == "lifecycle":
+            payload["lifecycle_kind"] = event.lifecycle_kind
         return payload
 
     # ---------- 消息处理 ----------

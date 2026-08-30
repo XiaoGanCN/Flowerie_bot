@@ -90,9 +90,6 @@ class PluginApi:
     def get_group_member(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._send_action("get_group_member", payload)
 
-    def get_group_members(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._send_action("get_group_members", payload)
-
     def group_ban(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._send_action("group_ban", payload)
 
@@ -108,6 +105,81 @@ class PluginApi:
     def matcher_register(self, matchers: list) -> Dict[str, Any]:
         """批量注册 Matcher（SDK 启动时调用；返回注册摘要）。"""
         return self._send_action("matcher_register", {"matchers": list(matchers or [])})
+
+    # ---------- v1.4 扩展（请求处理/调度/存储/AI/记忆/工具/HTTP 扩展） ----------
+    def handle_friend_request(self, flag: str, approve: bool, remark: str = "") -> Dict[str, Any]:
+        return self._send_action("handle_friend_request",
+                                 {"flag": flag, "approve": bool(approve), "remark": remark})
+
+    def handle_group_request(self, flag: str, approve: bool, reason: str = "") -> Dict[str, Any]:
+        return self._send_action("handle_group_request",
+                                 {"flag": flag, "approve": bool(approve), "reason": reason})
+
+    def schedule_register(self, kind: str, when, name: str = "") -> Dict[str, Any]:
+        return self._send_action("schedule_register",
+                                 {"kind": kind, "when": when, "name": name})
+
+    def schedule_cancel(self, schedule_id: str) -> Dict[str, Any]:
+        return self._send_action("schedule_cancel", {"schedule_id": schedule_id})
+
+    def schedule_list(self) -> Dict[str, Any]:
+        return self._send_action("schedule_list", {})
+
+    def kv_get(self, key: str) -> Dict[str, Any]:
+        return self._send_action("kv_get", {"key": key})
+
+    def kv_set(self, key: str, value) -> Dict[str, Any]:
+        return self._send_action("kv_set", {"key": key, "value": value})
+
+    def kv_delete(self, key: str) -> Dict[str, Any]:
+        return self._send_action("kv_delete", {"key": key})
+
+    def kv_list(self) -> Dict[str, Any]:
+        return self._send_action("kv_list", {})
+
+    def ai_chat(self, message: str, system: str = "") -> Dict[str, Any]:
+        return self._send_action("ai_chat", {"message": message, "system": system})
+
+    def mem_update(self, user_id: int, group_id: int, key: str, value: str) -> Dict[str, Any]:
+        return self._send_action("mem_update",
+                                 {"user_id": user_id, "group_id": group_id,
+                                  "key": key, "value": value})
+
+    def mem_clear(self, user_id: int, group_id: int) -> Dict[str, Any]:
+        return self._send_action("mem_clear", {"user_id": user_id, "group_id": group_id})
+
+    def random_choice(self, choices: list) -> Dict[str, Any]:
+        return self._send_action("random_choice", {"choices": list(choices or [])})
+
+    def random_int(self, low: int, high: int) -> Dict[str, Any]:
+        return self._send_action("random_int", {"low": int(low), "high": int(high)})
+
+    def now(self) -> Dict[str, Any]:
+        return self._send_action("now", {})
+
+    def format_time(self, timestamp: float = 0, fmt: str = "%Y-%m-%d %H:%M:%S") -> Dict[str, Any]:
+        return self._send_action("format_time", {"timestamp": timestamp, "format": fmt})
+
+    def http_put(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("http_put", payload)
+
+    def http_delete(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("http_delete", payload)
+
+    def http_head(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("http_head", payload)
+
+    def http_download(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("http_download", payload)
+
+    def get_group_members(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("get_group_members", payload)
+
+    def get_group_info(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("get_group_info", payload)
+
+    def group_admin(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._send_action("group_admin", payload)
 
 
 class PluginRunner:
@@ -263,6 +335,8 @@ class PluginRunner:
             hook_name = "on_request"
         elif event == "lifecycle":
             hook_name = "on_lifecycle"
+        elif event == "schedule":
+            hook_name = "on_schedule"
         if hook_name is None:
             return []
         result = self._call_hook(hook_name, event_obj, self.api)
