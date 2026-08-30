@@ -56,3 +56,10 @@ docs/               # 文档
 ## 架构
 
 架构审计报告见 [architecture-audit.md](architecture-audit.md)（含三轮工程审计结论）。
+
+## Bot SDK 开发（v1.3.0+）
+
+- 分层：上层 `plugin_sdk/` → 中层 `src/sdk/`（零 OneBot）→ 下层 `src/sdk/onebot/`
+- 新增平台能力：只改下层 `onebot/`（dto/transformer/adapter），中层上层不动
+- 测试：`tests/test_sdk_*.py`（matcher/listener/adapter/permission/message）
+- 文档：[sdk.md](sdk.md) / [api.md](api.md) / [plugins.md](plugins.md)
