@@ -21,6 +21,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Node.js 插件（minimal_node_plugin 端到端测试需要 node 可执行文件）
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install dependencies
         run: |
           pip install --upgrade pip

@@ -1,0 +1,6 @@
+{
+  "name": "minimal-node-plugin",
+  "version": "1.0.0",
+  "description": "最小可执行 Node.js 插件",
+  "main": "index.js"
+}

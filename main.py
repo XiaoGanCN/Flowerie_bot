@@ -86,6 +86,26 @@ async def main():
             budget=None,  # 与 MessageRouter 共享的预算实例在 policy_engine 创建后注入
         )
         web_ui = None
+        # 插件系统（受控插件运行时）：子进程隔离 + 权限强制 + 安全安装；
+        # 事件由 MessageRouter 投递，Web UI 管理页负责安装/启用（管理员操作）
+        from src.plugins.manager import PluginManager
+
+        def _plugin_state_provider(kind, ident):
+            try:
+                if kind == "group":
+                    state = message_router.policy_engine.groups.get(ident)
+                    return {
+                        "context_len": len(state.context) if state else 0,
+                        "last_activity": state.last_activity if state else 0,
+                    }
+                return None
+            except Exception:  # noqa: BLE001
+                return None
+
+        plugin_manager = PluginManager(
+            config, settings_repo, sender=sender, memory_manager=memory_manager,
+            state_provider=_plugin_state_provider,
+        )
         if config.WEB_UI_ENABLED:
             def _status_provider():
                 return {
@@ -96,6 +116,7 @@ async def main():
                 config, config_service, status_provider=_status_provider,
                 tool_manager=tool_manager, persona_manager=persona_manager,
                 meme_manager=meme_manager, prompt_manager=prompt_manager,
+                plugin_manager=plugin_manager,
             )
         file_parser = FileParser(config)
         policy_engine = PolicyEngine(config, memory_manager)
@@ -117,11 +138,21 @@ async def main():
             meme_manager=meme_manager,
             meme_summary=meme_summary,
             budget=budget_manager,
+            plugin_manager=plugin_manager,
         )
-        ws_server = WebSocketServer(config, message_router)
+        # NapCat WebSocket：反向（NapCat 连过来，原有行为）或正向（连接 NapCat 的 WS server），二选一
+        if str(getattr(config, "NAPCAT_WS_MODE", "reverse") or "reverse").lower() == "forward":
+            from src.core.napcat_forward_client import NapCatForwardClient
+            ws_server = NapCatForwardClient(config, message_router)
+            logger.info("NapCat WS 模式: forward（连接 %s）",
+                        str(getattr(config, "NAPCAT_WS_URL", "") or ""))
+        else:
+            ws_server = WebSocketServer(config, message_router)
 
         # 启动后台任务（主动聊天 / 上下文备份，经 TaskManager 统一管理）
         await message_router.start()
+        # 启动插件运行时（enabled 插件；发现新插件默认 disabled）
+        await plugin_manager.start_all()
         # Web UI（默认关闭；启用时需认证，端口已与 WS_PORT 错开校验）
         if web_ui is not None:
             await web_ui.start()
@@ -141,6 +172,7 @@ async def main():
                 await web_ui.stop()
             # 3) 关闭 HTTP 客户端 / 数据库连接
             await file_parser.close()
+            await plugin_manager.shutdown()
             memory_manager.close()
             settings_repo.close()
             sticker_manager.close()

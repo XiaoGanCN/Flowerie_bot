@@ -77,6 +77,22 @@ class SettingsRepository:
                 persona_id TEXT NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS plugins (
+                id TEXT PRIMARY KEY,
+                manifest_json TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                approved_permissions TEXT NOT NULL DEFAULT '',
+                protection TEXT NOT NULL DEFAULT 'normal',
+                status TEXT NOT NULL DEFAULT 'discovered',
+                install_source TEXT NOT NULL DEFAULT '',
+                installed_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS admin_bootstrap (
+                key TEXT PRIMARY KEY,
+                state TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
             """)
             self._conn.commit()
 
@@ -266,6 +282,90 @@ class SettingsRepository:
             rows = self._conn.execute(
                 "SELECT group_id, persona_id, updated_at FROM group_persona ORDER BY group_id").fetchall()
             return [dict(r) for r in rows]
+
+    # ---------- 插件注册表（Plugin Manager） ----------
+    def upsert_plugin(self, plugin: dict) -> None:
+        """插入或更新插件注册行（manifest_json 为规范化 JSON 文本）。"""
+        import time
+        now = time.time()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO plugins (id, manifest_json, enabled, approved_permissions,"
+                " protection, status, install_source, installed_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(id) DO UPDATE SET manifest_json=excluded.manifest_json,"
+                " enabled=excluded.enabled, approved_permissions=excluded.approved_permissions,"
+                " protection=excluded.protection, status=excluded.status,"
+                " install_source=excluded.install_source, updated_at=excluded.updated_at",
+                (plugin["id"], plugin["manifest_json"],
+                 1 if plugin.get("enabled") else 0,
+                 ",".join(plugin.get("approved_permissions", []) or []),
+                 plugin.get("protection", "normal"),
+                 plugin.get("status", "discovered"),
+                 plugin.get("install_source", ""),
+                 float(plugin.get("installed_at") or now), now),
+            )
+            self._conn.commit()
+
+    def get_plugin(self, plugin_id: str) -> Optional[dict]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, manifest_json, enabled, approved_permissions, protection,"
+                " status, install_source, installed_at, updated_at FROM plugins WHERE id=?",
+                (plugin_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_plugins(self) -> List[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, manifest_json, enabled, approved_permissions, protection,"
+                " status, install_source, installed_at, updated_at FROM plugins ORDER BY id"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def delete_plugin(self, plugin_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM plugins WHERE id=?", (plugin_id,))
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    # ---------- 管理员引导状态（Bootstrap Lock：单例状态行，原子 CAS） ----------
+    def get_bootstrap_state(self) -> Optional[str]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT state FROM admin_bootstrap WHERE key='admin'").fetchone()
+            return row["state"] if row else None
+
+    def try_mark_bootstrap_initialized(self) -> bool:
+        """原子 compare-and-set：仅当当前为 uninitialized 时置为 initialized。
+
+        返回 True 表示本次调用成功拿到初始化权（并发注册只有一个成功）。
+        """
+        import time
+        with self._lock:
+            # 行不存在 → 插入 uninitialized 行（幂等），然后尝试 反条件更新
+            self._conn.execute(
+                "INSERT OR IGNORE INTO admin_bootstrap (key, state, updated_at) VALUES ('admin','uninitialized',?)",
+                (time.time(),),
+            )
+            cur = self._conn.execute(
+                "UPDATE admin_bootstrap SET state='initialized', updated_at=? "
+                "WHERE key='admin' AND state='uninitialized'",
+                (time.time(),),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def mark_bootstrap_uninitialized(self) -> None:
+        """显式回退到 UNINITIALIZED（仅管理员在认证上下文内主动调用）。"""
+        import time
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO admin_bootstrap (key, state, updated_at) VALUES ('admin','uninitialized',?)",
+                (time.time(),),
+            )
+            self._conn.commit()
 
     def close(self) -> None:
         with self._lock:

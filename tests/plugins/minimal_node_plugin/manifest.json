@@ -1,0 +1,12 @@
+{
+  "id": "minimal_node_plugin",
+  "name": "Minimal Node Plugin",
+  "version": "1.0.0",
+  "author": "flowerie-bot",
+  "description": "最小可执行 Node.js 测试插件：on_message 只返回一个 test action（node-ok）",
+  "runtime": "node",
+  "entry": "index.js",
+  "api_version": "1",
+  "permissions": ["read_message"],
+  "config": {}
+}

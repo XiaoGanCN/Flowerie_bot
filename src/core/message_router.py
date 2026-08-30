@@ -60,6 +60,7 @@ class MessageRouter:
         meme_manager: Optional["MemeKnowledgeManager"] = None,
         meme_summary: Optional["MemeSummaryService"] = None,
         budget: Optional["BudgetManager"] = None,
+        plugin_manager: Optional["PluginManager"] = None,
     ):
         self.config = config
         self.ai_client = ai_client
@@ -68,6 +69,8 @@ class MessageRouter:
         self.sender = sender
         self.policy_engine = policy_engine
         self.global_state = self.policy_engine.global_state
+        # 插件系统（Plugin System v1）：None 时不投递事件（不影响现有行为）
+        self.plugin_manager = plugin_manager
         # 自定义 Prompt（全局/群聊）：None 时跳过（不影响现有行为）
         self.prompt_manager = prompt_manager
         # 表情包（Sticker）：None 时跳过（不影响现有行为）
@@ -158,6 +161,12 @@ class MessageRouter:
 
     async def process_event(self, data: Dict[str, Any]) -> None:
         post_type = data.get("post_type")
+        # 插件事件投递（受控运行时；插件异常被隔离，不阻塞主消息流程）
+        if self.plugin_manager is not None:
+            try:
+                await self.plugin_manager.dispatch_event(self._plugin_event_type(data), self._plugin_payload(data))
+            except Exception as e:  # noqa: BLE001 - 插件系统异常绝不影响主流程
+                logger.error("plugin_dispatch_error reason=%s", e, extra={"event": "plugin_error"})
         if post_type == "message":
             await self._handle_message(data)
         elif post_type == "notice":
@@ -166,6 +175,40 @@ class MessageRouter:
                 self._handle_group_upload(data)
             elif notice_type == "notify" and data.get("sub_type") == "poke":
                 await self._handle_poke(data)
+
+    @staticmethod
+    def _plugin_event_type(data: Dict[str, Any]) -> str:
+        post_type = str(data.get("post_type") or "unknown")
+        if post_type == "message" and data.get("message_type") == "group":
+            return "group_message"
+        return post_type
+
+    @staticmethod
+    def _plugin_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+        """投递给插件的事件负载（只含必要字段，不透传原始段数组以外的敏感信息）。"""
+        text = ""
+        message_array = data.get("message", [])
+        if isinstance(message_array, str):
+            text = message_array
+        elif isinstance(message_array, list):
+            text = "".join(
+                str(seg.get("data", {}).get("text", ""))
+                for seg in message_array if isinstance(seg, dict) and seg.get("type") == "text"
+            )
+        payload = {
+            "group_id": data.get("group_id"),
+            "user_id": data.get("user_id"),
+            "message_id": data.get("message_id"),
+            "time": data.get("time"),
+            "text": text[:2000],
+        }
+        if data.get("message_type") == "group":
+            payload["message_type"] = "group"
+        notice_type = data.get("notice_type")
+        if notice_type:
+            payload["notice_type"] = notice_type
+            payload["sub_type"] = data.get("sub_type", "")
+        return payload
 
     # ---------- 消息处理 ----------
     def _in_whitelist(self, group_id: int) -> bool:
@@ -505,7 +548,10 @@ class MessageRouter:
     async def _active_chat_loop(self):
         logger.info("Active chat loop started")
         while True:
-            await asyncio.sleep(random.randint(5, 10))
+            # 轮询间隔（原硬编码 random.randint(5,10)，现走配置，默认值不变）
+            interval_min = max(1, int(getattr(self.config, "ACTIVE_CHAT_INTERVAL_MIN_SECONDS", 5) or 5))
+            interval_max = max(interval_min, int(getattr(self.config, "ACTIVE_CHAT_INTERVAL_MAX_SECONDS", 10) or 10))
+            await asyncio.sleep(random.randint(interval_min, interval_max))
             if not self.global_state.ws_connected:
                 continue
 
@@ -538,8 +584,20 @@ class MessageRouter:
         if not context_text:
             logger.debug(f"No context for group {group_id}, skip active")
             return
+        # 主动聊天提示词只保留通用框架；人格名/人格发言规则由人格系统动态注入
+        # （原先硬编码「花璃」已移除，切换人格后主动聊天同样跟随当前 Persona）
+        persona_name = self.persona_manager.resolve_persona_name(group_id) if self.persona_manager else "花璃"
         for _attempt in range(3):
-            prompt = "你现在就是QQ群里的花璃，一个17岁高中生，正在自然地跟群友聊天。\n没有人在叫你。\n如果最近大家讨论一个话题，自然接一句，像平时一样简短而自然地说句话。\n如果群冷了，可以偶尔冒一句，简短就好。\n不要解释。\n不要说自己是AI。\n不要刻意活跃气氛。\n一句话即可，尽量短，自然。"
+            prompt = (
+                f"你现在就是QQ群里的{persona_name}，正在自然地跟群友聊天。\n"
+                "没有人在叫你。\n"
+                "如果最近大家讨论一个话题，自然接一句，像平时一样简短而自然地说句话。\n"
+                "如果群冷了，可以偶尔冒一句，简短就好。\n"
+                "不要解释。\n"
+                "不要说自己是AI。\n"
+                "不要刻意活跃气氛。\n"
+                "一句话即可，尽量短，自然。"
+            )
             # 主动聊天同样过预算闸门（user_id=0 表示机器人主动发起；受群级/全局预算约束）
             reply, _active_mem, denied = await self.guarded_chat(
                 group_id,

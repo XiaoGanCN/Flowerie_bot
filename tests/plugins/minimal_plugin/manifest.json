@@ -1,0 +1,12 @@
+{
+  "id": "minimal_plugin",
+  "name": "Minimal Plugin",
+  "version": "1.0.0",
+  "author": "flowerie-bot",
+  "description": "最小可执行测试插件：on_message 只返回一个 test action（plugin-ok）",
+  "runtime": "python",
+  "entry": "plugin.py",
+  "api_version": "1",
+  "permissions": ["read_message"],
+  "config": {}
+}

@@ -1,0 +1,20 @@
+{
+  "id": "declarative_plugin",
+  "name": "Declarative Plugin",
+  "version": "1.0.0",
+  "author": "flowerie-bot",
+  "description": "声明式 JSON 插件（无代码执行）：消息以 hello 开头时回复问候语",
+  "runtime": "json",
+  "entry": "",
+  "api_version": "1",
+  "permissions": ["send_message", "read_message"],
+  "declarations": [
+    {
+      "event": "message",
+      "match": {"text_prefix": "hello"},
+      "actions": [
+        {"type": "send_message", "payload": {"group_id": "${group_id}", "message": "你好 ${user_id}"}}
+      ]
+    }
+  ]
+}

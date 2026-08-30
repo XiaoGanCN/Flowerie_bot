@@ -50,6 +50,7 @@ from src.services.webui_panels import (
     KnowledgePanelMixin,
     McpPanelMixin,
     PersonaPanelMixin,
+    PluginPanelMixin,
     PromptPanelMixin,
 )
 
@@ -65,11 +66,12 @@ _LOGIN_FAIL_WINDOW = 60
 
 class WebUIServer(AccountPanelMixin, AuthPanelMixin, ConfigPanelMixin, AppearancePanelMixin,
                   McpPanelMixin, PromptPanelMixin, PersonaPanelMixin,
-                  KnowledgePanelMixin):
+                  KnowledgePanelMixin, PluginPanelMixin):
 
     def __init__(self, config: Settings, config_service: ConfigService, status_provider=None,
                  data_dir: str = "./data/webui", tool_manager=None,
-                 persona_manager=None, meme_manager=None, prompt_manager=None):
+                 persona_manager=None, meme_manager=None, prompt_manager=None,
+                 plugin_manager=None):
         self.config = config
         self.config_service = config_service
         # status_provider: 可调用，返回状态 dict（ws_connected/uptime 等），由 main 注入
@@ -87,6 +89,8 @@ class WebUIServer(AccountPanelMixin, AuthPanelMixin, ConfigPanelMixin, Appearanc
         self._persona_manager = persona_manager
         self._meme_manager = meme_manager
         self._prompt_manager = prompt_manager
+        # 插件系统（受控插件运行时；未注入时插件页提示不可用）
+        self._plugin_manager = plugin_manager
 
     def _issue_token(self) -> str:
         token = secrets.token_hex(24)
@@ -149,6 +153,8 @@ class WebUIServer(AccountPanelMixin, AuthPanelMixin, ConfigPanelMixin, Appearanc
         app.router.add_get("/panel/logout", self._handle_panel_logout)
         # 注销管理员账号（需当前密码验证；只清账号密码，其他配置不动）
         app.router.add_post("/panel/account/unregister", self._handle_panel_unregister)
+        # 修改登录账号（登录态；Bootstrap Lock 下唯一的改密入口）
+        app.router.add_post("/panel/account/credentials", self._handle_panel_change_credentials)
         # 外观美化（主题 / 背景颜色 / 背景图片 / 透明度）
         app.router.add_post("/panel/appearance", self._handle_panel_appearance_save)
         app.router.add_post("/panel/appearance/restore", self._handle_panel_appearance_restore)
@@ -157,11 +163,13 @@ class WebUIServer(AccountPanelMixin, AuthPanelMixin, ConfigPanelMixin, Appearanc
         # MCP server 结构化编辑（添加/编辑/删除，零 JS 表单）
         app.router.add_post("/panel/mcp/edit", self._handle_panel_mcp_edit)
         # 人格管理（零 JS 表单：默认 / 全局 / 列表 CRUD / 群绑定）
+        app.router.add_post("/panel/persona/config", self._handle_panel_persona_config)
         app.router.add_post("/panel/persona/default", self._handle_panel_persona_default)
         app.router.add_post("/panel/persona/global", self._handle_panel_persona_global)
         app.router.add_post("/panel/persona/save", self._handle_panel_persona_save)
         app.router.add_post("/panel/persona/delete", self._handle_panel_persona_delete)
         app.router.add_post("/panel/persona/group", self._handle_panel_persona_group)
+        app.router.add_post("/panel/persona/admin-rules", self._handle_panel_persona_admin_rules)
         # 群聊自定义 Prompt 管理（零 JS 表单：全局 / 按群读写，按群隔离）
         app.router.add_post("/panel/prompt/global", self._handle_panel_prompt_global)
         app.router.add_post("/panel/prompt/group", self._handle_panel_prompt_group)
@@ -171,6 +179,15 @@ class WebUIServer(AccountPanelMixin, AuthPanelMixin, ConfigPanelMixin, Appearanc
         app.router.add_post("/panel/knowledge/save", self._handle_panel_knowledge_save)
         app.router.add_post("/panel/knowledge/delete", self._handle_panel_knowledge_delete)
         app.router.add_post("/panel/knowledge/clear", self._handle_panel_knowledge_clear)
+        # 插件管理（零 JS 表单：保护级别 / 扫描 / 上传 / URL / 启用 / 禁用 / 卸载）
+        app.router.add_post("/panel/plugins/refresh", self._handle_panel_plugins_refresh)
+        app.router.add_post("/panel/plugins/upload", self._handle_panel_plugins_upload)
+        app.router.add_post("/panel/plugins/install-url", self._handle_panel_plugins_install_url)
+        app.router.add_post("/panel/plugins/enable", self._handle_panel_plugins_enable)
+        app.router.add_post("/panel/plugins/disable", self._handle_panel_plugins_disable)
+        app.router.add_post("/panel/plugins/uninstall", self._handle_panel_plugins_uninstall)
+        app.router.add_post("/panel/plugins/protection", self._handle_panel_plugins_protection)
+        app.router.add_post("/panel/plugins/config", self._handle_panel_plugins_config)
         # JSON API（保留，供脚本/自动化使用）
         app.router.add_post("/api/login", self._handle_login)
         app.router.add_post("/api/register", self._handle_register)
@@ -212,7 +229,7 @@ class WebUIServer(AccountPanelMixin, AuthPanelMixin, ConfigPanelMixin, Appearanc
         msg = request.query.get("msg", "")
         err = request.query.get("err", "") == "1"
         tab = request.query.get("tab", "")
-        if tab not in ("appearance", "logs", "persona", "knowledge", "account"):
+        if tab not in ("appearance", "logs", "persona", "knowledge", "account", "plugins"):
             tab = "config"
         cat = request.query.get("cat", "")
         if cat not in ("all", "") and cat not in ConfigService.CATEGORY_ORDER:
@@ -292,6 +309,8 @@ class WebUIServer(AccountPanelMixin, AuthPanelMixin, ConfigPanelMixin, Appearanc
             body_html = self._render_persona_page(edit_id, new_persona, prompt_gid)
         elif tab == "knowledge":
             body_html = self._render_knowledge_page(gid, search)
+        elif tab == "plugins":
+            body_html = self._render_plugin_page()
         else:
             body_html = render_config_sections(self.config_service.list_configs(), active_cat=cat,
                                                mcp_edit=mcp_edit, mcp_test_status=self._get_mcp_test_status(),
