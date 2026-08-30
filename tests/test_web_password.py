@@ -151,3 +151,33 @@ def test_password_never_logged(caplog):
     assert "super-secret-pw-123" not in logs
     assert "scrypt$" not in logs.split("web_ui account registered")[1] if "web_ui account registered" in logs else True
     tmp.cleanup()
+
+
+# ---------- Bootstrap Lock：未初始化（无凭据）时拒绝一切登录 ----------
+async def test_login_rejected_when_uninitialized():
+    server, repo, cfg, tmp = _bootstrap_server()
+    assert server.config_service.admin_initialized() is False
+    # 空密码 / 任意密码 / 空用户名 → 全部 401（注册页是唯一入口）
+    for body in ({"username": "admin", "password": ""},
+                 {"username": "admin", "password": "anything"},
+                 {"username": "", "password": "x"}):
+        resp = await server._handle_login(FakeRequest(body=body))
+        assert resp.status == 401, body
+    tmp.cleanup()
+
+
+# ---------- CAS 残留恢复：行已置位但无凭据（上次初始化中断）→ 可继续注册 ----------
+def test_register_recovers_from_stale_bootstrap_marker():
+    server, repo, cfg, tmp = _bootstrap_server()
+    ok, _ = server.config_service.register_user("first", "pass123456")
+    assert ok
+    # 模拟中断残留：凭据被删除、行仍标记 initialized
+    repo.delete_config("WEB_UI_USERNAME")
+    repo.delete_config("WEB_UI_PASSWORD")
+    assert server.config_service.admin_initialized() is False
+    # 再次注册必须成功（不因残留行而永久锁死）
+    ok2, msg2 = server.config_service.register_user("second", "pass123456")
+    assert ok2, msg2
+    assert repo.get_config("WEB_UI_USERNAME") == "second"
+    assert is_hashed_password(repo.get_config("WEB_UI_PASSWORD"))
+    tmp.cleanup()

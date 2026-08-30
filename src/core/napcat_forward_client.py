@@ -17,7 +17,7 @@
 import asyncio
 import json
 from typing import Optional
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlencode, urlparse, urlunparse
 
 import websockets
 
@@ -49,6 +49,7 @@ class NapCatForwardClient:
         self.config = config
         self.message_router = message_router
         self._delays = list(reconnect_delays or _RECONNECT_DELAYS)
+        self._reconnect_idx = 0
         self._running = True
         self._ws: Optional["websockets.WebSocketClientProtocol"] = None
         self._task: Optional[asyncio.Task] = None
@@ -76,12 +77,12 @@ class NapCatForwardClient:
                 self._mark_disconnected()
             if not self._running:
                 break
-            for delay in self._delays:
-                if not self._running:
-                    break
-                logger.warning("NapCat 正向 WS 将在 %ss 后重连", delay)
-                _M_RECONNECT.inc()
-                await asyncio.sleep(delay)
+            # 逐档退避（5→10→20→40→60 后保持 60s）：每次断开只睡当前档，之后轮转到下一档
+            delay = self._delays[min(self._reconnect_idx, len(self._delays) - 1)]
+            self._reconnect_idx += 1
+            logger.warning("NapCat 正向 WS 将在 %ss 后重连（第 %s 次断开）", delay, self._reconnect_idx)
+            _M_RECONNECT.inc()
+            await asyncio.sleep(delay)
         await self._cleanup()
 
     async def shutdown(self) -> None:
@@ -110,8 +111,9 @@ class NapCatForwardClient:
             # 鉴权：Authorization 头 + URL access_token 参数（OneBot11 约定；日志只记脱敏 URL）
             headers = {"Authorization": f"Bearer {self._token}"}
             parsed = urlparse(self._url)
+            # token 必须 URL 编码（防 & / # 等字符破坏查询串）
             connect_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "",
-                                      "access_token=" + self._token, parsed.fragment))
+                                      urlencode({"access_token": self._token}), parsed.fragment))
         logger.info("napcat_ws_connecting url=%s", redact_ws_url(self._url),
                     extra={"event": "ws_connecting"})
         connect_kwargs = {

@@ -221,13 +221,25 @@ class ConfigService:
             return False, "密码至少 6 位"
         # 原子 CAS：只有一个请求能把 uninitialized→initialized（并发注册仅一个成功）
         if not self.repository.try_mark_bootstrap_initialized():
-            return False, "系统正在初始化中（并发注册冲突），请稍后再试"
+            # 行已被置位：若至今无凭据 → 上次初始化中断的残留状态，重置后重试一次
+            if self.repository.get_config("WEB_UI_PASSWORD") is None \
+                    and self.repository.get_config("WEB_UI_USERNAME") is None:
+                try:
+                    self.repository.mark_bootstrap_uninitialized()
+                except Exception:  # noqa: BLE001
+                    pass
+                if not self.repository.try_mark_bootstrap_initialized():
+                    return False, "系统正在初始化中（并发注册冲突），请稍后再试"
+            else:
+                return False, "系统已完成初始化，公开注册已关闭（请用现有账号登录后在「用户状态」页修改）"
         password_hash = hash_password(password)
         try:
             self.repository.set_config("WEB_UI_USERNAME", username)
             self.repository.set_config("WEB_UI_PASSWORD", password_hash)
-        except Exception:  # noqa: BLE001 - 写库失败：回滚 bootstrap 状态，避免系统锁死
+        except Exception:  # noqa: BLE001 - 写库失败：完整回滚（凭据 + 状态），避免锁死
             try:
+                self.repository.delete_config("WEB_UI_USERNAME")
+                self.repository.delete_config("WEB_UI_PASSWORD")
                 self.repository.mark_bootstrap_uninitialized()
             except Exception:  # noqa: BLE001
                 pass

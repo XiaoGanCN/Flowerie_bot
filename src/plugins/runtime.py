@@ -28,6 +28,11 @@ logger = get_logger(__name__)
 
 # 环境变量白名单：插件进程不继承任何 Secret（API Key / Token 全部不注入）。
 # LD_LIBRARY_PATH 仅含系统/解释器库目录（不含源码路径），共享库构建的解释器需要它。
+# 插件 → Flowerie 的 action 请求使用独立 id 空间（高位偏移），与响应请求 id 永不相撞
+_ACTION_ID_BASE = 1_000_000
+# 插件并发 action 处理上限（背压：恶意插件不能无限堆积任务）
+_MAX_CONCURRENT_ACTIONS = 8
+
 _ENV_WHITELIST = ("PATH", "HOME", "LANG", "TMPDIR", "TEMP", "TMP", "NODE_PATH",
                   "LD_LIBRARY_PATH")
 
@@ -60,6 +65,7 @@ class PluginRuntime:
         self._output_bytes = 0
         self.status = "stopped"  # stopped | starting | running | crashed | unhealthy
         self._action_handler: Optional[Callable[[str, str, Dict[str, Any]], Any]] = None
+        self._action_sem = asyncio.Semaphore(_MAX_CONCURRENT_ACTIONS)
 
     # ---------- 生命周期 ----------
     async def start(self) -> None:
@@ -261,13 +267,17 @@ class PluginRuntime:
                 if not isinstance(msg, dict):
                     continue
                 msg_id = msg.get("id")
+                # 插件 → Flowerie 的 action 请求优先判定（动作 id 独立命名空间：
+                # 插件侧 action id 从 _ACTION_ID_BASE 起，绝不与响应请求 id 相撞）
+                if msg.get("method") == "action" and self._action_handler is not None:
+                    await self._action_sem.acquire()
+                    asyncio.create_task(self._handle_action_line_sem(msg))
+                    continue
                 if isinstance(msg_id, int) and msg_id in self._pending:
                     fut = self._pending[msg_id]
                     if not fut.done():
                         fut.set_result(msg)
                     continue
-                if msg.get("method") == "action" and self._action_handler is not None:
-                    asyncio.create_task(self._handle_action_line(msg))
         except asyncio.CancelledError:
             return
         except Exception:  # noqa: BLE001 - 读循环自身异常：视为连接断开
@@ -277,6 +287,13 @@ class PluginRuntime:
                 self.status = "crashed"
                 self._notify_exit("process_exit",
                                   self.proc.returncode if self.proc.returncode is not None else 0)
+
+    async def _handle_action_line_sem(self, msg: Dict[str, Any]) -> None:
+        """带并发签名的 action 处理（防止插件刷请求堆积主进程任务）。"""
+        try:
+            await self._handle_action_line(msg)
+        finally:
+            self._action_sem.release()
 
     async def _handle_action_line(self, msg: Dict[str, Any]) -> None:
         """执行插件 action 请求并把结果写回插件（响应与请求互不阻塞）。"""

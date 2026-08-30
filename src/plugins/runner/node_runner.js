@@ -67,7 +67,8 @@ class PluginRunner {
   sendAction(action, payload) {
     return new Promise((resolve, reject) => {
       this._reqId += 1;
-      const myId = this._reqId;
+      // action 请求 id 独立命名空间（1_000_000 起），绝不与响应请求 id 相撞
+      const myId = 1000000 + this._reqId;
       this._pending.set(myId, { resolve, reject });
       this.emit({ id: myId, method: 'action', params: { action, payload: payload || {} } });
       setTimeout(() => {

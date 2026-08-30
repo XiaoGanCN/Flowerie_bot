@@ -93,8 +93,12 @@ class WebUIServer(AccountPanelMixin, AuthPanelMixin, ConfigPanelMixin, Appearanc
         self._plugin_manager = plugin_manager
 
     def _issue_token(self) -> str:
+        now = time.time()
+        # 周期性清理：只保留未过期 token；再设上限（防无界内存增长）
+        if len(self._tokens) >= 512:
+            self._tokens = {t: exp for t, exp in self._tokens.items() if exp > now}
         token = secrets.token_hex(24)
-        self._tokens[token] = time.time() + max(60, getattr(self.config, "WEB_UI_TOKEN_TTL_SECONDS", 3600))
+        self._tokens[token] = now + max(60, getattr(self.config, "WEB_UI_TOKEN_TTL_SECONDS", 3600))
         return token
 
     def _check_token(self, request: web.Request) -> bool:
@@ -115,6 +119,8 @@ class WebUIServer(AccountPanelMixin, AuthPanelMixin, ConfigPanelMixin, Appearanc
         return len(fails) >= _LOGIN_FAIL_LIMIT
 
     def _record_login_fail(self, ip: str) -> None:
+        if len(self._login_fails) >= 512:  # 防无界内存：超过后重置统计（保留最近失败窗口语义）
+            self._login_fails.clear()
         self._login_fails.setdefault(ip, []).append(time.time())
 
     def _effective_credentials(self) -> Tuple[str, str]:
@@ -131,6 +137,9 @@ class WebUIServer(AccountPanelMixin, AuthPanelMixin, ConfigPanelMixin, Appearanc
         登录成功且为旧明文时自动迁移为哈希（DB 不再保留明文）。"""
         eff_user, eff_pass = self._effective_credentials()
         if username != eff_user:
+            return False
+        # 未初始化（无凭据）时拒绝一切登录：注册页是唯一入口（Bootstrap Lock）
+        if not eff_pass:
             return False
         if not verify_password(password, eff_pass):
             return False

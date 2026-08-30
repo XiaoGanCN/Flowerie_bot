@@ -97,10 +97,14 @@ class PluginRunner:
             return None
         return line.strip()
 
+    # 插件 → Flowerie 的 action 请求 id 偏移（与响应请求 id = 1,2,3... 不共用命名空间，
+    # 防止 id 碰撞导致错配/卡死）
+    _ACTION_ID_BASE = 1_000_000
+
     def _send_action_inner(self, action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """发 action 请求并阻塞等待对应响应（同步 API 的底层实现）。"""
         self._req_id += 1
-        my_id = self._req_id
+        my_id = self._ACTION_ID_BASE + self._req_id
         self._emit({"id": my_id, "method": "action",
                     "params": {"action": action, "payload": payload or {}}})
         while True:
