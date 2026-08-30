@@ -6,7 +6,7 @@ import zipfile
 
 import pytest
 
-from src.plugins.installer import PluginInstallError, PluginInstaller
+from src.plugins.installer import PluginInstaller, PluginInstallError
 
 
 def _manifest_bytes(**over):
