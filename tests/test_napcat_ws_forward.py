@@ -46,7 +46,6 @@ async def test_forward_connect_and_receive_event():
     router = FakeMsgRouter()
     cfg = FakeConfig()
     cfg.NAPCAT_WS_URL = "ws://127.0.0.1:0/ws"
-    got = []
 
     async def handler(ws):
         await ws.send(json.dumps({"post_type": "message", "message_type": "group",

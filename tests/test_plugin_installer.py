@@ -1,6 +1,5 @@
 """PluginInstaller 安全测试（白盒 + 黑盒）：ZIP Slip / Bomb / Symlink / 穿越 /
 manifest 注入 / URL 下载 SSRF / 重定向拒绝 / 大小限制 / 超时。"""
-import asyncio
 import io
 import json
 import zipfile

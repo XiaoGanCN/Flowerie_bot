@@ -23,6 +23,7 @@ import shutil
 import tempfile
 import zipfile
 from typing import Optional, Tuple
+from urllib.parse import urlsplit
 
 from src.core.sanitizer import validate_mcp_resolved_ips, validate_mcp_server_url
 from src.plugins.manifest import PluginManifest, PluginManifestError
@@ -123,7 +124,6 @@ class PluginInstaller:
 
     async def install_from_url(self, url: str, source: str = "url") -> PluginManifest:
         """URL 下载安装（SSRF / 大小 / 重定向 / 类型全部受控；绝不 requests.get 后直接执行）。"""
-        from urllib.parse import urlsplit
         import httpx
 
         url = (url or "").strip()

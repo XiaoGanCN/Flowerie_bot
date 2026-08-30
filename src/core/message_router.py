@@ -1,7 +1,10 @@
 import asyncio
 import random
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+
+if TYPE_CHECKING:  # pragma: no cover - 仅类型注解
+    from src.plugins.manager import PluginManager
 
 from src.config import Settings
 from src.core.ai_gateway import AiGateway

@@ -218,7 +218,7 @@ class PluginRunner:
         if isinstance(result, list):
             actions = []
             for item in result:
-                if isinstance(item, dict) and not ("__error__" in item):
+                if isinstance(item, dict) and "__error__" not in item:
                     actions.append(dict(item))
             return actions
         return []

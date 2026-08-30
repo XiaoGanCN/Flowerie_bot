@@ -85,7 +85,7 @@ class PluginRuntime:
             self.status = "crashed"
             await self._kill("initialize timeout")
             raise PluginTimeoutError(
-                f"plugin {self.plugin_id} initialize 超过 {self._limits['startup_timeout']}s")
+                f"plugin {self.plugin_id} initialize 超过 {self._limits['startup_timeout']}s") from None
         except Exception:
             self.status = "crashed"
             await self._kill("initialize failed")

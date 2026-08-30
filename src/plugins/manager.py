@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.core.sanitizer import validate_memory_content
 from src.plugins.http_action import plugin_http_request, redact_url
-from src.plugins.installer import PluginInstallError, PluginInstaller
+from src.plugins.installer import PluginInstaller, PluginInstallError
 from src.plugins.manifest import PluginManifest, PluginManifestError
 from src.plugins.permissions import PermissionManager
 from src.plugins.runtime import PluginRuntime
