@@ -218,6 +218,7 @@ class PluginManager:
         return True, f"插件「{manifest.name}」已安装（默认禁用，请手动启用并批准权限）"
 
     def uninstall(self, plugin_id: str) -> Tuple[bool, str]:
+        self._matchers.pop(plugin_id, None)  # SDK matcher 残留清理
         row = self.repository.get_plugin(plugin_id)
         if row is None:
             return False, "插件不存在"
@@ -282,6 +283,7 @@ class PluginManager:
         return True, f"插件「{manifest.name}」已启用（权限: {', '.join(chosen) or '无'}；保护: {protection}）"
 
     def disable(self, plugin_id: str) -> Tuple[bool, str]:
+        self._matchers.pop(plugin_id, None)  # 禁用即撤销 matcher 注册
         row = self.repository.get_plugin(plugin_id)
         if row is None:
             return False, "插件不存在"

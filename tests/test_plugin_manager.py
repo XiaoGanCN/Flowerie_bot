@@ -443,3 +443,20 @@ async def test_sdk_plugin_matcher_end_to_end(env):
     summary2 = await mgr.dispatch_event("message", {
         "group_id": 7, "user_id": 9, "message_id": 101, "text": "无关内容", "scope": "group"})
     assert summary2 == [] and len(sender.sent) == before
+
+
+@pytest.mark.asyncio
+async def test_disable_clears_sdk_matchers(env):
+    """disable/uninstall 后 SDK matcher 注册被清理（防残留）。"""
+    mgr, repo, sender, tmp = env
+    _deploy(tmp, "sdk_plugin")
+    mgr.discover()
+    await mgr.enable("sdk_plugin", approved_permissions=["read_message", "send_message"])
+    for _ in range(40):
+        if mgr._matchers.get("sdk_plugin"):
+            break
+        await asyncio.sleep(0.1)
+    assert mgr._matchers.get("sdk_plugin")
+    ok, _ = mgr.disable("sdk_plugin")
+    assert ok
+    assert "sdk_plugin" not in mgr._matchers
