@@ -29,6 +29,9 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 | `WS_HOST` / `WS_PORT` | 反向 WS 监听（NapCat 连这里） | `127.0.0.1` / `3001` |
 | `HTTP_API_BASE` | NapCat HTTP API | `http://127.0.0.1:3000` |
 | `WS_TOKEN` | 反向 WS 鉴权 token（可选） | 空 |
+| `NAPCAT_WS_MODE` | NapCat WebSocket 模式：`reverse`（原有，NapCat 连 Flowerie 的 WS server）/ `forward`（Flowerie 连 NapCat 正向 WS） | `reverse` |
+| `NAPCAT_WS_URL` | `forward` 模式必填，NapCat 正向 WS 地址（`ws://` 或 `wss://`） | 空 |
+| `NAPCAT_ACCESS_TOKEN` | `forward` 模式鉴权 token（NapCat 侧需配相同 access token；**绝不清写入日志**） | 空 |
 | `ONLY_REPLY_WHEN_AT` | 哑巴模式（只回 @） | `false` |
 | `USER_COOLDOWN` / `BOT_COOLDOWN` | 用户/机器人冷却（秒） | `5` / `2` |
 | `MAX_CONSECUTIVE_REPLIES` | 连续回复上限 | `3` |
@@ -84,6 +87,35 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 | `MAX_CONCURRENT_AI` | AI/识图并发上限 | `3` |
 | `TOXIC_GROUP_IDS` | 引战检测群 | 空 |
 
+## 主动发言概率
+
+> 全部可配置（v1.2.0 把原来的硬编码概率参数化，默认值=原硬编码值，行为零变化）。
+
+### 上下文随机回复概率（`PROACTIVE_MESSAGE_*`）
+
+| 变量 | 说明 | 默认 |
+| :--- | :--- | :--- |
+| `PROACTIVE_MESSAGE_MIN_PROBABILITY` | 最终概率钳制下限（0~1） | `0.01` |
+| `PROACTIVE_MESSAGE_MAX_PROBABILITY` | 最终概率钳制上限（0~1，须 ≥ 下限） | `0.05` |
+| `PROACTIVE_MESSAGE_BASE_PROBABILITY` | 基础概率 | `0.03` |
+| `PROACTIVE_MESSAGE_USER_BOOST` | 最近 5 条中用户消息 ≥2 条时的增量 | `0.01` |
+| `PROACTIVE_MESSAGE_SINGLE_USER_PROBABILITY` | 最近消息全部来自同一用户时的低概率（防刷屏） | `0.02` |
+| `PROACTIVE_MESSAGE_SHORT_MESSAGE_PROBABILITY` | 最近一条消息 <2 字时的低概率 | `0.02` |
+| `PROACTIVE_MESSAGE_EMPTY_CONTEXT_PROBABILITY` | 群尚无上下文时的回复概率 | `0.02` |
+| `PROACTIVE_MESSAGE_BOT_MULTIPLIER` | 机器人连续发言 ≥2 条时的衰减系数（1.0=不衰减） | `0.3` |
+
+### 主动聊天循环（`ACTIVE_CHAT_*`）
+
+| 变量 | 说明 | 默认 |
+| :--- | :--- | :--- |
+| `ACTIVE_CHAT_PROBABILITY` | 主动聊天循环触发概率（0~1，如 `0.10`=10%） | `0.10` |
+| `ACTIVE_CHAT_INTERVAL_MIN_SECONDS` | 轮询间隔下限（秒，须 ≤ 上限） | `5` |
+| `ACTIVE_CHAT_INTERVAL_MAX_SECONDS` | 轮询间隔上限（秒） | `10` |
+| `ACTIVE_CHAT_CONSECUTIVE_COOLDOWN_SECONDS` | 连续主动发言 ≥2 次后的冷却（秒，0~86400） | `1800` |
+
+> 校验：概率 `0~1` 且为有限数、`PROACTIVE_MESSAGE_MIN ≤ MAX`、`ACTIVE_CHAT_INTERVAL_MIN ≤ MAX`、
+> 冷却在 `0~86400` 之间；Web UI「配置」页「主动聊天」分组展示并热更新。
+
 ## Web UI
 
 | 变量 | 说明 | 默认 |
@@ -100,8 +132,10 @@ Web UI 修改的配置存于 `data/settings.db`，重启后优先使用。
 
 | 变量 | 说明 | 默认 |
 | :--- | :--- | :--- |
-| `PERSONA_DEFAULT` | 默认（兜底）人格 id（内置：`flowerie` / `atri`） | `flowerie` |
+| `PERSONA_DEFAULT` | 默认（兜底）人格 id（内置：`flowerie` / `atri` / `isla`） | `flowerie` |
 | `MAX_PERSONA_PROMPT_LENGTH` | 单个人格 system_prompt 最大长度（字） | `8000` |
+| `PERSONA_MAX_COUNT` | 自定义人格总数上限（内置不计） | `200` |
+| `ADMIN_RESPONSE_RULES` | 管理员补充发言规则（每行一条；优先级：安全策略 > 人格 > 人格内置规则 > 本条，**不能覆盖安全策略**；Web UI「人格」页编辑） | 空 |
 
 人格数据存 `data/settings.db`（`personas` / `group_persona` / `persona_global` 表），
 Web UI「人格」页管理（全局 / 群聊 / 自定义）。详见 [persona.md](persona.md)。
@@ -133,16 +167,18 @@ Web UI「人格」页管理（全局 / 群聊 / 自定义）。详见 [persona.m
 2. 重启机器人：`python main.py`（或守护脚本 `bash run.sh`）
 3. 浏览器打开 `http://127.0.0.1:8080/panel`（无 JS 兼容面板，手机浏览器也能用），用上面的账号密码登录
 
-> 也可以在 `/panel` 登录页点「注册管理员账号」注册新账号（存 `data/settings.db`，优先于 .env；注册需当前管理员密码验证）。
+> 也可以在 `/panel` 登录页点「注册管理员账号」注册新账号（**仅系统未初始化时可用**，存 `data/settings.db`，优先于 .env）。
+> **Bootstrap Lock**：系统一旦初始化（`.env` 或 `settings.db` 存在管理凭据），公开注册永久关闭；之后改账号走登录态
+> 「用户状态」页（需当前密码），注销账号（需当前密码）= 显式重置回到 UNINITIALIZED 才可重新注册。
 
 > 同一局域网内的电脑访问：在 `.env` 加 `WEB_UI_ALLOW_LAN=true`（显式开关），然后浏览器打开 `http://局域网IP:8080/panel`（请设置强密码，勿直接暴露公网）。
 
 ### 配置中心（无 JS 面板）
 
-`/panel` 面板的六个页签全部**纯 HTML + CSS + 服务端渲染，零 JavaScript**：
+`/panel` 面板的**七个**页签全部**纯 HTML + CSS + 服务端渲染，零 JavaScript**：
 
-- **配置页**：全部配置变量按 19 个功能分组展示（**「人格（Persona）」「群聊知识（Meme）」两组已移入
-  对应页签的专属配置区块**），**顶部提供分类导航**
+- **配置页**：全部配置变量按多个功能分组展示（**「人格（Persona）」「群聊知识（Meme）」「插件（Plugin）」
+  三组已移入对应页签的专属配置区块**），**顶部提供分类导航**
   （点击只看某一类，如 MCP / 发言设置 / 稳定性……各自一屏，避免拥挤），每组一个表单保存。
   控件按类型自动选择：bool→checkbox、int/float→number（含 min/max/step）、
   secret→password（只显示掩码，留空不覆盖）、枚举→select（日志级别/格式）、
@@ -163,6 +199,25 @@ Web UI「人格」页管理（全局 / 群聊 / 自定义）。详见 [persona.m
 > 管理账号（`WEB_UI_USERNAME` / `WEB_UI_PASSWORD`）不在配置表单中：统一走
 > `/panel` 的注册页管理，密码只存 scrypt 哈希，避免明文写入 `.env`。
 
+## 插件系统（Plugin System）
+
+> v1.2.0 新增。受控插件运行时：目录扫描自动发现（**发现 ≠ 自动执行**，默认禁用），
+> 安装 / 启用 / 权限批准 / 卸载均在 Web UI「插件」页（管理员操作）。
+
+| 变量 | 说明 | 默认 |
+| :--- | :--- | :--- |
+| `PLUGIN_DIR` | 插件目录（扫描其中的 `*/manifest.json` 自动发现） | `./plugins` |
+| `PLUGIN_PROTECTION` | 保护级别 `normal`/`relaxed`/`unsafe`（只影响运行时资源限制；任何级别都不豁免 manifest 校验 / 管理员权限 / 进程隔离 / 日志 / 崩溃保护 / 资源限制 / 权限强制） | `normal` |
+| `PLUGIN_MAX_COUNT` | 注册表插件总数上限（防无限增长） | `100` |
+| `PLUGIN_URL_MAX_BYTES` | URL 下载插件包大小上限（字节，5MB） | `5242880` |
+| `PLUGIN_URL_TIMEOUT` | URL 下载超时（秒） | `15` |
+| `PLUGIN_ZIP_MAX_UNZIPPED_BYTES` | ZIP 解压后总大小上限（字节，50MB，防 Zip Bomb） | `52428800` |
+| `PLUGIN_ZIP_MAX_FILES` | ZIP 包内文件数上限 | `200` |
+
+插件支持 Python（`plugin.py`）、Node（`index.js`/`package.json`）与 JSON 声明式（`runtime=json`，`declarations`
+规则，无代码执行）；运行在独立子进程（`python -I` 隔离 / `node` 子进程），stdin/stdout JSON-Lines 协议，
+崩溃/超时被隔离标记 `crashed`。详见 [plugin-developer-guide.md](plugin-developer-guide.md)。
+
 ## 日志
 
 | 变量 | 说明 | 默认 |
@@ -174,5 +229,7 @@ Web UI「人格」页管理（全局 / 群聊 / 自定义）。详见 [persona.m
 
 ## 热更新说明
 
-- **Web UI 可热更新**：模型/密钥/冷却/预算/表情包开关/MCP 开关/日志级别等（修改后立即生效）
-- **需要重启**：WS 端口、HTTP API 地址、数据库路径、监听地址等 Advanced 项（UI 会提示）
+- **Web UI 可热更新**：模型/密钥/冷却/预算/表情包开关/MCP 开关/日志级别等（修改后立即生效）；
+  主动发言概率（`PROACTIVE_MESSAGE_*` / `ACTIVE_CHAT_*`）与 `ADMIN_RESPONSE_RULES` 亦为热更新。
+- **需要重启**：WS 端口、HTTP API 地址、数据库路径、监听地址、NapCat WS 模式（`NAPCAT_WS_MODE`/`NAPCAT_WS_URL`/`NAPCAT_ACCESS_TOKEN`）、
+  `PLUGIN_DIR` 等 Advanced 项（UI 会提示）

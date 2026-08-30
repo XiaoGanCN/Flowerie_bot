@@ -19,6 +19,10 @@
 > 此后已做上帝类拆分——WebUIServer 1129→336 行（功能域 mixin `webui_panels/` + 渲染层 `webui_render/`）、
 > AIClient 800→353 行（拆出 `prompt_builder`/`vision`/`toxic_detector`）、ConfigService 689→455 行（拆出 `config_schema`）、
 > MessageRouter 732→564 行（拆出 `ai_gateway`）；当前目录结构见 [development.md](development.md)。
+>
+> **v1.2.0 说明**：版本 1.2.0 新增插件系统（Plugin System v1，`src/plugins/`）、第三官方人格「艾拉（Isla）」、
+> 发言规则/主动发言概率配置化、NapCat WebSocket 正向/反向二选一，以及 Web UI 注册 Bootstrap Lock 安全修复；
+> 本报告正文仍为审计当时的架构快照，未随新版更新。
 
 > 审计对象：Flowerie_bot（NapCat 版，`/storage/emulated/0/Flowerie_bot/`）
 > 审计时间：2026-08-27

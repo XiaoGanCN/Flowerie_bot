@@ -12,7 +12,7 @@
 
 ## 这是什么
 
-**花璃** 是一个基于 **DeepSeek API** 的 **QQ 群聊机器人**：像真实群友一样聊天、识图、看转发、记记忆、被戳会回应，还能自定义人格、发表情包、用 MCP 工具上网查信息，并通过 Web UI 管理配置。
+**花璃** 是一个基于 **DeepSeek API** 的 **QQ 群聊机器人**：像真实群友一样聊天、识图、看转发、记记忆、被戳会回应，还能自定义人格、发表情包、用 MCP 工具上网查信息，并且可以通过 Web UI 管理配置（当前版本 **v1.2.0**）。
 
 ## 功能
 
@@ -22,15 +22,19 @@
 | 👁️ 识图 | 图片/表情包/转发内图片，视觉模型描述后自然回复 |
 | 📦 转发/卡片解析 | 合并转发递归展开（含图片）、JSON 卡片 |
 | 🧠 记忆库 | 按用户×群隔离，SQLite 持久化，自动去重，用户可查/删 |
-| 🎭 人格系统（Persona） | 全局 / 群聊 / 自定义三级人格，内置花璃 + 亚托莉（ATRI）双预设，Web UI 管理 |
+| 🎭 人格系统（Persona） | 全局 / 群聊 / 自定义三级人格，内置花璃 + 亚托莉（ATRI）+ 艾拉（Isla）三套官方预设，Web UI 管理 |
 | 💬 群聊梗知识（Meme） | 每群独立梗/黑话知识库，按消息命中注入，24h 批量总结 + MCP 辅助检索 |
 | 🎭 自定义 Prompt | 全局 + 群聊两级人格补充（`/prompt` 命令，管理员可改） |
+| 🗣️ 发言规则配置化 | 说话风格规则归属各 Persona；管理员可另加 `ADMIN_RESPONSE_RULES` 补充（不覆盖安全策略） |
+| 🎲 主动发言概率配置化 | `PROACTIVE_MESSAGE_*` 上下文随机回复概率 + `ACTIVE_CHAT_*` 主动聊天循环，全部可配置 |
+| 🧩 插件系统（Plugin System v1） | 受控插件运行时：Python / Node / JSON 声明式插件，独立子进程 + 权限批准 + 保护级别 |
+| 🔌 NapCat WebSocket | 正向 / 反向二选一（`NAPCAT_WS_MODE`），forward 支持鉴权 token + 断线重连 |
 | 🖼️ 表情包 | 目录扫描 + Vision 索引缓存，模型按语境选择发送 |
 | 🔧 MCP 工具 | 外部工具调用（如搜索），插件式多 server + 工具白名单 + 独立熔断 |
 | ⚔️ 引战检测 | 关键词 + AI 双重确认 |
 | 🎯 冷却/预算 | 用户/机器人冷却、全局+群+用户三层 AI 预算、复读检测、主动聊天 |
-| 🖥️ Web UI | 管理后台：配置/人格/群聊知识/外观/日志/用户状态，全零 JS，热更新 |
-| 🛡️ 安全 | SSRF 防护、Prompt 注入多层防线、知识防污染、日志脱敏、双层熔断 |
+| 🖥️ Web UI | 管理后台：配置/人格/群聊知识/外观/日志/用户状态/插件，全零 JS，热更新 |
+| 🛡️ 安全 | SSRF 防护、Prompt 注入多层防线、知识防污染、日志脱敏、双层熔断、Web UI 注册 Bootstrap Lock、插件权限强制 |
 
 ## 快速开始
 
@@ -87,6 +91,11 @@ OneBot WebSocket connected
 | `STICKER_DIR` / `STICKER_ENABLED` | 表情包目录 / 开关 | 空 / `false` |
 | `MCP_ENABLED` / `MCP_SERVER_URL` / `MCP_SERVERS` / `MCP_ALLOWED_TOOLS` / `MCP_ALLOWED_HOSTS` | MCP 开关 / 单 server 地址 / 多 server 列表(JSON，插件式) / 工具白名单（留空=放行所有）/ 本地·内网主机白名单 | `false` / 空 / 空 / 空 / 空 |
 | `PERSONA_DEFAULT` / `MAX_PERSONA_PROMPT_LENGTH` | 默认人格 id（兜底）/ 人格 system_prompt 长度上限 | `flowerie` / `8000` |
+| `ADMIN_RESPONSE_RULES` | 管理员补充发言规则（每行一条；优先级：安全策略 > 人格 > 人格内置规则 > 本条，不覆盖安全策略） | 空 |
+| `PROACTIVE_MESSAGE_MIN/MAX/_BASE/_USER_BOOST/_SINGLE_USER/_SHORT_MESSAGE/_EMPTY_CONTEXT/_BOT_MULTIPLIER` | 上下文随机回复概率（详见 configuration.md） | `0.01`/`0.05`/`0.03`/`0.01`/`0.02`/`0.02`/`0.02`/`0.3` |
+| `ACTIVE_CHAT_PROBABILITY` / `ACTIVE_CHAT_INTERVAL_MIN/MAX_SECONDS` / `ACTIVE_CHAT_CONSECUTIVE_COOLDOWN_SECONDS` | 主动聊天循环概率与间隔/冷却 | `0.10` / `5`/`10` / `1800` |
+| `NAPCAT_WS_MODE` / `NAPCAT_WS_URL` / `NAPCAT_ACCESS_TOKEN` | NapCat WS 模式（`reverse`/`forward`）/ forward 地址 / forward 鉴权 token | `reverse` / 空 / 空 |
+| `PLUGIN_DIR` / `PLUGIN_PROTECTION` / `PLUGIN_MAX_COUNT` / `PLUGIN_URL_MAX_BYTES` / `PLUGIN_URL_TIMEOUT` / `PLUGIN_ZIP_MAX_UNZIPPED_BYTES` / `PLUGIN_ZIP_MAX_FILES` | 插件系统：目录 / 保护级别 / 总数上限 / URL 下载大小上限 / 超时 / 解压后总大小上限 / 文件数上限 | `./plugins` / `normal` / `100` / `5242880` / `15` / `52428800` / `200` |
 | `MEME_LEARNING_ENABLED` / `MEME_SUMMARY_INTERVAL_HOURS` / `MAX_GROUP_MEMES` | 群聊梗知识学习开关 / 总结周期（小时）/ 每群知识条数上限 | `false` / `24` / `500` |
 | `WEB_UI_ENABLED` / `WEB_UI_PORT` / `WEB_UI_USERNAME` / `WEB_UI_PASSWORD` | Web UI 开关 / 端口 / 登录账号 / 密码 | `false` / `8080` / `admin` / 空 |
 | `LOG_FORMAT` | 日志格式 `text`/`json` | `text` |
@@ -109,7 +118,7 @@ OneBot WebSocket connected
 默认关闭。启用后访问 `http://127.0.0.1:8080/panel`（无 JS 兼容面板，手机浏览器也能用）
 用 `WEB_UI_USERNAME` / `WEB_UI_PASSWORD` 登录。
 
-面板六个页签，全部纯 HTML + CSS + 服务端渲染，**零 JavaScript**：
+面板七个页签，全部纯 HTML + CSS + 服务端渲染，**零 JavaScript**：
 
 - **配置**：全部配置变量按功能分组（fieldset 表单），
   bool/int/secret/文本/列表/JSON 各有对应控件（checkbox/number/password/textarea/select）；
@@ -123,11 +132,13 @@ OneBot WebSocket connected
   `data/webui/background/`）、图片透明度、显示方式（cover/contain + 位置）、
   恢复默认主题 / 删除背景图片
 - **日志**：最近 200 条运行日志
-- **用户状态**：当前管理员与凭据来源、注销账号（仅清账号密码，其他配置不动）、
+- **用户状态**：当前管理员与凭据来源、修改登录账号、注销账号（仅清账号密码，其他配置不动）、
   服务器状态（平台/内存/CPU负载）、MCP 工具状态、API 厂商连接状态（DeepSeek/视觉/引战）
+- **插件**：插件系统（Plugin System v1）管理：保护措施开关（normal/relaxed/unsafe）、插件列表、上传 ZIP / URL 安装、刷新扫描、启用（含权限批准）、禁用、卸载、插件系统配置
 
-完整功能指南（配置中心 / 人格管理 / 群聊知识 / 主题美化 / MCP 卡片管理 / 安全）见 **[docs/web-ui.md](docs/web-ui.md)**；
+完整功能指南（配置中心 / 人格管理 / 群聊知识 / 主题美化 / MCP 卡片管理 / 插件管理 / 安全）见 **[docs/web-ui.md](docs/web-ui.md)**；
 人格系统设计见 [docs/persona.md](docs/persona.md)，梗知识层见 [docs/knowledge.md](docs/knowledge.md)；
+插件开发（Plugin API）见 **[docs/plugin-developer-guide.md](docs/plugin-developer-guide.md)**，安全模型见 **[docs/security.md](docs/security.md)**；
 变量说明见 [docs/configuration.md](docs/configuration.md)。
 
 ### 如何开启
@@ -150,9 +161,19 @@ OneBot WebSocket connected
 
 ## Persona（人格系统）
 
-内置两套官方人格：**花璃**（默认）与 **亚托莉（ATRI）**；管理员可创建完全独立的自定义人格。
+内置三套官方人格：**花璃**（默认）、**亚托莉（ATRI）** 与 **艾拉（Isla）**；管理员可创建完全独立的自定义人格。
 人格优先级：**群聊人格 > 全局人格 > 内置默认**，切换人格不影响记忆与上下文。
 Web UI「人格」页管理；详细设计见 [docs/persona.md](docs/persona.md)。
+
+## 插件系统（Plugin System v1）
+
+受控插件运行时：插件以**独立子进程**运行（Python / Node），或为**进程内声明式规则**（JSON，无代码执行），
+通过 stdin/stdout JSON-Lines 协议与 Flowerie 通信，由 PermissionManager 强制检查动作权限。
+安装途径：Web UI 上传 ZIP / URL 下载（SSRF 防护 + 大小限制），或放入 `plugins/` 目录自动发现
+（**发现 ≠ 自动执行**，默认 disabled，须管理员启用并批准权限）。
+保护级别 `PLUGIN_PROTECTION`（`normal`/`relaxed`/`unsafe`）只影响运行时限制，**任何级别都不豁免**
+权限检查 / 进程隔离 / 日志 / 崩溃保护 / 资源限制 / manifest 校验 / 管理员权限。
+详细开发文档见 **[docs/plugin-developer-guide.md](docs/plugin-developer-guide.md)**。
 
 ## 群聊梗知识（Meme Knowledge）
 
@@ -170,7 +191,8 @@ ruff check .        # 代码检查
 
 CI：GitHub Actions 自动跑 Python 3.9 / 3.12 的 ruff + pytest。
 
-更多工程细节：架构审计见 [docs/architecture-audit.md](docs/architecture-audit.md)，表情包见 [docs/stickers.md](docs/stickers.md)。
+更多工程细节：架构审计见 [docs/architecture-audit.md](docs/architecture-audit.md)，表情包见 [docs/stickers.md](docs/stickers.md)，
+安全模型见 [docs/security.md](docs/security.md)。
 
 ## License
 
